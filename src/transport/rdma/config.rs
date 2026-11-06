@@ -78,7 +78,7 @@ pub struct RdmaConfig {
     pub priority_promotion_timeout: Duration,
     /// False preserves TENT's head-only tier promotion; true checks each entry.
     pub priority_promotion_per_entry: bool,
-    /// Optional POSIX shared-memory name, e.g. /orbitte-rdma-slots. Disabled by default.
+    /// Optional POSIX shared-memory name, e.g. /orbite-rdma-slots. Disabled by default.
     pub shared_quota_shm_path: Option<String>,
     /// Shared High / High+Medium / all rotation; matching participants must agree.
     pub slot_rotation_interval: Duration,

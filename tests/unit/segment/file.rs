@@ -13,7 +13,7 @@ struct TempFile {
 impl TempFile {
     fn new(bytes: &[u8]) -> Self {
         let dir =
-            std::env::temp_dir().join(format!("orbitte-file-{}", SourceEpoch::generate().unwrap()));
+            std::env::temp_dir().join(format!("orbite-file-{}", SourceEpoch::generate().unwrap()));
         fs::create_dir(&dir).unwrap();
         let path = dir.join("a %20 file");
         fs::write(&path, bytes).unwrap();

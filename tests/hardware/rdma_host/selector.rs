@@ -1,5 +1,5 @@
 //! Installed two-RNIC selector case. Both NICs are globally enabled in each run.
-use orbit_te::{
+use orbite::{
     BatchReport, Error, IntentType, RemoteEffect, RemoteSegment, TransferEngine, TransferOp,
     TransferRequest, Transport, TransportSelectorConfig,
 };
@@ -109,7 +109,7 @@ pub(super) fn evidence(case: &Case, engine: &TransferEngine, round: usize) -> Re
             );
         }
         println!(
-            "ORBITTE_SELECTOR {{\"round\":{round},\"nic\":{name:?},\"bytes\":{bytes},\"indices\":{indices}}}"
+            "ORBITE_SELECTOR {{\"round\":{round},\"nic\":{name:?},\"bytes\":{bytes},\"indices\":{indices}}}"
         );
     }
     Ok(())

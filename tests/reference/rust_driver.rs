@@ -3,7 +3,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use orbit_te::{
+use orbite::{
     BatchState, EngineConfig, HostMemory, Notification, NotificationStatus, Permission,
     RegisteredMemory, TransferEngine, TransferOp, TransferRequest,
 };
@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
         match fields.as_slice() {
-            ["ORBITTE_CPU_TRACE", "1"] => println!("OBS\tVERSION\t1"),
+            ["ORBITE_CPU_TRACE", "1"] => println!("OBS\tVERSION\t1"),
             ["BUFFER", name, length, initial] => {
                 if !matches!(*name, "source" | "local") || buffers.contains_key(*name) {
                     return Err("unexpected or duplicate buffer".into());
@@ -205,7 +205,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             return Err("invalid slice".into());
                         };
                         requests.push(TransferRequest::new(
-                            orbit_te::Transport::Tcp,
+                            orbite::Transport::Tcp,
                             buffers["local"].memory.base_address() + *local_offset as u64,
                             buffers["source"].memory.base_address() + *remote_offset as u64,
                             *length,

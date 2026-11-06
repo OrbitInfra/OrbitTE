@@ -1,13 +1,13 @@
-# Welcome to OrbitTE
+# Welcome to OrbiTE
 
 :::{raw} html
 <div class="orbit-hero">
-  <img class="orbit-logo-light dark-light" src="_static/orbitte-logo.svg" alt="OrbitTE" width="600" height="144">
-  <img class="orbit-logo-dark dark-light" src="_static/orbitte-logo-dark.svg" alt="OrbitTE" width="600" height="144">
+  <img class="orbit-logo-light dark-light" src="_static/orbite-logo.svg" alt="OrbiTE" width="600" height="144">
+  <img class="orbit-logo-dark dark-light" src="_static/orbite-logo-dark.svg" alt="OrbiTE" width="600" height="144">
 </div>
 <p class="orbit-tagline"><strong>A Rust-native transfer engine for AI infrastructure.</strong></p>
 <p class="orbit-links">
-  <a href="https://github.com/OrbitInfra/OrbitTE">GitHub</a> ·
+  <a href="https://github.com/OrbitInfra/OrbiTE">GitHub</a> ·
   <a href="getting-started.html">Quick Start</a> ·
   <a href="architecture.html">Architecture</a>
 </p>
@@ -15,7 +15,7 @@
 
 ## Overview
 
-OrbitTE is the transfer engine for OrbitKV's KV cache, replacing its earlier
+OrbiTE is the transfer engine for OrbitKV's KV cache, replacing its earlier
 Mooncake TENT dependency. It moves bytes between CPU memory, NVIDIA GPUs and
 local SSDs, within and across machines, so every end-to-end cache path,
 including GPU↔DRAM and GPU↔SSD, runs through one engine. The design follows
@@ -23,7 +23,7 @@ Mooncake TENT's engine, transport, context, buffer, endpoint and worker
 boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 :::{image} _static/architecture.svg
-:alt: OrbitTE network transports and the implemented DRAM and GPU paths to local SSD
+:alt: OrbiTE network transports and the implemented DRAM and GPU paths to local SSD
 :class: dark-light
 :::
 
@@ -44,7 +44,7 @@ boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 ## Status
 
-OrbitTE is in alpha. TCP, RDMA, CUDA IPC and local file segment handles are
+OrbiTE is in alpha. TCP, RDMA, CUDA IPC and local file segment handles are
 implemented, along with Linux io_uring and GDS file transfers. HP-TCP persistent lanes and same-host SHM are implemented. MNNVL and EGM are implemented with CUDA shim coverage. Their installed fabric profiles await qualification. The optional network providers are planned.
 [Capabilities](capabilities.md) lists each path and its limits,
 [qualification](qualification.md) records the evidence, and the

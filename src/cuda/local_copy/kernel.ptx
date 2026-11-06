@@ -6,12 +6,12 @@
 .target sm_52
 .address_size 64
 
-	// .globl	orbitte_batch_copy      // -- Begin function orbitte_batch_copy
-                                        // @orbitte_batch_copy
-.visible .entry orbitte_batch_copy(
-	.param .u64 orbitte_batch_copy_param_0,
-	.param .u32 orbitte_batch_copy_param_1,
-	.param .u32 orbitte_batch_copy_param_2
+	// .globl	orbite_batch_copy       // -- Begin function orbite_batch_copy
+                                        // @orbite_batch_copy
+.visible .entry orbite_batch_copy(
+	.param .u64 orbite_batch_copy_param_0,
+	.param .u32 orbite_batch_copy_param_1,
+	.param .u32 orbite_batch_copy_param_2
 )
 {
 	.reg .pred 	%p<11>;
@@ -20,15 +20,15 @@
 	.reg .b64 	%rd<58>;
 
 // %bb.0:
-	ld.param.u32 	%r1, [orbitte_batch_copy_param_1];
-	ld.param.u32 	%r2, [orbitte_batch_copy_param_2];
+	ld.param.u32 	%r1, [orbite_batch_copy_param_1];
+	ld.param.u32 	%r2, [orbite_batch_copy_param_2];
 	mul.wide.s32 	%rd3, %r2, %r1;
 	mov.u32 	%r3, %ctaid.x;
 	cvt.u64.u32 	%rd52, %r3;
 	setp.le.s64 	%p1, %rd3, %rd52;
 	@%p1 bra 	$L__BB0_14;
 // %bb.1:
-	ld.param.u64 	%rd34, [orbitte_batch_copy_param_0];
+	ld.param.u64 	%rd34, [orbite_batch_copy_param_0];
 	cvta.to.global.u64 	%rd1, %rd34;
 	cvt.s64.s32 	%rd2, %r2;
 	mov.u32 	%r4, %tid.x;

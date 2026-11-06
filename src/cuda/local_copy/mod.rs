@@ -25,7 +25,7 @@ impl PinnedHostRegistration {
     /// # Safety
     /// `base..base+length` must be one live CUDA host registration. The owner must
     /// keep it registered and stationary. All its suballocations must share this
-    /// identity and coordinate external accesses with their OrbitTE range loans.
+    /// identity and coordinate external accesses with their OrbiTE range loans.
     pub unsafe fn from_raw_parts(
         base: NonNull<u8>,
         length: usize,
@@ -180,7 +180,7 @@ impl LocalCopyEngine {
     /// # Safety
     /// The stream must be valid in the device registration's context, and `owner`
     /// must keep it and its context alive. Coordinate stream capture, destruction,
-    /// producer work and access by external code with OrbitTE. A per-thread default
+    /// producer work and access by external code with OrbiTE. A per-thread default
     /// stream must be bound and submitted on its originating thread.
     pub unsafe fn bind(
         device: &RegisteredMemory,

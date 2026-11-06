@@ -18,7 +18,7 @@ def main():
     mode.add_argument('--fault-netdev', help='exercise a real link down/up on this dedicated requester RoCE data interface')
     args = parser.parse_args()
     profile = json.loads(args.profile.read_text())
-    if profile.get('runner') != 'orbitte-installed-host' or len(profile['rails']) != 2:
+    if profile.get('runner') != 'orbite-installed-host' or len(profile['rails']) != 2:
         raise ValueError('expected a two-RNIC installed-host inventory')
     source, requester = (profile['cases'][0][role] for role in ('source', 'requester'))
     profile['cases'] = [dict(mode='installed-selector', source=source, requester=requester,
@@ -37,7 +37,7 @@ def main():
         selected.write_text(json.dumps(profile))
         subprocess.run([sys.executable, str(Path(__file__).with_name('run.py')),
                         '--profile', str(selected), '--installation', str(args.artifact / 'manifest.json'),
-                        '--binary', str(args.artifact / 'installed/bin/orbitte-rdma-host'),
+                        '--binary', str(args.artifact / 'installed/bin/orbite-rdma-host'),
                         '--output', str(args.output)], check=True)
 
 

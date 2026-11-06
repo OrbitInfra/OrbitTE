@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 fn file(name: &str, generation: usize) -> PathBuf {
-    PathBuf::from(env::var("ORBITTE_RESTART_ROOT").unwrap())
+    PathBuf::from(env::var("ORBITE_RESTART_ROOT").unwrap())
         .join(format!("restart-{name}-{generation}.txt"))
 }
 
@@ -22,7 +22,7 @@ pub(super) fn generation(mode: &str) -> Option<usize> {
     ) {
         return None;
     }
-    let generation = env::var("ORBITTE_RESTART_GENERATION")
+    let generation = env::var("ORBITE_RESTART_GENERATION")
         .unwrap()
         .parse()
         .unwrap();
@@ -31,7 +31,7 @@ pub(super) fn generation(mode: &str) -> Option<usize> {
 }
 
 pub(super) fn generations() -> usize {
-    let count = env::var("ORBITTE_RESTART_GENERATIONS")
+    let count = env::var("ORBITE_RESTART_GENERATIONS")
         .unwrap()
         .parse()
         .unwrap();
@@ -41,7 +41,7 @@ pub(super) fn generations() -> usize {
 
 pub(super) fn dying(source: bool, generation: Option<usize>) -> bool {
     generation.is_some_and(|g| g + 1 < generations())
-        && (source == (env::var("ORBITTE_RESTART_KILL_ROLE").as_deref() == Ok("source")))
+        && (source == (env::var("ORBITE_RESTART_KILL_ROLE").as_deref() == Ok("source")))
 }
 
 pub(super) fn interrupted(mode: &str, generation: Option<usize>) -> bool {
@@ -74,7 +74,7 @@ pub(super) fn mode(mode: &str, generation: Option<usize>) -> &str {
     }
     match mode {
         "large-cq-busy" | "large-qp-cleanup-error" | "large-channel-busy"
-            if env::var("ORBITTE_RESTART_KILL_ROLE").as_deref() == Ok("source") =>
+            if env::var("ORBITE_RESTART_KILL_ROLE").as_deref() == Ok("source") =>
         {
             "large-lost-recv-cqe"
         }
@@ -107,7 +107,7 @@ pub(super) fn bind(generation: Option<usize>) -> SocketAddr {
         let text = std::fs::read_to_string(file("state", 0)).unwrap();
         return text.split_whitespace().nth(1).unwrap().parse().unwrap();
     }
-    env::var("ORBITTE_SHARED_BIND").unwrap().parse().unwrap()
+    env::var("ORBITE_SHARED_BIND").unwrap().parse().unwrap()
 }
 
 pub(super) fn control(source: bool, generation: Option<usize>) -> TcpStream {
@@ -168,7 +168,7 @@ pub(super) fn peer_exited(stream: &mut TcpStream) {
 
 pub(super) fn terminate(source: bool, generation: usize, phase: &str, stats: &RdmaStats) -> ! {
     std::fs::write(
-        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        env::var("ORBITE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
     )
     .unwrap();
@@ -180,7 +180,7 @@ pub(super) fn terminate(source: bool, generation: usize, phase: &str, stats: &Rd
     let temporary = marker.with_extension("tmp");
     std::fs::write(&temporary, format!("{} {generation}\n", state.trim())).unwrap();
     println!(
-        "ORBITTE_RESTART_KILL_READY {{\"source\":{source},\"generation\":{generation},\"phase\":\"{phase}\",\"pid\":{},\"epoch\":\"{}\",\"endpoint\":\"{}\",\"region_id\":{},\"active_grants\":{},\"rq_debt\":{},\"sq_debt\":{}}}",
+        "ORBITE_RESTART_KILL_READY {{\"source\":{source},\"generation\":{generation},\"phase\":\"{phase}\",\"pid\":{},\"epoch\":\"{}\",\"endpoint\":\"{}\",\"region_id\":{},\"active_grants\":{},\"rq_debt\":{},\"sq_debt\":{}}}",
         std::process::id(),
         fields[2],
         fields[1],
@@ -205,7 +205,7 @@ pub(super) fn stale(
     operation: TransferOp,
     original: &[u8],
 ) {
-    let generation = generation(&env::var("ORBITTE_RAIL_MODE").unwrap()).unwrap();
+    let generation = generation(&env::var("ORBITE_RAIL_MODE").unwrap()).unwrap();
     if let Some(peer) = peer {
         let before = engine.stats().unwrap().rdma.unwrap().opened_connections;
         let mut epochs = std::collections::HashSet::new();
@@ -271,7 +271,7 @@ pub(super) fn stale(
                 engine.stats().unwrap().rdma.unwrap().opened_connections
             );
             println!(
-                "ORBITTE_RESTART_STALE {{\"generation\":{generation},\"previous_generation\":{previous},\"old_epoch\":\"{epoch}\",\"new_epoch\":\"{}\",\"same_endpoint\":true,\"same_region_id\":true,\"opened_qps\":0,\"remote_effect_none\":true}}",
+                "ORBITE_RESTART_STALE {{\"generation\":{generation},\"previous_generation\":{previous},\"old_epoch\":\"{epoch}\",\"new_epoch\":\"{}\",\"same_endpoint\":true,\"same_region_id\":true,\"opened_qps\":0,\"remote_effect_none\":true}}",
                 peer.source_epoch()
             );
         }

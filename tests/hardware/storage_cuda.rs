@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use orbit_te::cuda::{CudaMemory, allocate_pinned_host, retained_resources};
-use orbit_te::{
+use orbite::cuda::{CudaMemory, allocate_pinned_host, retained_resources};
+use orbite::{
     EngineConfig, Error, FileSegment, Permission, RegisteredMemory, Result, TransferEngine,
     TransferOp, TransferRequest, Transport,
 };
@@ -130,7 +130,7 @@ fn caller_context_control(memory: &CudaMemory) -> Result<()> {
 
 fn exercise(path: &Path) -> Result<()> {
     let engine = TransferEngine::new(EngineConfig {
-        io_uring: orbit_te::IoUringConfig {
+        io_uring: orbite::IoUringConfig {
             pinned_staging: true,
             staging_slot_kb: 4,
             staging_slots: 1,
@@ -199,10 +199,10 @@ fn exercise(path: &Path) -> Result<()> {
     }
     let spans = [
         (device.base_address() + 11, 3).into(),
-        orbit_te::FileIoElement::Padding(3),
+        orbite::FileIoElement::Padding(3),
         (host.base_address() + 25, 2).into(),
         (device.base_address() + 7, 2).into(),
-        orbit_te::FileIoElement::Padding(2),
+        orbite::FileIoElement::Padding(2),
     ];
     let vector = TransferRequest::file_vectored(Transport::IoUring, 23, &spans)?;
     device.write(6, b"!ab!!XYZ!")?;
@@ -257,9 +257,9 @@ fn exercise(path: &Path) -> Result<()> {
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
-        [flag] if flag == "--protocol" => println!("orbitte-installed-storage-cuda-v1"),
+        [flag] if flag == "--protocol" => println!("orbite-installed-storage-cuda-v1"),
         [flag, path] if flag == "--exercise" => exercise(Path::new(path))?,
-        _ => return Err("usage: orbitte-storage-cuda --protocol | --exercise NEW_FILE".into()),
+        _ => return Err("usage: orbite-storage-cuda --protocol | --exercise NEW_FILE".into()),
     }
     Ok(())
 }

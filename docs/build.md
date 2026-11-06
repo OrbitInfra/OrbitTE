@@ -1,6 +1,6 @@
 # Build Guide
 
-OrbitTE builds as a Rust library. Provider features are optional and independent.
+OrbiTE builds as a Rust library. Provider features are optional and independent.
 Rust 1.85 is the minimum supported version. CPU/TCP builds need no native
 feature. Enabling `rdma` or `cuda` requires a Linux compilation target.
 
@@ -31,7 +31,7 @@ installed `infiniband/verbs.h` for the extended port-query inline; bindgen expos
 only its fixed-width result, so system and crate-native port layouts are never
 interchanged. The build probes `active_speed_ex`: headers without that member
 use legacy speed/width, while newer headers can report XDR. After changing RDMA development
-headers, run `cargo clean -p orbit-te` before rebuilding to rerun the probe. The optional effective-speed symbol is resolved
+headers, run `cargo clean -p orbite` before rebuilding to rerun the probe. The optional effective-speed symbol is resolved
 once at runtime; older libraries remain usable. This does not remove the pinned
 crate's CMake dependency. CPU/TCP and CUDA-only builds do not compile this shim. Each execution node also needs its RNIC provider, accessible
 uverbs character nodes and a valid GID. A usable context can register memory

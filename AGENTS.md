@@ -1,6 +1,6 @@
-# OrbitTE agent guide
+# OrbiTE agent guide
 
-This file gives a coding agent the context, rules and work order for OrbitTE
+This file gives a coding agent the context, rules and work order for OrbiTE
 while no GPU or RDMA machine is available. The goal for this period is to
 implement every remaining in-scope capability at source level, with CPU
 controls driving the production owners, and to defer hardware verification to
@@ -12,18 +12,18 @@ requirement list. This file only fixes the order of work for the
 hardware-free period. When a step lands, update the plan's existing stage text;
 do not turn this file into a second status diary.
 
-## 1. What OrbitTE is
+## 1. What OrbiTE is
 
-- OrbitTE is the transfer engine for
+- OrbiTE is the transfer engine for
   [OrbitKV](https://github.com/OrbitInfra/OrbitKV)'s KV cache. It replaces
   OrbitKV's earlier Mooncake TENT dependency, because OrbitKV needed many
   changes TENT did not allow.
-- Every end-to-end cache path must run through OrbitTE: CPU DRAM, NVIDIA GPU,
+- Every end-to-end cache path must run through OrbiTE: CPU DRAM, NVIDIA GPU,
   local SSD, within and across hosts, including GPU↔DRAM and GPU↔SSD.
 - The capability and architecture reference is Mooncake v0.3.14, frozen at
   `OrbitInfra/Mooncake@e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`, directory
   `mooncake-transfer-engine/tent/`. README, docs site, doc style, module
-  boundaries and naming follow Mooncake/TENT. OrbitTE is Rust and must not
+  boundaries and naming follow Mooncake/TENT. OrbiTE is Rust and must not
   depend on the Mooncake C++ runtime; the C++ build is only a test oracle.
 - Platforms: CPU and NVIDIA CUDA only.
 - In-scope transports (10): `TCP`, `HP_TCP`, `SHM`, `RDMA`, `NVLINK`, `MNNVL`,
@@ -68,7 +68,7 @@ Check `gh pr list` before branching from current main. The work order is in §7.
   profile without an installed hardware run. Missing hardware means
   unqualified, not passed.
 - Do not request hardware jobs. Do not edit the OrbitKV repository or its
-  dependency on OrbitTE; consumer integration stays deferred (P11).
+  dependency on OrbiTE; consumer integration stays deferred (P11).
 
 ## 4. Engineering rules
 
@@ -129,7 +129,7 @@ Tests:
 - Test the production owners through a real boundary or a CPU shim. Do not
   count a fake as a network, DMA or storage pass.
 - Never skip silently. If a CI gate needs a kernel facility, use an explicit
-  environment variable such as `ORBITTE_REQUIRE_IO_URING=1` so that an
+  environment variable such as `ORBITE_REQUIRE_IO_URING=1` so that an
   unavailable facility fails the test instead of skipping it.
 - Raw logs, traces and run reports stay outside Git.
 
@@ -166,10 +166,10 @@ feature set, on stable and `+1.85.0`. Add new feature sets to the CI matrix in
 Docs:
 
 ```bash
-python3 -m venv /tmp/orbitte-docs-venv
-/tmp/orbitte-docs-venv/bin/pip install -r docs/requirements.txt
-/tmp/orbitte-docs-venv/bin/sphinx-build -n -W --keep-going docs /tmp/orbitte-docs/html
-python3 scripts/check-docs.py /tmp/orbitte-docs/html
+python3 -m venv /tmp/orbite-docs-venv
+/tmp/orbite-docs-venv/bin/pip install -r docs/requirements.txt
+/tmp/orbite-docs-venv/bin/sphinx-build -n -W --keep-going docs /tmp/orbite-docs/html
+python3 scripts/check-docs.py /tmp/orbite-docs/html
 ```
 
 ## 6. PR workflow
@@ -191,7 +191,7 @@ python3 scripts/check-docs.py /tmp/orbitte-docs/html
 ## 7. Work order
 
 Each step names its requirements, the frozen TENT source to follow, the
-OrbitTE owner, what to implement and what "done" means. `[CPU]` steps can be
+OrbiTE owner, what to implement and what "done" means. `[CPU]` steps can be
 fully verified in CI. `[GPU]`/`[RDMA]` steps end at source level plus a
 written installed gate.
 
@@ -278,7 +278,7 @@ Do this first: later steps add request fields and transports.
   - Unaligned addresses; both O_DIRECT (ext4) and buffered fallback (tmpfs).
   - EOF/truncation short reads; injected syscall errors.
   - Concurrent unregister/close, cancellation and partial submit.
-  - CI runs with `ORBITTE_REQUIRE_IO_URING=1` on GitHub-hosted Linux, so this
+  - CI runs with `ORBITE_REQUIRE_IO_URING=1` on GitHub-hosted Linux, so this
     profile can be qualified on CI.
 
 ### S3 — P7.3 CUDA↔file through DRAM staging [GPU]
@@ -481,7 +481,7 @@ unqualified pending installed runs.
 
 ### S15b — Local CUDA copy engine [GPU]
 
-This is an OrbitTE extension for OrbitKV. Own local GPU↔pinned DRAM byte
+This is an OrbiTE extension for OrbitKV. Own local GPU↔pinned DRAM byte
 movement. OrbitKV supplies block and layer layouts, cache tier policy and
 codec compute. Keep the consumer contract in [local copies](docs/local-copy.md).
 
@@ -526,7 +526,7 @@ codec compute. Keep the consumer contract in [local copies](docs/local-copy.md).
 
 Deferred until a non-OrbitKV consumer needs etcd, Redis or HTTP. OrbitKV
 builds Mooncake with `USE_ETCD=OFF`, `USE_REDIS=OFF` and `USE_HTTP=OFF` and
-uses P2P metadata, which the OrbitTE control plane already provides.
+uses P2P metadata, which the OrbiTE control plane already provides.
 
 - **TENT:** `runtime/metastore.cpp`, `metastore/{etcd,redis,http}.cpp`,
   `redis_metastore_test`.
@@ -576,7 +576,7 @@ uses P2P metadata, which the OrbitTE control plane already provides.
 ### S23 — TENT wire interoperability profile [CPU for TCP]
 
 - Using the S16 freeze, implement a TENT-compatible control/metadata/TCP
-  profile with explicit version rejection, beside OrbitTE's own protocol.
+  profile with explicit version rejection, beside OrbiTE's own protocol.
 - **Done:**
   - Directional mixed-peer tests: a Rust requester against a C++ source and a
     C++ requester against a Rust source.

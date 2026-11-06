@@ -17,17 +17,17 @@ type QueryPortSpeed = unsafe extern "C" fn(*mut ffi::ibv_context, u32, *mut u64)
 pub(super) unsafe fn query_port(
     context: *mut ffi::ibv_context,
     port: u8,
-) -> std::result::Result<shim::orbitte_port_attr, c_int> {
-    let mut attr = shim::orbitte_port_attr::default();
+) -> std::result::Result<shim::orbite_port_attr, c_int> {
+    let mut attr = shim::orbite_port_attr::default();
     // The C compiler uses the system's verbs inline and provider layout. Only
     // our generated, fixed-width result crosses back into Rust.
     // SAFETY: The caller retains the verbs context and the C shim writes into its generated
     // output type.
-    let code = unsafe { shim::orbitte_query_port(context.cast(), port, &mut attr) };
+    let code = unsafe { shim::orbite_query_port(context.cast(), port, &mut attr) };
     if code == 0 { Ok(attr) } else { Err(code) }
 }
 
-pub(super) fn link_speed_mbps(attr: &shim::orbitte_port_attr) -> Option<u64> {
+pub(super) fn link_speed_mbps(attr: &shim::orbite_port_attr) -> Option<u64> {
     let speed = attr.active_speed;
     let lane = match speed {
         1 => 2_500,

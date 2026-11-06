@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbit_te::cuda::{self, CudaMemory};
-use orbit_te::transport::rdma::{RdmaConfig, RdmaCudaMemory, RdmaHostMemory, RdmaProgressMode};
-use orbit_te::{
+use orbite::cuda::{self, CudaMemory};
+use orbite::transport::rdma::{RdmaConfig, RdmaCudaMemory, RdmaHostMemory, RdmaProgressMode};
+use orbite::{
     BatchState, EngineConfig, Error, HostMemory, Notification, NotificationStatus, Permission,
     RegisteredMemory, Result, SourceEpoch, TransferEngine, TransferOp, TransferRequest, Transport,
 };
@@ -82,7 +82,7 @@ fn initial(seed: u64, payload: usize) -> Vec<u8> {
 }
 fn slices(payload: usize) -> Vec<(usize, usize, usize)> {
     let quarter = payload / 4;
-    let length = env::var("ORBITTE_RDMA_SLICE_BYTES")
+    let length = env::var("ORBITE_RDMA_SLICE_BYTES")
         .ok()
         .map(|value| value.parse::<usize>().expect("slice length"));
     (0..3)
@@ -116,29 +116,29 @@ fn finish(
     payload: usize,
     bytes: usize,
 ) -> Result<()> {
-    if let Some(path) = std::env::var_os("ORBITTE_HARDWARE_MAPS") {
+    if let Some(path) = std::env::var_os("ORBITE_HARDWARE_MAPS") {
         std::fs::write(path, std::fs::read_to_string("/proc/self/maps")?)?;
     }
     let gpu_direct = transport == Transport::Rdma
         && matches!(&backing, Memory::Cuda(_))
-        && env::var("ORBITTE_RDMA_CUDA_MEMORY").as_deref() == Ok("direct");
+        && env::var("ORBITE_RDMA_CUDA_MEMORY").as_deref() == Ok("direct");
     let gpu_key_reuse = gpu_direct
         && role == "source"
-        && env::var("ORBITTE_EXPECT_GPU_KEY_REUSE").as_deref() == Ok("1");
+        && env::var("ORBITE_EXPECT_GPU_KEY_REUSE").as_deref() == Ok("1");
     let host_direct = transport == Transport::Rdma
         && matches!(&backing, Memory::Host(_))
-        && env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
-    let remote_staging = env::var("ORBITTE_REMOTE_STAGING").as_deref() == Ok("1");
+        && env::var("ORBITE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
+    let remote_staging = env::var("ORBITE_REMOTE_STAGING").as_deref() == Ok("1");
     let remote_rdma = remote_staging && transport == Transport::Rdma;
     let expect_direct = host_direct || gpu_direct || remote_rdma;
-    let contexts = env::var("ORBITTE_RDMA_RAILS").map_or(1, |v| v.split(',').count());
-    let grants = env::var("ORBITTE_EXPECT_GRANTS")
+    let contexts = env::var("ORBITE_RDMA_RAILS").map_or(1, |v| v.split(',').count());
+    let grants = env::var("ORBITE_EXPECT_GRANTS")
         .map_or(Ok(6u64), |v| v.parse())
         .map_err(|_| Error::InvalidConfig("expected grant count"))?;
     let persistent = contexts * (2 * usize::from(host_direct) + usize::from(gpu_direct));
     let source_cached = host_direct;
     let stage_width: u64 = if remote_staging {
-        env::var("ORBITTE_EXPECT_STAGE_DEPTH")
+        env::var("ORBITE_EXPECT_STAGE_DEPTH")
             .map_or(Ok(1), |s| s.parse())
             .map_err(|_| Error::InvalidConfig("expected staging depth"))?
     } else {
@@ -211,9 +211,9 @@ fn finish(
             "source receive/message owners did not drain",
         ));
     }
-    let reused = env::var("ORBITTE_EXPECT_QP_REUSE").as_deref() == Ok("1");
+    let reused = env::var("ORBITE_EXPECT_QP_REUSE").as_deref() == Ok("1");
     let idle_qps = if reused {
-        env::var("ORBITTE_RDMA_MAX_ENDPOINTS").map_or(2 * contexts, |s| {
+        env::var("ORBITE_RDMA_MAX_ENDPOINTS").map_or(2 * contexts, |s| {
             s.parse::<usize>().unwrap_or(0).min(2 * contexts)
         })
     } else {
@@ -282,7 +282,7 @@ fn finish(
             .ok_or(Error::Internal("missing selected RDMA NIC"))?;
         let attrs = &nic.device_attrs;
         println!(
-            "ORBITTE_TOPOLOGY {{\"device\":\"{}\",\"port\":{},\"gid_index\":{},\"gid\":\"{}\",\"gid_type\":\"{}\",\"net_device_index\":{}}}",
+            "ORBITE_TOPOLOGY {{\"device\":\"{}\",\"port\":{},\"gid_index\":{},\"gid\":\"{}\",\"gid_type\":\"{}\",\"net_device_index\":{}}}",
             nic.name,
             attrs["rdma.port"],
             attrs["rdma.gid_index"],
@@ -295,7 +295,7 @@ fn finish(
     engine.close_source(TIMEOUT)?;
     let staging = engine.stats()?.staging;
     if remote_staging {
-        let chunk: usize = env::var("ORBITTE_EXPECT_STAGE_CHUNK_SIZE")
+        let chunk: usize = env::var("ORBITE_EXPECT_STAGE_CHUNK_SIZE")
             .map_err(|_| Error::InvalidConfig("remote staging chunk size"))?
             .parse()
             .map_err(|_| Error::InvalidConfig("remote staging chunk size"))?;
@@ -316,21 +316,21 @@ fn finish(
             return Err(Error::Internal("remote staging operation receipts differ"));
         }
         println!(
-            "ORBITTE_REMOTE_STAGE_STATS {{\"pins\":{},\"delegates\":{},\"crosses\":{},\"unpins\":{}}}",
+            "ORBITE_REMOTE_STAGE_STATS {{\"pins\":{},\"delegates\":{},\"crosses\":{},\"unpins\":{}}}",
             staging.remote_pins,
             staging.remote_delegates,
             staging.remote_crosses,
             staging.remote_unpins
         );
     }
-    if env::var("ORBITTE_STAGING_OBSERVE").as_deref() == Ok("1") {
+    if env::var("ORBITE_STAGING_OBSERVE").as_deref() == Ok("1") {
         let expected = u64::from(matches!(&backing, Memory::Cuda(_)) && !gpu_direct);
-        let chunk: usize = env::var("ORBITTE_STAGING_CHUNK_SIZE")
+        let chunk: usize = env::var("ORBITE_STAGING_CHUNK_SIZE")
             .unwrap()
             .parse()
             .unwrap();
         let transfer_chunk = if remote_staging {
-            env::var("ORBITTE_EXPECT_STAGE_CHUNK_SIZE")
+            env::var("ORBITE_EXPECT_STAGE_CHUNK_SIZE")
                 .map_err(|_| Error::InvalidConfig("expected staging chunk"))?
                 .parse::<usize>()
                 .map_err(|_| Error::InvalidConfig("expected staging chunk"))?
@@ -359,7 +359,7 @@ fn finish(
             ));
         }
         println!(
-            "ORBITTE_STAGING_STATS {{\"allocations\":{},\"reuses\":{},\"chunks\":{},\"bytes\":{},\"reserved_bytes\":{}}}",
+            "ORBITE_STAGING_STATS {{\"allocations\":{},\"reuses\":{},\"chunks\":{},\"bytes\":{},\"reserved_bytes\":{}}}",
             staging.allocations,
             staging.reuses,
             staging.completed_chunks,
@@ -436,7 +436,7 @@ fn finish(
         return Err(Error::Internal("receive/message resources were retained"));
     }
     println!(
-        "ORBITTE_GPU_MR_STATS {{\"direct\":{},\"opened_private_pds\":{},\"closed_private_pds\":{},\"active_private_pds\":{},\"opened_keys\":{},\"invalidated_keys\":{},\"reused_connections\":{}}}",
+        "ORBITE_GPU_MR_STATS {{\"direct\":{},\"opened_private_pds\":{},\"closed_private_pds\":{},\"active_private_pds\":{},\"opened_keys\":{},\"invalidated_keys\":{},\"reused_connections\":{}}}",
         gpu_direct,
         rdma.opened_grant_pds,
         rdma.closed_grant_pds,
@@ -446,7 +446,7 @@ fn finish(
         rdma.reused_connections
     );
     println!(
-        "ORBITTE_RECEIVE_STATS {{\"completed_sends\":{},\"completed_receives\":{},\"receive_post_calls\":{},\"peak_receive_work_requests\":{},\"receive_work_requests\":{},\"retained_receive_work_requests\":{},\"message_mrs\":{},\"retained_message_mrs\":{},\"message_bytes\":{},\"retained_message_bytes\":{}}}",
+        "ORBITE_RECEIVE_STATS {{\"completed_sends\":{},\"completed_receives\":{},\"receive_post_calls\":{},\"peak_receive_work_requests\":{},\"receive_work_requests\":{},\"retained_receive_work_requests\":{},\"message_mrs\":{},\"retained_message_mrs\":{},\"message_bytes\":{},\"retained_message_bytes\":{}}}",
         rdma.completed_sends,
         rdma.completed_receives,
         rdma.receive_post_calls,
@@ -468,7 +468,7 @@ fn finish(
         return Err(Error::Internal("CUDA resources were retained"));
     }
     println!(
-        "ORBITTE_SOURCE_MR_STATS {{\"idle_parents\":{},\"parents\":{},\"opened\":{},\"reused\":{},\"retained\":{}}}",
+        "ORBITE_SOURCE_MR_STATS {{\"idle_parents\":{},\"parents\":{},\"opened\":{},\"reused\":{},\"retained\":{}}}",
         idle.persistent_source_mrs,
         rdma.persistent_source_mrs,
         rdma.opened_source_mrs,
@@ -476,11 +476,11 @@ fn finish(
         rdma.retained_source_mrs
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        "ORBITE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
         idle.async_event_sources, rdma.async_event_sources, rdma.acknowledged_async_events
     );
     println!(
-        "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
+        "ORBITE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
         idle.active_endpoints,
         idle.active_grants,
         rdma.active_endpoints,
@@ -489,7 +489,7 @@ fn finish(
         rdma.retained_grants
     );
     println!(
-        "ORBITTE_CONNECTION_STATS {{\"idle\":{},\"opened\":{},\"closed\":{},\"reused\":{},\"completed_grants\":{}}}",
+        "ORBITE_CONNECTION_STATS {{\"idle\":{},\"opened\":{},\"closed\":{},\"reused\":{},\"completed_grants\":{}}}",
         idle.idle_endpoints,
         rdma.opened_connections,
         rdma.closed_connections,
@@ -497,7 +497,7 @@ fn finish(
         rdma.completed_reusable_grants
     );
     println!(
-        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{},\"rollovers\":{},\"idle_exhausted_windows\":{},\"exhausted_windows\":{}}}",
+        "ORBITE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{},\"rollovers\":{},\"idle_exhausted_windows\":{},\"exhausted_windows\":{}}}",
         idle.window_key_indices,
         rdma.window_key_indices,
         rdma.burned_window_keys,
@@ -507,11 +507,11 @@ fn finish(
         rdma.exhausted_windows
     );
     println!(
-        "ORBITTE_WINDOW_STATS {{\"opened_windows\":{},\"completed_binds\":{},\"completed_invalidations\":{},\"active_windows\":0,\"retained_windows\":0}}",
+        "ORBITE_WINDOW_STATS {{\"opened_windows\":{},\"completed_binds\":{},\"completed_invalidations\":{},\"active_windows\":0,\"retained_windows\":0}}",
         rdma.opened_windows, rdma.completed_window_binds, rdma.completed_window_invalidations
     );
     let event_mode =
-        transport == Transport::Rdma && env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
+        transport == Transport::Rdma && env::var("ORBITE_RDMA_EVENTS").as_deref() == Ok("1");
     if idle.active_completion_channels != contexts * usize::from(event_mode)
         || idle.completion_event_sources != contexts * usize::from(event_mode)
         || rdma.opened_completion_channels != contexts as u64 * u64::from(event_mode)
@@ -522,7 +522,7 @@ fn finish(
         ));
     }
     println!(
-        "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_sources\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"sources\":0}}",
+        "ORBITE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_sources\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"sources\":0}}",
         rdma.opened_completion_channels,
         idle.completion_event_sources,
         rdma.completion_events,
@@ -530,7 +530,7 @@ fn finish(
         rdma.cq_event_waits
     );
     println!(
-        "ORBITTE_SHARED_STATS {{\"opened_cqs\":{},\"idle_progress_workers\":{},\"peak_pending_qps\":{},\"active_cqs\":0,\"progress_workers\":0,\"retained_cqs\":0,\"progress_failures\":0}}",
+        "ORBITE_SHARED_STATS {{\"opened_cqs\":{},\"idle_progress_workers\":{},\"peak_pending_qps\":{},\"active_cqs\":0,\"progress_workers\":0,\"retained_cqs\":0,\"progress_failures\":0}}",
         rdma.opened_cqs, idle.progress_workers, rdma.peak_pending_qps
     );
     println!(
@@ -555,7 +555,7 @@ fn finish(
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args().collect();
     if args.len() == 2 && args[1] == "--protocol" {
-        println!("orbitte-hardware-peer-v1");
+        println!("orbite-hardware-peer-v1");
         return Ok(());
     }
     if args.len() != 9 && args.len() != 12 {
@@ -563,7 +563,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     let role = &args[1];
     let bind_addr: SocketAddr = args[2].parse()?;
-    let mut rdma = if env::var("ORBITTE_RDMA_DISCOVERY").as_deref() == Ok("1") {
+    let mut rdma = if env::var("ORBITE_RDMA_DISCOVERY").as_deref() == Ok("1") {
         RdmaConfig {
             rdma_whitelist: vec![args[3].clone()],
             ..Default::default()
@@ -573,39 +573,39 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         config.gid_index = Some(args[4].parse()?);
         config
     };
-    if let Ok(rails) = env::var("ORBITTE_RDMA_RAILS") {
+    if let Ok(rails) = env::var("ORBITE_RDMA_RAILS") {
         rdma.device = None;
         rdma.rdma_whitelist = rails.split(',').map(str::to_owned).collect();
     }
     rdma.hop_limit = 64;
-    rdma.progress_mode = match env::var("ORBITTE_RDMA_EVENTS").as_deref() {
+    rdma.progress_mode = match env::var("ORBITE_RDMA_EVENTS").as_deref() {
         Ok("1") => RdmaProgressMode::EventDriven,
         Ok("0") | Err(env::VarError::NotPresent) => RdmaProgressMode::Polling,
-        _ => return Err("ORBITTE_RDMA_EVENTS must be 0 or 1".into()),
+        _ => return Err("ORBITE_RDMA_EVENTS must be 0 or 1".into()),
     };
-    rdma.host_memory = match env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() {
+    rdma.host_memory = match env::var("ORBITE_RDMA_HOST_MEMORY").as_deref() {
         Ok("staged") => RdmaHostMemory::Staged,
         Ok("direct") | Err(env::VarError::NotPresent) => RdmaHostMemory::Direct,
-        _ => return Err("ORBITTE_RDMA_HOST_MEMORY must be direct or staged".into()),
+        _ => return Err("ORBITE_RDMA_HOST_MEMORY must be direct or staged".into()),
     };
     // Archived installed profiles require private-PD witnesses. Reuse profiles
     // opt in explicitly so they cannot pass on an unsupported RNIC.
-    rdma.gpu_source_reuse = env::var("ORBITTE_EXPECT_GPU_KEY_REUSE").as_deref() == Ok("1");
-    rdma.cuda_memory = match env::var("ORBITTE_RDMA_CUDA_MEMORY").as_deref() {
+    rdma.gpu_source_reuse = env::var("ORBITE_EXPECT_GPU_KEY_REUSE").as_deref() == Ok("1");
+    rdma.cuda_memory = match env::var("ORBITE_RDMA_CUDA_MEMORY").as_deref() {
         Ok("direct") => RdmaCudaMemory::Direct,
         Ok("staged") | Err(env::VarError::NotPresent) => RdmaCudaMemory::Staged,
-        _ => return Err("ORBITTE_RDMA_CUDA_MEMORY must be direct or staged".into()),
+        _ => return Err("ORBITE_RDMA_CUDA_MEMORY must be direct or staged".into()),
     };
-    if let Ok(value) = env::var("ORBITTE_RDMA_BLOCK_SIZE") {
+    if let Ok(value) = env::var("ORBITE_RDMA_BLOCK_SIZE") {
         rdma.block_size = value.parse()?;
     }
-    if let Ok(value) = env::var("ORBITTE_RDMA_MAX_SEND_WR") {
+    if let Ok(value) = env::var("ORBITE_RDMA_MAX_SEND_WR") {
         rdma.max_send_wr = value.parse()?;
     }
-    if let Ok(value) = env::var("ORBITTE_RDMA_MAX_CQES") {
+    if let Ok(value) = env::var("ORBITE_RDMA_MAX_CQES") {
         rdma.max_cqes = value.parse()?;
     }
-    if let Ok(value) = env::var("ORBITTE_RDMA_MAX_ENDPOINTS") {
+    if let Ok(value) = env::var("ORBITE_RDMA_MAX_ENDPOINTS") {
         rdma.max_endpoints = value.parse()?;
     }
     let kind = &args[5];
@@ -624,26 +624,26 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     let config = EngineConfig {
         bind_addr,
-        remote_staging: env::var("ORBITTE_REMOTE_STAGING").as_deref() == Ok("1"),
-        handler_threads: if env::var("ORBITTE_REMOTE_STAGING").as_deref() == Ok("1") {
+        remote_staging: env::var("ORBITE_REMOTE_STAGING").as_deref() == Ok("1"),
+        handler_threads: if env::var("ORBITE_REMOTE_STAGING").as_deref() == Ok("1") {
             1
         } else {
             4
         },
         max_inflight_batches: 1,
-        staging_chunk_size: env::var("ORBITTE_STAGING_CHUNK_SIZE")
+        staging_chunk_size: env::var("ORBITE_STAGING_CHUNK_SIZE")
             .map_or(Ok(4 << 20), |s| s.parse())?,
-        staging_chunk_count: env::var("ORBITTE_STAGING_CHUNK_COUNT")
+        staging_chunk_count: env::var("ORBITE_STAGING_CHUNK_COUNT")
             .map_or(Ok(64), |s| s.parse())?,
-        staging_pipeline_depth: env::var("ORBITTE_STAGING_PIPELINE_DEPTH")
+        staging_pipeline_depth: env::var("ORBITE_STAGING_PIPELINE_DEPTH")
             .map_or(Ok(1), |s| s.parse())?,
         rdma: Some(rdma),
         handler_timeout: TIMEOUT,
         ..EngineConfig::default()
     };
-    if env::var("ORBITTE_STAGING_OBSERVE").as_deref() == Ok("1") {
+    if env::var("ORBITE_STAGING_OBSERVE").as_deref() == Ok("1") {
         println!(
-            "ORBITTE_STAGING_CONFIG {{\"depth\":{},\"chunk_count\":{},\"chunk_size\":{}}}",
+            "ORBITE_STAGING_CONFIG {{\"depth\":{},\"chunk_count\":{},\"chunk_size\":{}}}",
             config.staging_pipeline_depth, config.staging_chunk_count, config.staging_chunk_size
         );
     }
@@ -658,7 +658,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let backing = Memory::new(kind, &initial_bytes)?;
     let memory = backing.register(&engine)?;
     println!(
-        "ORBITTE_MEMORY {{\"base\":{},\"length\":{},\"cuda\":{}}}",
+        "ORBITE_MEMORY {{\"base\":{},\"length\":{},\"cuda\":{}}}",
         memory.base_address(),
         memory.len(),
         matches!(&backing, Memory::Cuda(_))
@@ -672,7 +672,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let transferred: usize = entries.iter().map(|(_, _, length)| *length).sum();
     if role == "source" && args.len() == 9 {
         println!(
-            "ORBITTE_READY {} {} {} {}",
+            "ORBITE_READY {} {} {} {}",
             engine.endpoint(),
             engine.source_epoch(),
             memory.base_address(),

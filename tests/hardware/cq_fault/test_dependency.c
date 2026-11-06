@@ -56,7 +56,7 @@ static int fake_query(struct ibv_qp *qp, struct ibv_qp_attr *attr, int mask, str
 static int fake_destroy_payload(struct ibv_qp *qp) {
     assert(!contexts[find(qp->context)].last_qp);
     struct dependency_snapshot output;
-    assert(orbitte_dependency_fault(1, test_kind, "selected", &output) == EINVAL);
+    assert(orbite_dependency_fault(1, test_kind, "selected", &output) == EINVAL);
     return 0;
 }
 static int destroy(struct ibv_cq *cq, struct ibv_comp_channel *channel, struct ibv_pd *pd) {
@@ -88,15 +88,15 @@ static void run(unsigned kind) {
     assert(sizeof(output) == 104);
     assert(ibv_destroy_qp(&qp) == 0 && !contexts[0].last_qp);
     contexts[0].last_qp = &qp;
-    assert(orbitte_dependency_fault(2, 0, NULL, &output) == EINVAL);
-    assert(orbitte_dependency_fault(1, kind, "sibling", &output) == EINVAL);
-    assert(orbitte_dependency_fault(1, kind, "selected", &output) == 0);
+    assert(orbite_dependency_fault(2, 0, NULL, &output) == EINVAL);
+    assert(orbite_dependency_fault(1, kind, "sibling", &output) == EINVAL);
+    assert(orbite_dependency_fault(1, kind, "selected", &output) == 0);
     assert(output.armed == 1 && output.kind == kind && output.attempts == 0 && output.qpn == 7);
-    assert(orbitte_dependency_fault(1, kind, "selected", &output) == EINVAL);
+    assert(orbite_dependency_fault(1, kind, "selected", &output) == EINVAL);
     struct ibv_cq unrelated = {.context = &context[1]};
     assert(ibv_destroy_cq(&unrelated) == 0 && unrelated_calls == 1);
     assert(destroy(&cq, &channel, &pd) == EBUSY && destructor_calls == 1);
-    for (int i = 0; i < 2; ++i) assert(orbitte_dependency_fault(2, 0, NULL, &output) == 0);
+    for (int i = 0; i < 2; ++i) assert(orbite_dependency_fault(2, 0, NULL, &output) == 0);
     assert(output.live == 1 && output.attempts == 1 && output.code == EBUSY && output.blocker != 0);
     assert(kind == 3 ? destructor_calls == 3 : probe_calls == 2);
     for (int action = 0; action < 2; ++action) {
@@ -107,12 +107,12 @@ static void run(unsigned kind) {
     close(pipefd[0]); close(pipefd[1]);
 }
 int main(void) {
-    const char *root = getenv("ORBITTE_RESTART_ROOT"); assert(root);
+    const char *root = getenv("ORBITE_RESTART_ROOT"); assert(root);
     for (unsigned kind = 1; kind <= 3; ++kind) {
         pid_t child = fork(); assert(child >= 0);
         if (!child) {
             char path[4096]; assert(snprintf(path, sizeof(path), "%s/%u", root, kind) < (int)sizeof(path));
-            assert(mkdir(path, 0700) == 0 && setenv("ORBITTE_RESTART_ROOT", path, 1) == 0);
+            assert(mkdir(path, 0700) == 0 && setenv("ORBITE_RESTART_ROOT", path, 1) == 0);
             run(kind); _exit(0);
         }
         int status; assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);

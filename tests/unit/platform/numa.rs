@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn discovery_filters_memoryless_offline_disallowed_and_sparse_nodes() {
-    let root = std::env::temp_dir().join(format!("orbitte-staging-numa-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("orbite-staging-numa-{}", std::process::id()));
     let mask = node_mask(130).unwrap();
     assert_eq!(mask.iter().map(|word| word.count_ones()).sum::<u32>(), 1);
     assert!(node_mask(65536).is_err());
@@ -25,7 +25,7 @@ fn discovery_filters_memoryless_offline_disallowed_and_sparse_nodes() {
 #[cfg(feature = "cuda")]
 #[test]
 fn gpu_pci_discovery_checks_the_device_identity_and_node() {
-    let root = std::env::temp_dir().join(format!("orbitte-gpu-pci-numa-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("orbite-gpu-pci-numa-{}", std::process::id()));
     let dir = root.join("bus/pci/devices/0000:82:00.0");
     std::fs::create_dir_all(&dir).unwrap();
     for (value, expected) in [("130", Some(130)), ("-1", None), ("bad", None)] {

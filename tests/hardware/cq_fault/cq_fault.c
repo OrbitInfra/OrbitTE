@@ -195,8 +195,8 @@ static void attach(struct ibv_context *context) {
         }
     }
     if (log_fd < 0) {
-        const char *root = getenv("ORBITTE_RESTART_ROOT");
-        const char *generation = getenv("ORBITTE_RESTART_GENERATION");
+        const char *root = getenv("ORBITE_RESTART_ROOT");
+        const char *generation = getenv("ORBITE_RESTART_GENERATION");
         if (!root || !generation || strlen(generation) != 1 || generation[0] < '0' || generation[0] > '2') fail();
         char path[4096];
         int length = snprintf(path, sizeof(path), "%s/cq-fault-%s.jsonl", root, generation);
@@ -297,8 +297,8 @@ int ibv_destroy_qp(struct ibv_qp *qp) {
     return code;
 }
 
-/* Only the installed fixture calls this ABI; OrbitTE never links this tool. */
-int orbitte_cq_fault(unsigned command, unsigned phase, unsigned op, unsigned limit, struct snapshot *output) {
+/* Only the installed fixture calls this ABI; OrbiTE never links this tool. */
+int orbite_cq_fault(unsigned command, unsigned phase, unsigned op, unsigned limit, struct snapshot *output) {
     if (!output) return EINVAL;
     pthread_mutex_lock(&lock);
     int error = 0;
@@ -319,7 +319,7 @@ int orbitte_cq_fault(unsigned command, unsigned phase, unsigned op, unsigned lim
 }
 
 /* Raw QP pointers here are witnesses, never additional resource owners. */
-int orbitte_cleanup_fault(unsigned command, struct cleanup_snapshot *output) {
+int orbite_cleanup_fault(unsigned command, struct cleanup_snapshot *output) {
     if (!output) return EINVAL;
     pthread_mutex_lock(&lock);
     int error = 0;

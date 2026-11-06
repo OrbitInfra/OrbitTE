@@ -458,7 +458,7 @@ pub(super) fn finish(rails: &[String], mask: u64) {
         .collect::<Vec<_>>()
         .join(",");
     println!(
-        "ORBITTE_MULTI_RAIL_NATIVE {{\"opened_contexts\":{},\"closed_contexts\":{},\"registered_mrs\":{},\"deregistered_mrs\":{},\"fault_cq_receipts\":{},\"pending_wr_before_cq\":{:?},\"partial_admission_receipts\":{},\"posts\":[{posts}]}}",
+        "ORBITE_MULTI_RAIL_NATIVE {{\"opened_contexts\":{},\"closed_contexts\":{},\"registered_mrs\":{},\"deregistered_mrs\":{},\"fault_cq_receipts\":{},\"pending_wr_before_cq\":{:?},\"partial_admission_receipts\":{},\"posts\":[{posts}]}}",
         trace.opened,
         trace.closed,
         trace.registered,

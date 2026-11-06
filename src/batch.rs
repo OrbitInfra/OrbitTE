@@ -388,7 +388,7 @@ impl Batch {
             let engine = Arc::clone(engine);
             let state = Arc::clone(progress);
             let token = progress.reservation.budget.worker()?;
-            self.worker = Some(thread::Builder::new().name("orbitte-batch".into()).spawn(
+            self.worker = Some(thread::Builder::new().name("orbite-batch".into()).spawn(
                 move || {
                     let _exit = WorkerExit {
                         progress: Arc::clone(&state),

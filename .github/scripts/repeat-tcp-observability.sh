@@ -6,9 +6,9 @@ test_binary() {
     cargo test --locked --lib --no-run --features "$1" --message-format=json |
         jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable'
 }
-export ORBITTE_TEST_CPU_BINARY
-ORBITTE_TEST_CPU_BINARY=$(test_binary '')
-binary=$(test_binary "$ORBITTE_FEATURES")
+export ORBITE_TEST_CPU_BINARY
+ORBITE_TEST_CPU_BINARY=$(test_binary '')
+binary=$(test_binary "$ORBITE_FEATURES")
 controls=(
     transport::hp_tcp::tests::rails::least_loaded_lane_bypasses_a_delayed_ack_and_releases_after_completion
     transport::hp_tcp::tests::rails::static_ipv4_pairing_balances_uneven_reads_rotates_small_requests_and_never_stripes_writes

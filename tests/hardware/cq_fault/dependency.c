@@ -98,9 +98,9 @@ int ibv_dealloc_pd(struct ibv_pd *pd) {
     return code;
 }
 
-/* Raw handles are witnesses, not owners of any OrbitTE allocation. Only the
+/* Raw handles are witnesses, not owners of any OrbiTE allocation. Only the
  * extra native blocker is test-owned; the kernel releases it on process exit. */
-int orbitte_dependency_fault(unsigned command, unsigned kind, const char *rail,
+int orbite_dependency_fault(unsigned command, unsigned kind, const char *rail,
                              struct dependency_snapshot *output) {
     if (!output) return EINVAL;
     pthread_mutex_lock(&lock);

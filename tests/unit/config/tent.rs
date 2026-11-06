@@ -11,7 +11,7 @@ impl Temp {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static ID: AtomicUsize = AtomicUsize::new(0);
         let p = std::env::temp_dir().join(format!(
-            "orbitte-config-{}-{}",
+            "orbite-config-{}-{}",
             std::process::id(),
             ID.fetch_add(1, Ordering::Relaxed)
         ));
@@ -338,7 +338,7 @@ fn constructor_identity_and_legacy_corner_cases_reach_typed_fields() {
 
 #[test]
 fn public_constructors_capture_the_file_and_do_not_reread_process_environment() {
-    const CHILD: &str = "ORBITTE_S17_SNAPSHOT_TEST";
+    const CHILD: &str = "ORBITE_S17_SNAPSHOT_TEST";
     if std::env::var_os(CHILD).is_none() {
         let temp = Temp::new();
         let path = temp.0.join("engine.json");

@@ -193,7 +193,7 @@ fn transfer(
                         }) as u64,
                 shape.payload,
             )],
-            if deadline_fault(&env::var("ORBITTE_RAIL_MODE").unwrap()) {
+            if deadline_fault(&env::var("ORBITE_RAIL_MODE").unwrap()) {
                 Duration::from_secs(5)
             } else {
                 TIMEOUT
@@ -270,7 +270,7 @@ fn read_outcome(stream: &mut TcpStream, successful: &mut [bool], accepted: &mut 
 }
 
 pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
-    assert_eq!(env::var("ORBITTE_RAIL_MASK").unwrap(), "3");
+    assert_eq!(env::var("ORBITE_RAIL_MASK").unwrap(), "3");
     let generation = restart::generation(mode);
     let interrupted = restart::interrupted(mode, generation);
     let cleanup = restart::cleanup(mode, generation);
@@ -292,9 +292,9 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     let fault = is_fault(mode);
     let paused = mode.ends_with("close");
     let endpoint_limit = mode == "concurrent-grants";
-    let fault_rail: usize = env::var("ORBITTE_RAIL_FAULT").unwrap().parse().unwrap();
-    let events = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
-    let operation = if env::var("ORBITTE_RAIL_OPERATION").as_deref() == Ok("read") {
+    let fault_rail: usize = env::var("ORBITE_RAIL_FAULT").unwrap().parse().unwrap();
+    let events = env::var("ORBITE_RDMA_EVENTS").as_deref() == Ok("1");
+    let operation = if env::var("ORBITE_RAIL_OPERATION").as_deref() == Ok("read") {
         TransferOp::Read
     } else {
         TransferOp::Write
@@ -304,7 +304,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         (shape.block, shape.slices)
     );
     println!(
-        "ORBITTE_SLICE_GEOMETRY {{\"parents\":{},\"payload\":{},\"base\":{},\"block\":{},\"slices\":{},\"lengths\":{:?},\"sq_limit\":{sq_limit},\"rq_limit\":{rq_limit},\"max_send_wr\":{}}}",
+        "ORBITE_SLICE_GEOMETRY {{\"parents\":{},\"payload\":{},\"base\":{},\"block\":{},\"slices\":{},\"lengths\":{:?},\"sq_limit\":{sq_limit},\"rq_limit\":{rq_limit},\"max_send_wr\":{}}}",
         shape.parents,
         shape.payload,
         shape.base,
@@ -321,7 +321,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         rdma_whitelist: rails.to_vec(),
         num_lanes: worker_pool::count(),
         port: Some(1),
-        gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
+        gid_index: Some(env::var("ORBITE_SHARED_GID").unwrap().parse().unwrap()),
         host_memory: RdmaHostMemory::Direct,
         device_mask: 3,
         progress_mode: if events {
@@ -377,7 +377,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             handler_timeout: if mode.ends_with("lost-recv-cqe")
                 || cleanup_debt
                 || (interrupted
-                    && env::var("ORBITTE_RESTART_KILL_ROLE").as_deref() == Ok("requester"))
+                    && env::var("ORBITE_RESTART_KILL_ROLE").as_deref() == Ok("requester"))
             {
                 Duration::from_secs(10)
             } else {
@@ -465,7 +465,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 assert_eq!(stats.opened_connections, 0);
                 assert!(stats.active_endpoints <= 2 * worker_pool::count());
                 println!(
-                    "ORBITTE_COLD_CONSTRUCTION {{\"parents\":{},\"builders\":{},\"entered\":{entered},\"waiters\":{waiters},\"width\":{},\"contexts\":2,\"opened\":0}}",
+                    "ORBITE_COLD_CONSTRUCTION {{\"parents\":{},\"builders\":{},\"entered\":{entered},\"waiters\":{waiters},\"width\":{},\"contexts\":2,\"opened\":0}}",
                     shape.parents,
                     stats.active_endpoints,
                     worker_pool::count()
@@ -557,7 +557,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             );
             assert_eq!(after.idle_endpoints, stats.idle_endpoints);
             println!(
-                "ORBITTE_CONCURRENT_ADMISSION {{\"round\":{round},\"sq_debt\":{},\"grants\":{},\"direct_bytes\":{},\"endpoints\":{},\"rejected_before_new_qp\":true}}",
+                "ORBITE_CONCURRENT_ADMISSION {{\"round\":{round},\"sq_debt\":{},\"grants\":{},\"direct_bytes\":{},\"endpoints\":{},\"rejected_before_new_qp\":true}}",
                 after.work_requests,
                 after.active_grants,
                 after.direct_bytes,
@@ -599,7 +599,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     write_outcome(&mut stream, &successful, &accepted);
                     token(&mut stream, 0x42);
                     println!(
-                        "ORBITTE_RESTART_ACCEPTED {{\"generation\":{},\"accepted\":{:?}}}",
+                        "ORBITE_RESTART_ACCEPTED {{\"generation\":{},\"accepted\":{:?}}}",
                         generation.unwrap(),
                         accepted
                     );
@@ -672,7 +672,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 retired = true;
                 engine.close(TIMEOUT).unwrap();
                 println!(
-                    "ORBITTE_DEADLINE_DRAIN {{\"unquiesced_reports\":{unquiesced},\"fresh_close_deadline\":true,\"native_barrier_complete\":true}}"
+                    "ORBITE_DEADLINE_DRAIN {{\"unquiesced_reports\":{unquiesced},\"fresh_close_deadline\":true,\"native_barrier_complete\":true}}"
                 );
             }
             if interrupted {
@@ -735,7 +735,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 worker_pool::admitted(&engine, count);
                 native::admitted(owners(&engine));
                 println!(
-                    "ORBITTE_RQ_ADMISSION {{\"parents\":{},\"slices_per_parent\":{},\"capacity\":{rq_limit},\"credits\":{},\"posted_receives\":{},\"unused_capacity\":{},\"rejections\":{},\"rejected_before_source_qp\":true}}",
+                    "ORBITE_RQ_ADMISSION {{\"parents\":{},\"slices_per_parent\":{},\"capacity\":{rq_limit},\"credits\":{},\"posted_receives\":{},\"unused_capacity\":{},\"rejections\":{},\"rejected_before_source_qp\":true}}",
                     shape.parents,
                     shape.slices,
                     stats.receive_credits,
@@ -745,7 +745,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 );
             }
             println!(
-                "ORBITTE_CONCURRENT_RECEIVE {{\"round\":{round},\"rq_debt\":{},\"grants\":{},\"direct_bytes\":{}}}",
+                "ORBITE_CONCURRENT_RECEIVE {{\"round\":{round},\"rq_debt\":{},\"grants\":{},\"direct_bytes\":{}}}",
                 stats.receive_work_requests, stats.active_grants, stats.direct_bytes
             );
             if paused {
@@ -842,7 +842,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 );
             }
             println!(
-                "ORBITTE_CONNECTION_REUSE {{\"round\":{round},\"grants\":{count},\"cached_qps\":{},\"opened_delta\":{opened},\"reused_delta\":{reused},\"previous_qps_preserved\":true}}",
+                "ORBITE_CONNECTION_REUSE {{\"round\":{round},\"grants\":{count},\"cached_qps\":{},\"opened_delta\":{opened},\"reused_delta\":{reused},\"previous_qps_preserved\":true}}",
                 snapshot.len()
             );
             previous_opened = stats.opened_connections;
@@ -851,7 +851,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         }
 
         println!(
-            "ORBITTE_CONCURRENT_PARENTS {{\"round\":{round},\"successful\":{:?},\"accepted\":{:?}}}",
+            "ORBITE_CONCURRENT_PARENTS {{\"round\":{round},\"successful\":{:?},\"accepted\":{:?}}}",
             successful, accepted
         );
         if !interrupted && !cleanup_debt {
@@ -880,14 +880,14 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     assert!(stats.peak_work_requests <= if source { rq_limit } else { sq_limit });
     assert!(stats.peak_receive_work_requests <= if source { rq_limit } else { sq_limit });
     std::fs::write(
-        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        env::var("ORBITE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
     )
     .unwrap();
     native::finish();
     if let Some(generation) = generation {
         println!(
-            "ORBITTE_RESTART_RESULT {{\"source\":{source},\"generation\":{generation},\"pid\":{},\"epoch\":\"{}\",\"endpoint\":\"{}\",\"drained\":true}}",
+            "ORBITE_RESTART_RESULT {{\"source\":{source},\"generation\":{generation},\"pid\":{},\"epoch\":\"{}\",\"endpoint\":\"{}\",\"drained\":true}}",
             std::process::id(),
             engine.source_epoch(),
             engine.endpoint()
@@ -897,7 +897,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     drop(backing);
     assert!(weak.upgrade().is_none());
     println!(
-        "ORBITTE_CONCURRENT_RESULT {{\"mode\":\"{mode}\",\"source\":{source},\"fault_rail\":{fault_rail},\"parents\":{},\"slices_per_parent\":{},\"payload\":{},\"rounds\":{rounds},\"peak_sq\":{},\"peak_rq\":{},\"all_resources_drained\":true,\"allocation_released\":true,\"performance_measurement\":false}}",
+        "ORBITE_CONCURRENT_RESULT {{\"mode\":\"{mode}\",\"source\":{source},\"fault_rail\":{fault_rail},\"parents\":{},\"slices_per_parent\":{},\"payload\":{},\"rounds\":{rounds},\"peak_sq\":{},\"peak_rq\":{},\"all_resources_drained\":true,\"allocation_released\":true,\"performance_measurement\":false}}",
         shape.parents,
         shape.slices,
         shape.payload,

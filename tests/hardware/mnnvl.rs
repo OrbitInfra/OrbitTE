@@ -1,6 +1,6 @@
 //! Installed multi-node fabric exercise. The driver supplies a verified fabric domain and GPU.
-use orbit_te::cuda::CudaMemory;
-use orbit_te::{
+use orbite::cuda::CudaMemory;
+use orbite::{
     EngineConfig, Error, HostMemory, MnnvlConfig, Permission, RegisteredMemory, Result,
     SourceEpoch, TransferEngine, TransferOp, TransferRequest, Transport,
 };
@@ -63,7 +63,7 @@ impl Buffers {
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.as_slice() == ["--protocol"] {
-        println!("orbitte-installed-mnnvl");
+        println!("orbite-installed-mnnvl");
         return Ok(());
     }
     let [role, mode, domain, bind, numa, peer @ ..] = args.as_slice() else {

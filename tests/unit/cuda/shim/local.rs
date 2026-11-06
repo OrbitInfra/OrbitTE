@@ -143,7 +143,7 @@ unsafe extern "C" fn load(out: *mut sys::CUmodule, image: *const c_void) -> Stat
             std::ffi::CStr::from_ptr(image.cast())
                 .to_str()
                 .unwrap()
-                .contains(".entry orbitte_batch_copy(")
+                .contains(".entry orbite_batch_copy(")
         );
         *out = 1 as _;
     }
@@ -157,7 +157,7 @@ unsafe extern "C" fn function(
     assert_eq!(module as usize, 1);
     // SAFETY: name is NUL-terminated and the caller owns the output handle slot.
     unsafe {
-        assert_eq!(std::ffi::CStr::from_ptr(name), c"orbitte_batch_copy");
+        assert_eq!(std::ffi::CStr::from_ptr(name), c"orbite_batch_copy");
         *out = 2 as _;
     }
     SUCCESS

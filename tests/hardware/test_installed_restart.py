@@ -30,7 +30,7 @@ class InstalledRestartEvidence(unittest.TestCase):
             rows = []
             for g in range(count if target else 1):
                 for index, name in enumerate(self.profile['rails']):
-                    rows.append(('ORBITTE_INSTALLED_NIC ', dict(name=name, pci=str(index))))
+                    rows.append(('ORBITE_INSTALLED_NIC ', dict(name=name, pci=str(index))))
             process_phases = [dict(generation=g, native_pid=stamps[role][g]['pid'],
                                    exit_code=-9 if target and g + 1 < count else 0,
                                    child_reaped=True, intentional_sigkill=target and g + 1 < count)
@@ -39,14 +39,14 @@ class InstalledRestartEvidence(unittest.TestCase):
             for g in range(count):
                 baseline = 0 if target else g * 3 * byte_count
                 opened = 0 if target else g * 6
-                rows.append(('ORBITTE_INSTALLED_PHASE ', dict(**stamps[role][g],
+                rows.append(('ORBITE_INSTALLED_PHASE ', dict(**stamps[role][g],
                              peer_endpoint=stamps[peer][g]['endpoint'], peer_epoch=stamps[peer][g]['epoch'],
                              opened_qps=opened, opened_mrs=4,
                              read_bytes=baseline if role == 'requester' else 0, write_bytes=0,
                              stale_bytes_unchanged=True)))
                 for index in range(3):
                     base_round = 0 if target else g * 3
-                    rows.append(('ORBITTE_INSTALLED_ROUND ', dict(phase=g, round=index,
+                    rows.append(('ORBITE_INSTALLED_ROUND ', dict(phase=g, round=index,
                                  opened_qps=opened + 6, closed_qps=opened,
                                  reused_qps=(base_round + index) * 96,
                                  completed_grants=(base_round + index + 1) * 96, opened_mrs=4,
@@ -54,17 +54,17 @@ class InstalledRestartEvidence(unittest.TestCase):
                                  write_bytes=0)))
                 if g + 1 < count:
                     if target:
-                        rows.append(('ORBITTE_INSTALLED_KILL ', dict(phase=g, pid=stamps[role][g]['pid'],
+                        rows.append(('ORBITE_INSTALLED_KILL ', dict(phase=g, pid=stamps[role][g]['pid'],
                                      cached_qps=6, persistent_mrs=4, sq_debt=0, rq_debt=0, orderly_close=False)))
                     else:
-                        rows.append(('ORBITTE_INSTALLED_PEER_EXIT ', dict(phase=g,
+                        rows.append(('ORBITE_INSTALLED_PEER_EXIT ', dict(phase=g,
                                      survivor_pid=stamps[role][g]['pid'], locally_idle=True)))
                 if not target:
                     for old in range(g):
-                        rows.append(('ORBITTE_INSTALLED_STALE ', dict(phase=g, previous=old,
+                        rows.append(('ORBITE_INSTALLED_STALE ', dict(phase=g, previous=old,
                                      old_epoch=stamps[peer][old]['epoch'], new_epoch=stamps[peer][g]['epoch'],
                                      opened_qps=0, posted_wrs=0, remote_effect_none=True, locally_drained=True)))
-            rows.append(('ORBITTE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL, status='passed',
+            rows.append(('ORBITE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL, status='passed',
                          role=role, operation='read', parents=self.case['parents'], payload=self.case['payload'],
                          rounds=3, full_bytes_and_guards=True, locally_drained=True)))
             result[role] = {'stdout.log': '\n'.join(p + json.dumps(r) for p, r in rows),

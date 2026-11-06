@@ -63,7 +63,7 @@ unsafe extern "C" fn poll(
 ) -> i32 {
     // Delay CQ consumption, never fabricate completion: all four actual payload
     // posts must coexist in the shared SQ accounting before any is discharged.
-    if env::var("ORBITTE_SHARED_ROLE").as_deref() == Ok("requester") {
+    if env::var("ORBITE_SHARED_ROLE").as_deref() == Ok("requester") {
         let mut trace = TRACE.get().unwrap().lock().unwrap();
         if !trace.payload_polling {
             if trace.payload.len() != COUNT {
@@ -92,12 +92,12 @@ unsafe extern "C" fn poll(
     }
     if wc.status == 0
         && wc.opcode == 128
-        && env::var("ORBITTE_SHARED_QP").as_deref() == Ok("lost-receive")
+        && env::var("ORBITE_SHARED_QP").as_deref() == Ok("lost-receive")
         && !trace.lost
     {
         trace.lost = true;
         println!(
-            "ORBITTE_SHARED_QP_LOST {{\"qpn\":{},\"wr_id\":{},\"actual_success_cqe\":true}}",
+            "ORBITE_SHARED_QP_LOST {{\"qpn\":{},\"wr_id\":{},\"actual_success_cqe\":true}}",
             wc.qpn, wc.id
         );
         return 0;
@@ -192,9 +192,9 @@ fn attach(
 pub(super) fn run() {
     println!();
     TRACE.get_or_init(Default::default);
-    let source = env::var("ORBITTE_SHARED_ROLE").unwrap() == "source";
-    let lost = env::var("ORBITTE_SHARED_QP").unwrap() == "lost-receive";
-    let writing = env::var("ORBITTE_SHARED_OPERATION").unwrap() == "write";
+    let source = env::var("ORBITE_SHARED_ROLE").unwrap() == "source";
+    let lost = env::var("ORBITE_SHARED_QP").unwrap() == "lost-receive";
+    let writing = env::var("ORBITE_SHARED_OPERATION").unwrap() == "write";
     let operation = if writing {
         TransferOp::Write
     } else {
@@ -205,11 +205,11 @@ pub(super) fn run() {
     } else {
         0
     };
-    let payload: usize = env::var("ORBITTE_SHARED_PAYLOAD").unwrap().parse().unwrap();
+    let payload: usize = env::var("ORBITE_SHARED_PAYLOAD").unwrap().parse().unwrap();
     assert!((4096..=8 << 20).contains(&payload));
     let stride = payload + 2 * GUARD;
     let length = COUNT * stride;
-    let seed: u64 = env::var("ORBITTE_SHARED_SEED").unwrap().parse().unwrap();
+    let seed: u64 = env::var("ORBITE_SHARED_SEED").unwrap().parse().unwrap();
     let epoch = SourceEpoch([if source { 1 } else { 2 }; 16]);
     let mut config = rdma_config();
     config.host_memory = RdmaHostMemory::Direct;
@@ -250,9 +250,9 @@ pub(super) fn run() {
         .register_host(Arc::clone(&backing), 0, length, Permission::RemoteReadWrite)
         .unwrap();
     let mut stream = if source {
-        let listener = TcpListener::bind(env::var("ORBITTE_SHARED_BIND").unwrap()).unwrap();
+        let listener = TcpListener::bind(env::var("ORBITE_SHARED_BIND").unwrap()).unwrap();
         listener.set_nonblocking(true).unwrap();
-        println!("ORBITTE_READY {}", listener.local_addr().unwrap());
+        println!("ORBITE_READY {}", listener.local_addr().unwrap());
         std::io::stdout().flush().unwrap();
         let end = Instant::now() + TIMEOUT;
         loop {
@@ -267,7 +267,7 @@ pub(super) fn run() {
         }
     } else {
         TcpStream::connect_timeout(
-            &env::var("ORBITTE_SHARED_PEER").unwrap().parse().unwrap(),
+            &env::var("ORBITE_SHARED_PEER").unwrap().parse().unwrap(),
             Duration::from_secs(5),
         )
         .unwrap()
@@ -529,7 +529,7 @@ pub(super) fn run() {
     }
     verify(&memory, &expected);
     std::fs::write(
-        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        env::var("ORBITE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
     )
     .unwrap();
@@ -572,7 +572,7 @@ pub(super) fn run() {
     let trace = TRACE.get().unwrap().lock().unwrap();
     assert_eq!(trace.closed_qps, 1);
     println!(
-        "ORBITTE_SHARED_QP_RESULT {{\"source\":{source},\"writing\":{writing},\"lost_receive\":{lost},\"grants\":{COUNT},\"physical_qps\":1,\"max_payload_namespaces\":{},\"barrier_loan_checks\":{},\"completed_receives\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"public_handshake_multiplexed\":false}}",
+        "ORBITE_SHARED_QP_RESULT {{\"source\":{source},\"writing\":{writing},\"lost_receive\":{lost},\"grants\":{COUNT},\"physical_qps\":1,\"max_payload_namespaces\":{},\"barrier_loan_checks\":{},\"completed_receives\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"public_handshake_multiplexed\":false}}",
         trace.max_namespaces, trace.barrier_checks, stats.completed_receives
     );
 }

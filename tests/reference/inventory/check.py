@@ -71,7 +71,7 @@ def check_links(tent):
 def check_c_api(tent):
     api = (tent / "include/tent/transfer_engine.h").read_text()
     c_header, cpp = api.split("#ifdef __cplusplus\n#include <array>", 1)
-    installed = REPO / "crates/orbit-te-c/include/tent/transfer_engine.h"
+    installed = REPO / "crates/orbite-c/include/tent/transfer_engine.h"
     if not cpp or installed.read_text() != c_header + '#include "tent/orbit_extensions.h"\n#ifdef __cplusplus\n#include "tent/cpp_engine.h"\n#endif\n#endif\n':
         raise ValueError("installed C header differs from the frozen TENT C surface")
     functions = {
@@ -105,7 +105,7 @@ def check_tests(tent):
         raise ValueError("unexpected reference test source count")
     for name, row in tests.items():
         equal(name, set(row["gtest_filter"].split(":")), gtest_filters((tent / name).read_text()))
-        path_at(REPO, row["orbitte_owner_or_control"])
+        path_at(REPO, row["orbite_owner_or_control"])
 
 
 def check_rpcs(tent):

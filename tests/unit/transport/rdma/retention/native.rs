@@ -15,23 +15,23 @@ pub(in super::super) struct Retirement {
 
 impl Retirement {
     pub(in super::super) fn new(requester: bool) -> Option<Self> {
-        let kind = match env::var("ORBITTE_RAIL_MODE").as_deref() {
+        let kind = match env::var("ORBITE_RAIL_MODE").as_deref() {
             Ok("large-cq-busy") => "cq",
             Ok("large-pd-busy") => "pd",
             Ok("large-qp-cleanup-error") => "qp",
             Ok("large-channel-busy") => "channel",
             _ => return None,
         };
-        let generation: usize = env::var("ORBITTE_RESTART_GENERATION")
+        let generation: usize = env::var("ORBITE_RESTART_GENERATION")
             .unwrap()
             .parse()
             .unwrap();
-        let count: usize = env::var("ORBITTE_RESTART_GENERATIONS")
+        let count: usize = env::var("ORBITE_RESTART_GENERATIONS")
             .unwrap()
             .parse()
             .unwrap();
         if generation + 1 == count
-            || requester != (env::var("ORBITTE_RESTART_KILL_ROLE").as_deref() == Ok("requester"))
+            || requester != (env::var("ORBITE_RESTART_KILL_ROLE").as_deref() == Ok("requester"))
         {
             return None;
         }
@@ -86,7 +86,7 @@ impl Retirement {
         assert_eq!(unsafe { (*handles).qp } as usize, qp);
         // This worker's command FD is filtered; query from the proof thread later.
         println!(
-            "ORBITTE_NATIVE_CLEANUP_ERROR {{\"kind\":\"qp\",\"code\":{},\"attempts\":{},\"qp\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
+            "ORBITE_NATIVE_CLEANUP_ERROR {{\"kind\":\"qp\",\"code\":{},\"attempts\":{},\"qp\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
             self.error, self.attempts, self.qp, self.pd
         );
         Some(self.error)
@@ -124,7 +124,7 @@ impl Retirement {
         self.context = context as usize;
         self.channel = channel;
         // A real child CQ makes libibverbs reject channel destruction. The
-        // blocker is not registered with OrbitTE and remains until process exit.
+        // blocker is not registered with OrbiTE and remains until process exit.
         // SAFETY: The fault fixture retains the context and channel while constructing their
         // dependent CQ.
         self.cq = unsafe {
@@ -145,7 +145,7 @@ impl Retirement {
         assert_eq!(unsafe { (*handles).channel } as usize, channel);
         self.check();
         println!(
-            "ORBITTE_NATIVE_CLEANUP_ERROR {{\"kind\":\"channel\",\"code\":{},\"attempts\":{},\"channel\":{},\"blocker\":{}}}",
+            "ORBITE_NATIVE_CLEANUP_ERROR {{\"kind\":\"channel\",\"code\":{},\"attempts\":{},\"channel\":{},\"blocker\":{}}}",
             self.error, self.attempts, self.channel, self.cq
         );
         Some(self.error)
@@ -210,7 +210,7 @@ impl Retirement {
         assert_eq!(unsafe { (*handles).cq } as usize, cq);
         self.check();
         println!(
-            "ORBITTE_NATIVE_CLEANUP_ERROR {{\"kind\":\"cq\",\"code\":{},\"attempts\":{},\"cq\":{},\"pd\":{},\"blocker\":{}}}",
+            "ORBITE_NATIVE_CLEANUP_ERROR {{\"kind\":\"cq\",\"code\":{},\"attempts\":{},\"cq\":{},\"pd\":{},\"blocker\":{}}}",
             self.error, self.attempts, self.cq, self.pd, self.qp
         );
         Some(self.error)
@@ -260,7 +260,7 @@ impl Retirement {
         assert_eq!(unsafe { (*handles).context } as usize, self.context);
         self.check();
         println!(
-            "ORBITTE_NATIVE_CLEANUP_ERROR {{\"kind\":\"pd\",\"code\":{},\"attempts\":{},\"cq\":{},\"pd\":{},\"blocker\":{}}}",
+            "ORBITE_NATIVE_CLEANUP_ERROR {{\"kind\":\"pd\",\"code\":{},\"attempts\":{},\"cq\":{},\"pd\":{},\"blocker\":{}}}",
             self.error, self.attempts, self.cq, self.pd, self.mw
         );
         Some(self.error)

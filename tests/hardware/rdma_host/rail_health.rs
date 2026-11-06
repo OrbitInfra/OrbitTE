@@ -1,7 +1,7 @@
 //! Fault one dedicated RoCE data link on the requester. The supervisor owns
 //! the host locks through child exit and independently restores the link.
 use super::*;
-use orbit_te::{Error, TransportSelectorConfig};
+use orbite::{Error, TransportSelectorConfig};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -32,8 +32,8 @@ fn set_link(name: &str, state: &str) -> Result<()> {
 }
 impl Link {
     fn down(case: &Case, control: &TcpStream) -> Result<Self> {
-        let name = env::var("ORBITTE_FAULT_NETDEV")?;
-        let gid = env::var("ORBITTE_SHARED_GID")?.parse::<u16>()?;
+        let name = env::var("ORBITE_FAULT_NETDEV")?;
+        let gid = env::var("ORBITE_SHARED_GID")?.parse::<u16>()?;
         let mapped = fs::read_to_string(format!(
             "/sys/class/infiniband/{}/ports/1/gid_attrs/ndevs/{gid}",
             case.rails[0]
@@ -71,7 +71,7 @@ impl Link {
         if u64::from_str_radix(flags.trim().trim_start_matches("0x"), 16)? & 1 == 0 {
             return Err("data link was not administratively up".into());
         }
-        let root = PathBuf::from(env::var("ORBITTE_SHARED_MAPS")?);
+        let root = PathBuf::from(env::var("ORBITE_SHARED_MAPS")?);
         fs::write(root.with_file_name("rail-link-armed"), &name)?;
         let link = Self { name, armed: true };
         set_link(&link.name, "down")?;
@@ -197,7 +197,7 @@ pub(super) fn run(
             return Err("native byte counts do not match the two locked routes".into());
         }
         println!(
-            "ORBITTE_RAIL_HEALTH {{\"role\":\"requester\",\"blocked_posts\":0,\"probes\":{},\"recoveries\":{},\"fault_rail_bytes\":{},\"spare_rail_bytes\":{},\"verified_bytes\":{}}}",
+            "ORBITE_RAIL_HEALTH {{\"role\":\"requester\",\"blocked_posts\":0,\"probes\":{},\"recoveries\":{},\"fault_rail_bytes\":{},\"spare_rail_bytes\":{},\"verified_bytes\":{}}}",
             after.rail_probes - before.rail_probes,
             after.rail_recoveries - before.rail_recoveries,
             first,
@@ -213,7 +213,7 @@ pub(super) fn run(
             return Err("source registration changed".into());
         }
         println!(
-            "ORBITTE_RAIL_HEALTH {{\"role\":\"source\",\"verified_bytes\":{}}}",
+            "ORBITE_RAIL_HEALTH {{\"role\":\"source\",\"verified_bytes\":{}}}",
             got.len()
         );
     }

@@ -34,9 +34,9 @@ def fixture(kind):
         add('dependency_query', resource=resource, context=0, blocker=50, code=16 if kind == 'pd' else 0, live=True)
     lines = []
     for line in record['stdout.log'].splitlines():
-        if not debt and line.startswith('ORBITTE_INSTALLED_CQE_PENDING '):
+        if not debt and line.startswith('ORBITE_INSTALLED_CQE_PENDING '):
             continue
-        if line.startswith('ORBITTE_INSTALLED_CLEANUP '):
+        if line.startswith('ORBITE_INSTALLED_CLEANUP '):
             prefix, raw = line.split(' ', 1)
             proof = json.loads(raw)
             proof.update(code=16, resource=resource, sequence=len(rows), retained_endpoints=0,
@@ -93,10 +93,10 @@ class InstalledDependencyEvidence(unittest.TestCase):
     def test_fault_scope_and_completion_mode(self):
         for kind in ('cq', 'channel', 'pd'):
             case, _ = fixture(kind)
-            env = {'ORBITTE_HOST_MODE': case['mode'], 'ORBITTE_SHARED_ROLE': 'requester',
-                   'ORBITTE_CLEANUP_KIND': kind, 'ORBITTE_RDMA_EVENTS': str(int(case['rdma_events']))}
+            env = {'ORBITE_HOST_MODE': case['mode'], 'ORBITE_SHARED_ROLE': 'requester',
+                   'ORBITE_CLEANUP_KIND': kind, 'ORBITE_RDMA_EVENTS': str(int(case['rdma_events']))}
             self.assertTrue(supervise.fault_scope(env))
-            self.assertFalse(supervise.fault_scope({**env, 'ORBITTE_SHARED_ROLE': 'source'}))
+            self.assertFalse(supervise.fault_scope({**env, 'ORBITE_SHARED_ROLE': 'source'}))
             for update in [dict(fault_role='source'), dict(parents=2), dict(mask=3),
                            dict(cleanup_kind='device'), dict(generations=3)]:
                 with self.subTest(kind=kind, update=update), self.assertRaises(ValueError):
@@ -104,7 +104,7 @@ class InstalledDependencyEvidence(unittest.TestCase):
         case, _ = fixture('channel')
         with self.assertRaises(ValueError):
             installed.validate({**case, 'rdma_events': False})
-        self.assertFalse(supervise.fault_scope({**env, 'ORBITTE_CLEANUP_KIND': 'channel', 'ORBITTE_RDMA_EVENTS': '0'}))
+        self.assertFalse(supervise.fault_scope({**env, 'ORBITE_CLEANUP_KIND': 'channel', 'ORBITE_RDMA_EVENTS': '0'}))
 
 
 if __name__ == '__main__':

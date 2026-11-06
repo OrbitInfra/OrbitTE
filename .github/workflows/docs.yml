@@ -20,34 +20,34 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install pinned documentation dependencies
         run: |
-          python3 -m venv "$RUNNER_TEMP/orbitte-docs-venv"
-          "$RUNNER_TEMP/orbitte-docs-venv/bin/pip" install --disable-pip-version-check -r docs/requirements.txt
+          python3 -m venv "$RUNNER_TEMP/orbite-docs-venv"
+          "$RUNNER_TEMP/orbite-docs-venv/bin/pip" install --disable-pip-version-check -r docs/requirements.txt
       - name: Build the website with warnings treated as errors
         env:
-          ORBITTE_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORBITE_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
         run: >-
-          "$RUNNER_TEMP/orbitte-docs-venv/bin/sphinx-build"
-          -n -W --keep-going docs "$RUNNER_TEMP/orbitte-docs/html"
+          "$RUNNER_TEMP/orbite-docs-venv/bin/sphinx-build"
+          -n -W --keep-going docs "$RUNNER_TEMP/orbite-docs/html"
       - name: Check local links, fragments and assets
-        run: python3 scripts/check-docs.py "$RUNNER_TEMP/orbitte-docs/html"
+        run: python3 scripts/check-docs.py "$RUNNER_TEMP/orbite-docs/html"
       - name: Save the generated website for preview
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: orbitte-docs
-          path: ${{ runner.temp }}/orbitte-docs/html/
+          name: orbite-docs
+          path: ${{ runner.temp }}/orbite-docs/html/
           include-hidden-files: true
           if-no-files-found: error
       - name: Configure GitHub Pages
-        if: github.repository == 'OrbitInfra/OrbitTE' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: github.repository == 'OrbitInfra/OrbiTE' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/configure-pages@v6.0.0
       - name: Upload the Pages artifact
-        if: github.repository == 'OrbitInfra/OrbitTE' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: github.repository == 'OrbitInfra/OrbiTE' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v5.0.0
         with:
-          path: ${{ runner.temp }}/orbitte-docs/html/
+          path: ${{ runner.temp }}/orbite-docs/html/
 
   deploy:
-    if: github.repository == 'OrbitInfra/OrbitTE' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.repository == 'OrbitInfra/OrbiTE' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10

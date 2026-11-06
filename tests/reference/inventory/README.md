@@ -3,7 +3,7 @@
 S17–S23 use the tables in this directory as their contract. The pin and native
 build options come from [contract.json](../contract.json). Paths in the
 `source` column start at `mooncake-transfer-engine/tent/` in that revision.
-OrbitTE paths start at the crate root. Each row defines a check. Qualification results are recorded separately. In particular, inventorying a provider does not run it.
+OrbiTE paths start at the crate root. Each row defines a check. Qualification results are recorded separately. In particular, inventorying a provider does not run it.
 
 The files are UTF-8, tab-separated, with a header and literal field text.
 Identify a case by table and primary key, for example `config:rpc_server_port`
@@ -30,9 +30,9 @@ targets even where the corresponding compatibility adapter is still planned.
 | --- | --- | --- |
 | C ABI | [33 declarations and call contracts](c-api.tsv), [Linux LP64 layouts](abi.lp64) | S19 compares input validation, allocation/free, results and guards. The C probe measures size, alignment, member offset/width and the public constants. |
 | C++, Python and device plugins | [Binding cases](bindings.tsv) | S20–S22 use the same storage, submission and retirement contracts. The plugin table layout comes from the independent C probe. |
-| Configuration | [Keys and effective absent values](config.tsv), [environment mappings](environment.tsv), [precedence vectors](precedence.json) | The absent column comes from frozen TENT. The S17 columns identify the OrbitTE owner or disposition and a JSON test input. The Rust controls consume every row, including policy, QoS and pool members, and replay the precedence vectors. |
+| Configuration | [Keys and effective absent values](config.tsv), [environment mappings](environment.tsv), [precedence vectors](precedence.json) | The absent column comes from frozen TENT. The S17 columns identify the OrbiTE owner or disposition and a JSON test input. The Rust controls consume every row, including policy, QoS and pool members, and replay the precedence vectors. |
 | Capabilities | [Transport values, directions, notification and cancellation](capabilities.tsv) | Test the six local-to-target direction flags after a successful native install. GDR requires the provider's positive GPU Direct check. EGM requires its explicit setting. Unspec authorizes selection and has no provider of its own. BufIo has no loader entry or public transport value. |
-| Observability | [Metric families](metrics.tsv), [other observations](observations.tsv) | Compare type, labels, finite histogram boundaries and structured observations. Bind and runtime-enable gauges report actual state. Extensions with the `orbitte_` prefix are outside the frozen family set. |
+| Observability | [Metric families](metrics.tsv), [other observations](observations.tsv) | Compare type, labels, finite histogram boundaries and structured observations. Bind and runtime-enable gauges report actual state. Extensions with the `orbite_` prefix are outside the frozen family set. |
 | Metadata and wire | [Metadata fields and ownership](metadata.tsv), [logical RPC IDs and attachments](rpc.tsv), [native fixtures](../wire/) | S18 and S23 check required/optional fields, bytes and errors. S24/S25 can use the same provider bootstrap fixtures. |
 | Test sources | [88 recursive C++ test source mappings](tests.tsv) | Includes nested vendor directories. A shim exercises ownership and serialization. The hardware trigger is a separate acceptance condition. Primitive-specific and excluded SDK cases have an explicit disposition. |
 
@@ -55,7 +55,7 @@ The metrics loader applies environment values to its defaults, then applies
 each present metrics config leaf. A runtime-candidate lifecycle classification
 does not imply a live-update handler. Nested QoS defaults inherit in
 global, tenant and intent order. The absent column describes the upstream
-parser, including fields OrbitTE rejects when it has no executor.
+parser, including fields OrbiTE rejects when it has no executor.
 
 ## Reproduce the checks
 

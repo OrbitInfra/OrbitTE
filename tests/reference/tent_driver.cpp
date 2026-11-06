@@ -218,7 +218,7 @@ public:
 
   void execute(const std::vector<std::string> &fields) {
     const auto &operation = fields.at(0);
-    if (operation == "ORBITTE_CPU_TRACE" && fields.size() == 2 &&
+    if (operation == "ORBITE_CPU_TRACE" && fields.size() == 2 &&
         fields[1] == "1") {
       std::cout << "OBS\tVERSION\t1\n";
     } else if (operation == "BUFFER" && fields.size() == 4) {

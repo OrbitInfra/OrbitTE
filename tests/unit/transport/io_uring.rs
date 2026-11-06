@@ -24,7 +24,7 @@ pub(crate) struct RingTrace {
 }
 
 fn required() -> bool {
-    std::env::var("ORBITTE_REQUIRE_IO_URING").as_deref() == Ok("1")
+    std::env::var("ORBITE_REQUIRE_IO_URING").as_deref() == Ok("1")
 }
 
 pub(crate) fn kernel() -> bool {
@@ -34,7 +34,7 @@ pub(crate) fn kernel() -> bool {
             eprintln!("skipping real io_uring: ring probe failed: {e}");
             false
         }
-        Err(e) => panic!("ORBITTE_REQUIRE_IO_URING=1, but ring setup failed: {e}"),
+        Err(e) => panic!("ORBITE_REQUIRE_IO_URING=1, but ring setup failed: {e}"),
     }
 }
 
@@ -47,7 +47,7 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new(dir: &Path, bytes: &[u8], engine: TransferEngine) -> Result<Self> {
-        let path = dir.join(format!("orbitte-uring-{}", SourceEpoch::generate()?));
+        let path = dir.join(format!("orbite-uring-{}", SourceEpoch::generate()?));
         fs::write(&path, bytes)?;
         let segment = engine.open_file_segment(
             &format!("file://{}", path.display()),
@@ -129,7 +129,7 @@ fn real_files_move_full_bytes_on_ext4_and_tmpfs() -> Result<()> {
     if !kernel() {
         return Ok(());
     }
-    for (key, direct) in [("ORBITTE_EXT4_DIR", true), ("ORBITTE_TMPFS_DIR", false)] {
+    for (key, direct) in [("ORBITE_EXT4_DIR", true), ("ORBITE_TMPFS_DIR", false)] {
         let dir = match std::env::var_os(key) {
             Some(path) => PathBuf::from(path),
             None if required() => panic!("required filesystem fixture {key} missing"),
@@ -346,7 +346,7 @@ fn short_write_reports_only_the_prefix_written_by_the_kernel() -> Result<()> {
         return Ok(());
     }
     // RLIMIT_FSIZE is process-wide. Set it only in a child running this one test.
-    const CHILD: &str = "ORBITTE_SHORT_WRITE_CHILD";
+    const CHILD: &str = "ORBITE_SHORT_WRITE_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let result = std::process::Command::new(std::env::current_exe()?)
             .env(CHILD, "1").args(["--exact", "transport::io_uring::tests::short_write_reports_only_the_prefix_written_by_the_kernel"])
@@ -1127,7 +1127,7 @@ fn r1c_aligned_slots_and_pageable_fallback_are_bounded_before_ring_creation() ->
         return Ok(());
     }
     let image: Vec<_> = (0..16384).map(|i| (i % 251) as u8).collect();
-    let dir = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
+    let dir = std::env::var_os("ORBITE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
     let mut f = Fixture::new(
         &dir,
         &image,
@@ -1249,7 +1249,7 @@ fn r1c_freed_file_batch_keeps_its_slot_until_the_consumed_cqe() -> Result<()> {
 
 #[test]
 fn r1c_storage_environment_overrides_only_the_enabled_file_pool() -> Result<()> {
-    const CHILD: &str = "ORBITTE_TEST_FILE_POOL_ENV";
+    const CHILD: &str = "ORBITE_TEST_FILE_POOL_ENV";
     if std::env::var_os(CHILD).is_some() {
         let e = TransferEngine::new(EngineConfig::default())?;
         if kernel() {

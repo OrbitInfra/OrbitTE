@@ -621,7 +621,7 @@ impl ControlService {
             let stopping = Arc::clone(&service.stopping);
             let max_bytes = config.max_transfer_bytes;
             let worker = thread::Builder::new()
-                .name(format!("orbitte-control-{index}"))
+                .name(format!("orbite-control-{index}"))
                 .spawn(move || {
                     loop {
                         if stopping.load(Ordering::Acquire) {
@@ -664,7 +664,7 @@ impl ControlService {
         let accept = accept::tests::instrument(accept);
         service.acceptor = Some(
             thread::Builder::new()
-                .name("orbitte-control-accept".into())
+                .name("orbite-control-accept".into())
                 .spawn(
                     move || match accept::run(poll, accept, sender, &stopping, timeout) {
                         Ok(()) => log::debug!("control acceptor at {endpoint} stopped"),

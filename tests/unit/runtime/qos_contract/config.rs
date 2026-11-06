@@ -121,7 +121,7 @@ fn tent_json_preserves_enablement_units_and_compiled_overlays() {
         }
     }"#;
     let path = std::env::temp_dir().join(format!(
-        "orbitte-qos-{:?}.json",
+        "orbite-qos-{:?}.json",
         SourceEpoch::generate().unwrap()
     ));
     std::fs::write(&path, input).unwrap();
@@ -236,7 +236,7 @@ fn json_rejects_ambiguous_or_unconsumed_qos_and_bounded_input() {
         .join(",");
     assert!(QosConfig::from_json(&format!(r#"{{"qos":{{"tenants":[{too_many}]}}}}"#)).is_err());
     let path = std::env::temp_dir().join(format!(
-        "orbitte-qos-large-{:?}.json",
+        "orbite-qos-large-{:?}.json",
         SourceEpoch::generate().unwrap()
     ));
     let mut oversized = " ".repeat(MAX_JSON_BYTES);

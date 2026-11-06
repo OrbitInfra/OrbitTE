@@ -1,11 +1,11 @@
 //! Installed requester and source with a real healthy RNIC baseline. The relay
 //! closes exactly one bootstrap before either peer can post a payload.
 use super::*;
-use orbit_te::{EngineConfig, Permission, transport::rdma::RdmaConfig};
+use orbite::{EngineConfig, Permission, transport::rdma::RdmaConfig};
 use std::sync::Arc;
 
 pub(super) fn run() -> Result<()> {
-    let nic = env::var("ORBITTE_FAILOVER_NIC")?;
+    let nic = env::var("ORBITE_FAILOVER_NIC")?;
     let config = EngineConfig {
         rdma: Some(RdmaConfig::new(nic)),
         ..Default::default()

@@ -340,7 +340,7 @@ impl Monitor {
             self.counters.workers.fetch_add(1, Ordering::AcqRel);
             let exit = Exit(Arc::clone(&shared));
             let worker = thread::Builder::new()
-                .name("orbitte-rdma-monitor".into())
+                .name("orbite-rdma-monitor".into())
                 .spawn(move || {
                     exit.0.run(receiver);
                     drop(exit);

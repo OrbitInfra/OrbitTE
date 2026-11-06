@@ -18,7 +18,7 @@ fn negotiated_speed_decodes_xdr_and_leaves_unknown_values_unset() {
         (128, 0, None),
         (128, 3, None),
     ] {
-        let attr = shim::orbitte_port_attr {
+        let attr = shim::orbite_port_attr {
             active_speed: speed,
             active_width: width,
             ..Default::default()
@@ -31,7 +31,7 @@ fn negotiated_speed_decodes_xdr_and_leaves_unknown_values_unset() {
 fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units() {
     use std::process::Command;
     let dir = std::env::temp_dir().join(format!(
-        "orbitte-port-abi-{}-{}",
+        "orbite-port-abi-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -46,10 +46,10 @@ fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units
         let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
         command.args(["-shared", "-fPIC", "-Wall", "-Werror"]);
         if present {
-            command.arg("-DORBITTE_WITH_PORT_SPEED");
+            command.arg("-DORBITE_WITH_PORT_SPEED");
         }
-        if env!("ORBITTE_RDMA_ACTIVE_SPEED_EX") == "true" {
-            command.arg("-DORBITTE_HAVE_ACTIVE_SPEED_EX");
+        if env!("ORBITE_RDMA_ACTIVE_SPEED_EX") == "true" {
+            command.arg("-DORBITE_HAVE_ACTIVE_SPEED_EX");
         }
         let output = command
             .arg(&source)
@@ -69,7 +69,7 @@ fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units
         // symbol.
         let make_context = unsafe {
             library.get::<unsafe extern "C" fn(c_int) -> *mut ffi::ibv_context>(
-                b"orbitte_test_context\0",
+                b"orbite_test_context\0",
             )
         }
         .unwrap();
@@ -87,7 +87,7 @@ fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units
             let attr = result.unwrap();
             assert_eq!((attr.state, attr.active_mtu, attr.gid_tbl_len), (4, 5, 17));
             assert_eq!((attr.lid, attr.link_layer, attr.active_width), (42, 2, 2));
-            let expected = if mode == 0 && env!("ORBITTE_RDMA_ACTIVE_SPEED_EX") == "true" {
+            let expected = if mode == 0 && env!("ORBITE_RDMA_ACTIVE_SPEED_EX") == "true" {
                 800_000
             } else {
                 400_000

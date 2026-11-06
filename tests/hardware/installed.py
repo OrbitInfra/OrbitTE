@@ -2,7 +2,7 @@
 import json
 import re
 
-PROTOCOL = 'orbitte-installed-host-v4'
+PROTOCOL = 'orbite-installed-host-v4'
 
 
 def validate_nodes(profile):
@@ -83,37 +83,37 @@ def validate(case):
 
 def command(profile, case, node, role, root, readiness=None):
     environment = {
-        'ORBITTE_HOST_MODE': case['mode'],
-        'ORBITTE_SHARED_ROLE': role,
-        'ORBITTE_SHARED_BIND': profile['nodes'][node]['bind'],
-        'ORBITTE_SHARED_RAILS': ','.join(profile['rails']),
-        'ORBITTE_SHARED_GID': str(profile['gid_index']),
-        'ORBITTE_SHARED_MAPS': root + '/maps.txt',
-        'ORBITTE_RDMA_EVENTS': str(int(case['rdma_events'])),
-        'ORBITTE_RDMA_LANES': str(case['num_lanes']),
-        'ORBITTE_RAIL_OPERATION': case['operation'],
-        'ORBITTE_RAIL_MASK': str(case['mask']),
-        'ORBITTE_HOST_PARENTS': str(case['parents']),
-        'ORBITTE_HOST_PAYLOAD': str(case['payload']),
-        'ORBITTE_HOST_BLOCK': str(case['block']),
+        'ORBITE_HOST_MODE': case['mode'],
+        'ORBITE_SHARED_ROLE': role,
+        'ORBITE_SHARED_BIND': profile['nodes'][node]['bind'],
+        'ORBITE_SHARED_RAILS': ','.join(profile['rails']),
+        'ORBITE_SHARED_GID': str(profile['gid_index']),
+        'ORBITE_SHARED_MAPS': root + '/maps.txt',
+        'ORBITE_RDMA_EVENTS': str(int(case['rdma_events'])),
+        'ORBITE_RDMA_LANES': str(case['num_lanes']),
+        'ORBITE_RAIL_OPERATION': case['operation'],
+        'ORBITE_RAIL_MASK': str(case['mask']),
+        'ORBITE_HOST_PARENTS': str(case['parents']),
+        'ORBITE_HOST_PAYLOAD': str(case['payload']),
+        'ORBITE_HOST_BLOCK': str(case['block']),
         'CUDA_VISIBLE_DEVICES': '',
     }
     if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
-        environment.update(ORBITTE_RESTART_GENERATIONS=str(case['generations']),
-                           ORBITTE_RESTART_KILL_ROLE=case['fault_role'])
+        environment.update(ORBITE_RESTART_GENERATIONS=str(case['generations']),
+                           ORBITE_RESTART_KILL_ROLE=case['fault_role'])
     if case['mode'] == 'installed-cleanup-failure':
-        environment['ORBITTE_CLEANUP_KIND'] = case.get('cleanup_kind', 'qp')
+        environment['ORBITE_CLEANUP_KIND'] = case.get('cleanup_kind', 'qp')
     if case['mode'] == 'installed-memory-cleanup':
-        environment.update(ORBITTE_CLEANUP_KIND=case['cleanup_kind'], ORBITTE_CLEANUP_ROLE=case['fault_role'])
+        environment.update(ORBITE_CLEANUP_KIND=case['cleanup_kind'], ORBITE_CLEANUP_ROLE=case['fault_role'])
     if case['mode'] == 'installed-rail-health' and role == 'requester':
-        environment['ORBITTE_FAULT_NETDEV'] = case['fault_netdev']
+        environment['ORBITE_FAULT_NETDEV'] = case['fault_netdev']
     if case.get('discovery') == 'auto':
-        environment['ORBITTE_HOST_DISCOVERY'] = 'auto'
-        environment.pop('ORBITTE_SHARED_GID')
+        environment['ORBITE_HOST_DISCOVERY'] = 'auto'
+        environment.pop('ORBITE_SHARED_GID')
     if readiness is not None:
         if len(readiness) != 1:
             raise ValueError('invalid installed host readiness')
-        environment['ORBITTE_SHARED_PEER'] = readiness[0]
+        environment['ORBITE_SHARED_PEER'] = readiness[0]
     return [], environment
 
 
@@ -142,21 +142,21 @@ def verify(profile, case, evidence):
             return [json.loads(line[len(prefix):]) for line in record['stdout.log'].splitlines()
                     if line.startswith(prefix)]
 
-        nics = records('ORBITTE_INSTALLED_NIC ')
+        nics = records('ORBITE_INSTALLED_NIC ')
         if (len(nics) != 2 or {n['name'] for n in nics} != set(profile['rails'])
                 or len({n['pci'] for n in nics}) != 2):
             raise ValueError('installed peer did not publish the two locked RNICs')
         if case['mode'] == 'installed-rail-health':
-            rows = records('ORBITTE_RAIL_HEALTH ')
+            rows = records('ORBITE_RAIL_HEALTH ')
             if len(rows) != 1 or rows[0].get('role') != role or rows[0].get('verified_bytes') != case['parents'] * (2 * case['payload'] + 192):
                 raise ValueError('missing guarded data check on installed rail fault')
-            if 'ORBITTE_RAIL_DRAINED ' + role not in record['stdout.log'].splitlines():
+            if 'ORBITE_RAIL_DRAINED ' + role not in record['stdout.log'].splitlines():
                 raise ValueError('rail health peer did not close all native owners')
             if role == 'requester' and (not supervisor.get('data_link_restored')
                     or [rows[0].get(k) for k in ('blocked_posts', 'probes', 'recoveries', 'fault_rail_bytes', 'spare_rail_bytes')] != [0, 1, 1, 64, 32]):
                 raise ValueError('rail fault lacks restoration, cooldown exclusion or a unique recovered probe')
             continue
-        rounds = records('ORBITTE_INSTALLED_ROUND ')
+        rounds = records('ORBITE_INSTALLED_ROUND ')
         if len(rounds) != 3 or [(r['phase'], r['round']) for r in rounds] != [(0, i) for i in range(3)]:
             raise ValueError('installed peer omitted or duplicated a round')
         for index, row in enumerate(rounds):
@@ -177,9 +177,9 @@ def verify(profile, case, evidence):
             mapped = profile['rails'][int(case['mask'] == 2)]
             expected = [dict(round=r, nic=mapped, allocated=(r + 1) * case['payload'], alternate_allocated=0,
                              peer_rank=int(role == 'source')) for r in range(3)]
-            if records('ORBITTE_MAPPED_RAIL ') != expected:
+            if records('ORBITE_MAPPED_RAIL ') != expected:
                 raise ValueError('wildcard selection did not preserve the mapped physical peer')
-            rows = records('ORBITTE_SELECTIVE ')
+            rows = records('ORBITE_SELECTIVE ')
             if [r.get('round') for r in rows] != [0, 1, 2]:
                 raise ValueError('missing selective signaling round')
             for i, r in enumerate(rows, 1):
@@ -195,9 +195,9 @@ def verify(profile, case, evidence):
             expected = [dict(round=r, nic=name, indices=1 << index,
                              bytes=(r + 1) * case['payload'] if role == 'requester' and i == index else 0)
                         for r in range(3) for i, name in enumerate(profile['rails'])]
-            if records('ORBITTE_SELECTOR ') != expected:
+            if records('ORBITE_SELECTOR ') != expected:
                 raise ValueError('per-NIC completed bytes or connected QP pool indices disagree')
-        results = records('ORBITTE_INSTALLED_RESULT ')
+        results = records('ORBITE_INSTALLED_RESULT ')
         if results != [dict(protocol=PROTOCOL, status='passed', role=role,
                             operation=case['operation'], parents=case['parents'],
                             payload=case['payload'], rounds=3,

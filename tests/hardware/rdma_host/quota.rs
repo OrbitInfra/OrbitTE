@@ -1,16 +1,16 @@
 //! Each installed process owns its NIC leases and a receiver-issued window.
 //! Both processes attach to the same priority object before either sends.
 use super::*;
-use orbit_te::{
+use orbite::{
     EngineConfig, Permission, Priority, ReceiverCreditConfig, transport::rdma::RdmaConfig,
 };
 use std::{fs, path::PathBuf};
 
 pub(super) fn run() -> Result<()> {
-    let nic = env::var("ORBITTE_QUOTA_NIC")?;
-    let slots = env::var("ORBITTE_QUOTA_SLOTS")?;
-    let rendezvous = PathBuf::from(env::var("ORBITTE_QUOTA_READY_DIR")?);
-    let id: usize = env::var("ORBITTE_QUOTA_ID")?.parse()?;
+    let nic = env::var("ORBITE_QUOTA_NIC")?;
+    let slots = env::var("ORBITE_QUOTA_SLOTS")?;
+    let rendezvous = PathBuf::from(env::var("ORBITE_QUOTA_READY_DIR")?);
+    let id: usize = env::var("ORBITE_QUOTA_ID")?.parse()?;
     if id > 1 {
         return Err("invalid quota participant".into());
     }

@@ -98,31 +98,31 @@ Each finite upper bound is inclusive.
 | Deadline MLU (per mille) | 100, 250, 500, 750, 900, 1000, 1250, 1500, 2000, 5000 |
 | Stage latency (µs) | 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000 |
 
-Runtime resource totals use an `orbitte_` prefix. The engine reports live
+Runtime resource totals use an `orbite_` prefix. The engine reports live
 batches, requester workers and bytes. Configured owners also report queued
 and dispatching owners and bytes, deadline drops, QoS inflight reservations,
 active and reserved receiver credits, and RDMA rail errors, probes, recoveries
 and open rails. The scrape carries no peer identity, raw addresses or keys.
 
-| OrbitTE owner series | Type and unit |
+| OrbiTE owner series | Type and unit |
 | --- | --- |
-| `orbitte_rdma_inflight_bytes`, `orbitte_rdma_allocated_bytes_total` | Live smart-selection bytes (gauge) and lifetime assigned slice bytes (counter), including paused NICs |
-| `orbitte_receiver_credit_available_{bytes,requests,staging_slots,consumer_slots}`, `orbitte_receiver_credit_consumed_{bytes,requests,staging_slots,consumer_slots}` | Sender balances across retained bindings (gauges) |
-| `orbitte_receiver_active_senders`, `orbitte_receiver_retired_senders_total` | Receiver sessions (live gauge and retired counter) |
-| `orbitte_receiver_reserved_{bytes,requests,staging_slots,consumer_slots}` | Capacity committed to receiver-issued windows (gauges) |
-| `orbitte_receiver_{active,retained}_{staging_slots,consumer_slots}` | Physical Pin owners and the subset with unconfirmed cleanup (gauges) |
+| `orbite_rdma_inflight_bytes`, `orbite_rdma_allocated_bytes_total` | Live smart-selection bytes (gauge) and lifetime assigned slice bytes (counter), including paused NICs |
+| `orbite_receiver_credit_available_{bytes,requests,staging_slots,consumer_slots}`, `orbite_receiver_credit_consumed_{bytes,requests,staging_slots,consumer_slots}` | Sender balances across retained bindings (gauges) |
+| `orbite_receiver_active_senders`, `orbite_receiver_retired_senders_total` | Receiver sessions (live gauge and retired counter) |
+| `orbite_receiver_reserved_{bytes,requests,staging_slots,consumer_slots}` | Capacity committed to receiver-issued windows (gauges) |
+| `orbite_receiver_{active,retained}_{staging_slots,consumer_slots}` | Physical Pin owners and the subset with unconfirmed cleanup (gauges) |
 
 TENT's `qos_metrics.cpp` calculates goodput, Jain fairness and isolation
 leakage from benchmark class samples. Those quantities need an experiment with
 class timings, weights and isolated throughput and have no live exporter series.
 
-For example, `orbitte_dispatching_owners` and `orbitte_dispatching_bytes`
-show the live dispatch window. `orbitte_qos_inflight_requests` and
-`orbitte_receiver_credit_reserved_owners` can distinguish a QoS charge from
-a sender waiting on a receiver grant. `orbitte_queue_deadline_drops_total`
-counts rejected queue dispatches. `orbitte_rdma_open_rails` is a gauge, while
-`orbitte_rdma_rail_errors_total`, `orbitte_rdma_rail_probes_total` and
-`orbitte_rdma_rail_recoveries_total` are cumulative.
+For example, `orbite_dispatching_owners` and `orbite_dispatching_bytes`
+show the live dispatch window. `orbite_qos_inflight_requests` and
+`orbite_receiver_credit_reserved_owners` can distinguish a QoS charge from
+a sender waiting on a receiver grant. `orbite_queue_deadline_drops_total`
+counts rejected queue dispatches. `orbite_rdma_open_rails` is a gauge, while
+`orbite_rdma_rail_errors_total`, `orbite_rdma_rail_probes_total` and
+`orbite_rdma_rail_recoveries_total` are cumulative.
 
 On an initialized handle, `set_enabled(false)` pauses new starts. A start
 recorded before the toggle still closes its outcome, latency and gauge.

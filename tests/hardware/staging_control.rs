@@ -1,7 +1,7 @@
 //! Packaged public-API GPU staging gate. The loopback relay holds a real Pin
 //! reply while a second connection describes the source and probes its budget.
-use orbit_te::transport::rdma::RdmaConfig;
-use orbit_te::{
+use orbite::transport::rdma::RdmaConfig;
+use orbite::{
     EngineConfig, Error, Permission, RemoteEffect, TransferEngine, TransferOp, TransferRequest,
     Transport, cuda::CudaMemory,
 };
@@ -57,7 +57,7 @@ fn relay(
 
 fn main() -> Result<(), Box<dyn StdError>> {
     if std::env::args().nth(1).as_deref() == Some("--protocol") {
-        println!("orbitte-installed-staging-control");
+        println!("orbite-installed-staging-control");
         return Ok(());
     }
     let args: Vec<_> = std::env::args().skip(1).collect();

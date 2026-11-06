@@ -49,7 +49,7 @@ static _Atomic(int (*)(void)) sync_native;
 static void emit(const char *kind, const char *format, ...) {
     pthread_mutex_lock(&lock);
     if (log_fd < 0) {
-        const char *path = getenv("ORBITTE_IPC_LOG");
+        const char *path = getenv("ORBITE_IPC_LOG");
         if (!path || (log_fd = open(path, O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC, 0600)) < 0) _exit(125);
     }
     char fields[768], line[1024];
@@ -110,7 +110,7 @@ static int open_wrap(uint64_t *address, ipc_handle handle, unsigned flags) {
     emit("open", "\"address\":%" PRIu64 ",\"handle\":%" PRIu64 ",\"flags\":%u,\"code\":%d", *address, hash_handle(handle), flags, code); return code;
 }
 static int close_wrap(uint64_t address) {
-    const char *hold = getenv("ORBITTE_IPC_HOLD");
+    const char *hold = getenv("ORBITE_IPC_HOLD");
     if (hold && !__atomic_exchange_n(&held, 1, __ATOMIC_RELAXED)) {
         char ready[4096]; if (snprintf(ready, sizeof(ready), "%s.ready", hold) >= (int)sizeof(ready)) _exit(125);
         int fd = open(ready, O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC, 0600); if (fd < 0) _exit(125); close(fd);
@@ -130,13 +130,13 @@ static int sync_copy_wrap(uint64_t dst, uint64_t src, size_t length) {
 }
 static int stream_sync_wrap(void *stream) {
     int code = stream_sync_native(stream);
-    if (getenv("ORBITTE_SYNC_OBSERVE"))
+    if (getenv("ORBITE_SYNC_OBSERVE"))
         emit("stream_sync", "\"stream\":%" PRIuPTR ",\"code\":%d", (uintptr_t)stream, code);
     return code;
 }
 static int current_wrap(void **context) {
     int code = current_native(context);
-    if (getenv("ORBITTE_SYNC_OBSERVE"))
+    if (getenv("ORBITE_SYNC_OBSERVE"))
         emit("current", "\"context\":%" PRIuPTR ",\"code\":%d", code ? (uintptr_t)0 : (uintptr_t)*context, code);
     return code;
 }
@@ -175,12 +175,12 @@ static int pop_wrap(void **context) {
 
 /* Extra lifecycle records are opt-in so the IPC observer keeps its contract. */
 static int staging(void) {
-    const char *value = getenv("ORBITTE_STAGING_OBSERVE");
+    const char *value = getenv("ORBITE_STAGING_OBSERVE");
     return value && !strcmp(value, "1");
 }
 static int push_wrap(void *context) {
     int code = push_native(context);
-    if (staging() || getenv("ORBITTE_SYNC_OBSERVE")) emit("push", "\"context\":%" PRIuPTR ",\"code\":%d", (uintptr_t)context, code);
+    if (staging() || getenv("ORBITE_SYNC_OBSERVE")) emit("push", "\"context\":%" PRIuPTR ",\"code\":%d", (uintptr_t)context, code);
     return code;
 }
 #define CREATE_WRAP(name, field) \

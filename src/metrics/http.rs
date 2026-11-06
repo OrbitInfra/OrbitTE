@@ -52,7 +52,7 @@ impl Workers {
             let (sock, stop, scrape) = (listener.clone(), workers.stop.clone(), scrape.clone());
             workers.threads.push(
                 thread::Builder::new()
-                    .name("orbitte-metrics-http".into())
+                    .name("orbite-metrics-http".into())
                     .spawn(move || {
                         while !stop.stopped() {
                             match sock.accept() {
@@ -80,7 +80,7 @@ impl Workers {
             let (stop, scrape) = (self.stop.clone(), scrape.clone());
             self.threads.push(
                 thread::Builder::new()
-                    .name("orbitte-metrics-log".into())
+                    .name("orbite-metrics-log".into())
                     .spawn(move || {
                         loop {
                             log::info!("TENT Metrics: {}", scrape.summary());

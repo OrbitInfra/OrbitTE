@@ -46,7 +46,7 @@ unsafe extern "C" fn bus(out: *mut c_char, len: c_int, device: c_int) -> driver:
 fn cuda_inventory_maps_ordinals_to_pci_tiers_and_publishes_only_complete_snapshots() {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "orbitte-gpu-topology-{}-{}",
+        "orbite-gpu-topology-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));

@@ -55,7 +55,7 @@ fn frozen_tent_slice_geometry_bounds_count_and_folds_only_short_tails() {
         )
         .unwrap();
         let (block, count) = plan_rdma_slices(length, base, cap).unwrap();
-        println!("ORBITTE_RDMA_GEOMETRY {length} {base} {cap} {block} {count}");
+        println!("ORBITE_RDMA_GEOMETRY {length} {base} {cap} {block} {count}");
         assert_eq!(
             queue
                 .requests

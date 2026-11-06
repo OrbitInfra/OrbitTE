@@ -22,9 +22,9 @@ const DESTINATION: usize = PAYLOAD + 2 * GUARD;
 
 fn control(source: bool) -> TcpStream {
     let stream = if source {
-        let listener = TcpListener::bind(env::var("ORBITTE_SHARED_BIND").unwrap()).unwrap();
+        let listener = TcpListener::bind(env::var("ORBITE_SHARED_BIND").unwrap()).unwrap();
         listener.set_nonblocking(true).unwrap();
-        println!("ORBITTE_READY {}", listener.local_addr().unwrap());
+        println!("ORBITE_READY {}", listener.local_addr().unwrap());
         std::io::stdout().flush().unwrap();
         let end = Instant::now() + TIMEOUT;
         loop {
@@ -39,7 +39,7 @@ fn control(source: bool) -> TcpStream {
         }
     } else {
         TcpStream::connect_timeout(
-            &env::var("ORBITTE_SHARED_PEER").unwrap().parse().unwrap(),
+            &env::var("ORBITE_SHARED_PEER").unwrap().parse().unwrap(),
             Duration::from_secs(5),
         )
         .unwrap()
@@ -70,11 +70,11 @@ fn topology(engine: &TransferEngine, rails: &[String]) {
         assert_eq!(nic.device_attrs["rdma.port"], "1");
         assert_eq!(
             nic.device_attrs["rdma.gid_index"],
-            env::var("ORBITTE_SHARED_GID").unwrap()
+            env::var("ORBITE_SHARED_GID").unwrap()
         );
         assert_eq!(nic.device_attrs["rdma.gid_type"], "RoCE v2");
         println!(
-            "ORBITTE_MULTI_RAIL_PATH {{\"nic_id\":{id},\"device\":\"{}\",\"pci\":\"{}\",\"gid\":\"{}\"}}",
+            "ORBITE_MULTI_RAIL_PATH {{\"nic_id\":{id},\"device\":\"{}\",\"pci\":\"{}\",\"gid\":\"{}\"}}",
             nic.name,
             nic.pci_bus_id.as_deref().unwrap(),
             nic.device_attrs["rdma.gid"]
@@ -174,15 +174,15 @@ fn multirail_peer() {
     // SAFETY: limit is a valid initialized rlimit for the duration of the syscall.
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) }, 0);
     println!();
-    let source = env::var("ORBITTE_SHARED_ROLE").unwrap() == "source";
-    let rails = env::var("ORBITTE_SHARED_RAILS")
+    let source = env::var("ORBITE_SHARED_ROLE").unwrap() == "source";
+    let rails = env::var("ORBITE_SHARED_RAILS")
         .unwrap()
         .split(',')
         .map(str::to_owned)
         .collect::<Vec<_>>();
     assert_eq!(rails.len(), 2);
     assert_ne!(rails[0], rails[1]);
-    let mode = env::var("ORBITTE_RAIL_MODE").unwrap();
+    let mode = env::var("ORBITE_RAIL_MODE").unwrap();
     if matches!(
         mode.as_str(),
         "live-reconnect" | "mr-cleanup-error" | "mw-cleanup-error" | "monitor-recovery"
@@ -229,9 +229,9 @@ fn multirail_peer() {
         mode.as_str(),
         "healthy" | "cq-error" | "partial-post" | "paused-close" | "mr-rollback"
     ));
-    let mask: u64 = env::var("ORBITTE_RAIL_MASK").unwrap().parse().unwrap();
-    let events = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
-    let fault_rail: usize = env::var("ORBITTE_RAIL_FAULT").unwrap().parse().unwrap();
+    let mask: u64 = env::var("ORBITE_RAIL_MASK").unwrap().parse().unwrap();
+    let events = env::var("ORBITE_RDMA_EVENTS").as_deref() == Ok("1");
+    let fault_rail: usize = env::var("ORBITE_RAIL_FAULT").unwrap().parse().unwrap();
     assert!(fault_rail < 2);
     worker_pool::reset();
     native::initialize(&mode, &rails[fault_rail], !source);
@@ -239,7 +239,7 @@ fn multirail_peer() {
         rdma_whitelist: rails.clone(),
         num_lanes: worker_pool::count(),
         port: Some(1),
-        gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
+        gid_index: Some(env::var("ORBITE_SHARED_GID").unwrap().parse().unwrap()),
         device_mask: mask,
         host_memory: RdmaHostMemory::Direct,
         progress_mode: if events {
@@ -276,7 +276,7 @@ fn multirail_peer() {
     let engine = Arc::new(rdma_fixture_with_config(
         runtime,
         EngineConfig {
-            bind_addr: env::var("ORBITTE_SHARED_BIND").unwrap().parse().unwrap(),
+            bind_addr: env::var("ORBITE_SHARED_BIND").unwrap().parse().unwrap(),
             handler_threads: 1,
             handler_timeout: TIMEOUT,
             max_registered_regions: 8,
@@ -336,7 +336,7 @@ fn multirail_peer() {
             Some(engine.open_segment(endpoint, epoch, TIMEOUT).unwrap())
         };
         native::arm(&engine, &memory);
-        let operation = if env::var("ORBITTE_RAIL_OPERATION").as_deref() == Ok("read") {
+        let operation = if env::var("ORBITE_RAIL_OPERATION").as_deref() == Ok("read") {
             TransferOp::Read
         } else {
             TransferOp::Write
@@ -525,7 +525,7 @@ fn multirail_peer() {
         assert!(stats.completion_events > 0);
     }
     std::fs::write(
-        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        env::var("ORBITE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
     )
     .unwrap();
@@ -534,7 +534,7 @@ fn multirail_peer() {
     drop(backing);
     assert!(weak.upgrade().is_none());
     println!(
-        "ORBITTE_MULTI_RAIL_RESULT {{\"mode\":\"{mode}\",\"source\":{source},\"mask\":{mask},\"fault_rail\":{fault_rail},\"payload\":{PAYLOAD},\"actual_rnics\":2,\"all_resources_drained\":true,\"allocation_released\":true,\"performance_measurement\":false}}"
+        "ORBITE_MULTI_RAIL_RESULT {{\"mode\":\"{mode}\",\"source\":{source},\"mask\":{mask},\"fault_rail\":{fault_rail},\"payload\":{PAYLOAD},\"actual_rnics\":2,\"all_resources_drained\":true,\"allocation_released\":true,\"performance_measurement\":false}}"
     );
 }
 

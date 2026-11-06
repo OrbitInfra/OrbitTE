@@ -1,6 +1,6 @@
 # Installed host RDMA qualification
 
-This gate builds a packaged `orbit-te` crate as an ordinary dependency and runs
+This gate builds a packaged `orbite` crate as an ordinary dependency and runs
 the public `TransferEngine` API with only the `rdma` feature. Fault and
 rail-accounting modes add a separate process-local observer library. The crate
 is packaged locally, never published.
@@ -12,17 +12,17 @@ checkout into a directory outside the repository:
 
 ```sh
 python3 tests/hardware/build_installed.py \
-  --toolchain stable --output /var/tmp/orbitte-installed/stable
+  --toolchain stable --output /var/tmp/orbite-installed/stable
 python3 tests/hardware/build_installed.py \
-  --toolchain 1.85.0 --output /var/tmp/orbitte-installed/msrv
+  --toolchain 1.85.0 --output /var/tmp/orbite-installed/msrv
 ```
 
 The script creates a `.crate`, extracts it, copies the packaged `rdma_host`
-fixture into an independent consumer, resolves OrbitTE offline from that package
+fixture into an independent consumer, resolves OrbiTE offline from that package
 with locked versions, runs fmt and Clippy, and installs
-`installed/bin/orbitte-rdma-host`. The manifest pins the commit, archive, fixture
+`installed/bin/orbite-rdma-host`. The manifest pins the commit, archive, fixture
 modules, lockfile, binary, features and native libraries; the test protocol is
-`orbitte-installed-host-v4`. CI builds both toolchains, but `--protocol` only
+`orbite-installed-host-v4`. CI builds both toolchains, but `--protocol` only
 proves the binary starts. The controller rejects a dirty or mismatched manifest
 (`--allow-dirty` is for local diagnosis only).
 
@@ -30,7 +30,7 @@ proves the binary starts. The controller rejects a dirty or mismatched manifest
 
 Use the identity-pinned SSH profile and supervisor from the
 [RDMA guide](rdma-cuda.md#run-a-native-profile) with
-`runner: "orbitte-installed-host"`, two `rails`, a `gid_index`, distinct source
+`runner: "orbite-installed-host"`, two `rails`, a `gid_index`, distinct source
 and requester nodes, and one resource lock per RNIC on each node. Nodes must
 have different hostnames and boot IDs; the controller rechecks both at
 deployment and inside the lock supervisor.
@@ -47,9 +47,9 @@ deployment and inside the lock supervisor.
 
 ```sh
 python3 tests/hardware/run.py --profile /var/tmp/host-profile.json \
-  --installation /var/tmp/orbitte-installed/stable/manifest.json \
-  --binary /var/tmp/orbitte-installed/stable/installed/bin/orbitte-rdma-host \
-  --output /var/tmp/orbitte-installed/native-stable
+  --installation /var/tmp/orbite-installed/stable/manifest.json \
+  --binary /var/tmp/orbite-installed/stable/installed/bin/orbite-rdma-host \
+  --output /var/tmp/orbite-installed/native-stable
 ```
 
 Bounds: 256 MiB of backing per peer, 32 parents, 32 MiB per parent and 1–3 QPs
@@ -82,7 +82,7 @@ check whitelist precedence. A separate engine first requests strict GID 255 and
 must get `Unavailable` with no retained owners.
 
 Under the RNIC locks, the supervisor runs `discovery_inventory.py` before and
-after each child. This read-only tool shares no OrbitTE code; it records sysfs
+after each child. This read-only tool shares no OrbiTE code; it records sysfs
 PCI, NUMA, port, GID, interface and node data. The verifier requires an unchanged
 inventory with one active Ethernet port and one RoCEv2 candidate per RNIC, then
 compares public NIC IDs, memory priority tiers and strict-pin rejection against
@@ -207,14 +207,14 @@ See [qualification](qualification.md#installed-dependency-cleanup).
 
 ## TENT correspondence and limits
 
-| TENT responsibility | Exercised OrbitTE behavior |
+| TENT responsibility | Exercised OrbiTE behavior |
 | --- | --- |
 | Context/PD and registered buffers outlive endpoints | Persistent context MRs survive peer process replacement |
 | `RdmaEndPoint` retires a stale bootstrap and reconnects | Connection generations fence cached QPs; data uses the fresh authority |
 | `Workers` progress and monitor reclaim | The surviving worker pool keeps serving the same contexts |
 | `Workers::asyncPollCq`, `handleCompletion`, timeout sweep | Exact WR completion drives grants; missing observation fences QPs until native drain |
 
-OrbitTE also makes the source epoch explicit, so an old segment fails instead of
+OrbiTE also makes the source epoch explicit, so an old segment fails instead of
 adopting a new process's authority; this gate is not a TENT wire or restart
 oracle. Fixture owners: `rdma_host/resources.rs` (registration and drain),
 `restart.rs`, `interruption.rs`, `gate.rs` (test relay), `completion.rs`,

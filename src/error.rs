@@ -155,7 +155,7 @@ impl fmt::Display for Error {
                 f.write_str("source epoch does not match authoritative ownership")
             }
             Self::ResourceExhausted => f.write_str("engine resource budget exhausted"),
-            Self::Protocol(message) => write!(f, "invalid OrbitTE frame: {message}"),
+            Self::Protocol(message) => write!(f, "invalid OrbiTE frame: {message}"),
             Self::DeadlineInfeasible => {
                 f.write_str("transfer cannot meet its deadline at the selected transport rate")
             }

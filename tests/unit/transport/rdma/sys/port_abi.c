@@ -8,7 +8,7 @@ static int query(struct ibv_context *context, uint8_t port,
                  struct ibv_port_attr *attr, size_t length) {
     if (port != 7 || length != sizeof(*attr) || attr->active_speed != 0)
         return EINVAL;
-#ifdef ORBITTE_HAVE_ACTIVE_SPEED_EX
+#ifdef ORBITE_HAVE_ACTIVE_SPEED_EX
     if (attr->active_speed_ex != 0)
         return EINVAL;
     if (context->num_comp_vectors == 0)
@@ -24,7 +24,7 @@ static int query(struct ibv_context *context, uint8_t port,
     return context->num_comp_vectors == 2 ? EIO : 0;
 }
 
-void *orbitte_test_context(int mode) {
+void *orbite_test_context(int mode) {
     static struct verbs_context context;
     memset(&context, 0, sizeof(context));
     context.sz = sizeof(context);
@@ -34,7 +34,7 @@ void *orbitte_test_context(int mode) {
     return &context.context;
 }
 
-#ifdef ORBITTE_WITH_PORT_SPEED
+#ifdef ORBITE_WITH_PORT_SPEED
 int ibv_query_port_speed(struct ibv_context *context, uint32_t port, uint64_t *speed) {
     (void)context;
     *speed = UINT64_MAX;

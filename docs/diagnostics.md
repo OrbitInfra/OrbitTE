@@ -5,7 +5,7 @@ It reads compile-time metadata and works on a host with no CUDA driver, RNIC
 or network access.
 
 ```bash
-cargo install --locked --path /path/to/unpacked/orbit-te
+cargo install --locked --path /path/to/unpacked/orbite
 tent diagnostics version
 tent diagnostics version --json
 ```
@@ -21,7 +21,7 @@ reachability require separate qualification.
 
 ## Library interfaces
 
-Rust consumers can call `orbit_te::diagnostics::version_snapshot()`. A
+Rust consumers can call `orbite::diagnostics::version_snapshot()`. A
 `Snapshot` renders the same text and JSON as the command. Checks carry an
 outcome, evidence and remediation. Unavailable evidence has
 `"available": false` and omits the observed value. The snapshot redactor
@@ -29,7 +29,7 @@ removes credentials and raw addresses in every mode. Strict mode also replaces
 known deployment identifiers and network addresses with correlated pseudonyms
 within one snapshot.
 
-The packaged `include/orbitte/diagnostics.h` works with C and C++. Build the
+The packaged `include/orbite/diagnostics.h` works with C and C++. Build the
 diagnostics symbols with `cargo rustc --locked --lib --release --crate-type
 staticlib`. The version, rendering and redaction functions lend UTF-8 bytes
 to a synchronous caller callback. Document input is limited to 1 MiB.

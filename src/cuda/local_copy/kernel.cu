@@ -7,7 +7,7 @@
 using int4 = int __attribute__((ext_vector_type(4)));
 #endif
 
-extern "C" __global__ void orbitte_batch_copy(const unsigned long long* __restrict__ desc,
+extern "C" __global__ void orbite_batch_copy(const unsigned long long* __restrict__ desc,
                                                 int n, int ctas) {
     const int tid = threadIdx.x;
     const long long work_count = (long long)n * ctas;

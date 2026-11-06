@@ -1704,7 +1704,7 @@ fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails(
         source.close(TIMEOUT).unwrap();
         #[cfg(feature = "metrics")]
         assert_eq!(
-            requester.metrics().unwrap().json()["orbitte_rdma_allocated_bytes_total"],
+            requester.metrics().unwrap().json()["orbite_rdma_allocated_bytes_total"],
             82
         );
     }
@@ -1956,7 +1956,7 @@ fn admission_uses_the_selected_rail_rate_and_drops_aliases_before_any_native_pos
             #[cfg(feature = "metrics")]
             {
                 let j = requester.metrics().unwrap().json();
-                assert_eq!(j["orbitte_queue_deadline_drops_total"], 1);
+                assert_eq!(j["orbite_queue_deadline_drops_total"], 1);
                 assert_eq!(j["tent_deadline_infeasible_total"], 1);
                 assert_eq!(j["tent_transport_attempts_total"], 0);
             }
@@ -2251,10 +2251,10 @@ fn a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receip
     #[cfg(feature = "metrics")]
     {
         let j = requester.metrics().unwrap().json();
-        assert_eq!(j["orbitte_rdma_open_rails"], 0);
-        assert_eq!(j["orbitte_rdma_rail_recoveries_total"], 1);
-        assert_eq!(j["orbitte_rdma_rail_probes_total"], 2);
-        assert_eq!(j["orbitte_rdma_rail_errors_total"], 2);
+        assert_eq!(j["orbite_rdma_open_rails"], 0);
+        assert_eq!(j["orbite_rdma_rail_recoveries_total"], 1);
+        assert_eq!(j["orbite_rdma_rail_probes_total"], 2);
+        assert_eq!(j["orbite_rdma_rail_errors_total"], 2);
     }
     let nics = requester.nic_load_stats()?;
     assert_eq!(

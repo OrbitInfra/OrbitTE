@@ -88,12 +88,12 @@ def fixture(gpu_role='source', depth=1, cap=None, remote=False, physical=4):
     for role in ('source', 'requester'):
         gpu = role == gpu_role
         stats = dict(allocations=width, reuses=5*width, chunks=6*((length+3)//4), bytes=6*length, reserved_bytes=physical*width) if gpu else dict(allocations=0, reuses=0, chunks=0, bytes=0, reserved_bytes=0)
-        evidence[role] = {**proof, 'stdout.log': 'ORBITTE_MEMORY ' + json.dumps(dict(base=10000, length=size, cuda=gpu)) + '\nORBITTE_STAGING_STATS ' + json.dumps(stats)}
+        evidence[role] = {**proof, 'stdout.log': 'ORBITE_MEMORY ' + json.dumps(dict(base=10000, length=size, cuda=gpu)) + '\nORBITE_STAGING_STATS ' + json.dumps(stats)}
         configured = staging.configured_depth(case, role)
-        evidence[role]['stdout.log'] += '\nORBITTE_STAGING_CONFIG '+json.dumps(dict(depth=configured, chunk_count=configured, chunk_size=staging.configured_chunk(case, role)))
+        evidence[role]['stdout.log'] += '\nORBITE_STAGING_CONFIG '+json.dumps(dict(depth=configured, chunk_count=configured, chunk_size=staging.configured_chunk(case, role)))
         if case.get('remote_staging'):
             counts = dict(pins=6, delegates=stats['chunks'], crosses=stats['chunks'], unpins=6) if role=='source' else dict(pins=0, delegates=0, crosses=0, unpins=0)
-            evidence[role]['stdout.log'] += '\nORBITTE_REMOTE_STAGE_STATS '+json.dumps(counts)
+            evidence[role]['stdout.log'] += '\nORBITE_REMOTE_STAGE_STATS '+json.dumps(counts)
     return case, evidence, native
 
 
@@ -261,9 +261,9 @@ class StagingProof(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 staging.validate_case({**case, 'source_pipeline_depth':value})
         for depth in (1, 2, 16):
-            scope = dict(ORBITTE_STAGING_OBSERVE='1', ORBITTE_SHARED_ROLE='source',
-                         ORBITTE_STAGING_CHUNK_COUNT=str(depth), ORBITTE_STAGING_PIPELINE_DEPTH=str(depth))
+            scope = dict(ORBITE_STAGING_OBSERVE='1', ORBITE_SHARED_ROLE='source',
+                         ORBITE_STAGING_CHUNK_COUNT=str(depth), ORBITE_STAGING_PIPELINE_DEPTH=str(depth))
             self.assertTrue(supervise.fault_scope(scope))
-            for key,value in [('ORBITTE_SHARED_ROLE','other'),('ORBITTE_HOST_MODE','fault'),('ORBITTE_GDR_OBSERVE','1'),
-                              ('ORBITTE_IPC_HOLD','/tmp/hold'),('ORBITTE_STAGING_CHUNK_COUNT','17')]:
+            for key,value in [('ORBITE_SHARED_ROLE','other'),('ORBITE_HOST_MODE','fault'),('ORBITE_GDR_OBSERVE','1'),
+                              ('ORBITE_IPC_HOLD','/tmp/hold'),('ORBITE_STAGING_CHUNK_COUNT','17')]:
                 self.assertFalse(supervise.fault_scope({**scope,key:value}))

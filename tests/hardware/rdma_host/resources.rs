@@ -5,8 +5,8 @@ use std::net::SocketAddr;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbit_te::transport::rdma::{RdmaConfig, RdmaProgressMode, RdmaStats};
-use orbit_te::{EngineConfig, Permission, RegisteredMemory, TransferEngine};
+use orbite::transport::rdma::{RdmaConfig, RdmaProgressMode, RdmaStats};
+use orbite::{EngineConfig, Permission, RegisteredMemory, TransferEngine};
 
 use super::{Case, Result, TIMEOUT};
 
@@ -91,7 +91,7 @@ fn clean(engine: &TransferEngine) -> Result<()> {
         || rdma.opened_connections != rdma.closed_connections
         || rdma.progress_failures != rdma.progress_recoveries
         || (!matches!(
-            env::var("ORBITTE_HOST_MODE").as_deref(),
+            env::var("ORBITE_HOST_MODE").as_deref(),
             Ok("installed-interruption"
                 | "installed-lost-completion"
                 | "installed-cleanup-failure"
@@ -100,7 +100,7 @@ fn clean(engine: &TransferEngine) -> Result<()> {
                 | "installed-rail-health")
         ) && rdma.progress_failures != 0)
         || rdma.completion_errors
-            > u64::from(env::var("ORBITTE_HOST_MODE").as_deref() == Ok("installed-inflight-dma"))
+            > u64::from(env::var("ORBITE_HOST_MODE").as_deref() == Ok("installed-inflight-dma"))
     {
         return Err(format!("close retained resources: {stats:?}").into());
     }
@@ -108,10 +108,10 @@ fn clean(engine: &TransferEngine) -> Result<()> {
 }
 
 pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
-    let automatic = env::var("ORBITTE_HOST_DISCOVERY").as_deref() == Ok("auto");
+    let automatic = env::var("ORBITE_HOST_DISCOVERY").as_deref() == Ok("auto");
     let mut rail_topology = None;
     let mut priority_matrix = None;
-    if env::var("ORBITTE_HOST_MODE")? == "installed-rail-health" {
+    if env::var("ORBITE_HOST_MODE")? == "installed-rail-health" {
         rail_topology = Some(format!(
             r#"{{"all":[{{"local":"{0}","remote":"{0}"}},{{"local":"{1}","remote":"{1}"}}]}}"#,
             case.rails[0], case.rails[1]
@@ -128,14 +128,14 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
         }
     }
     let config = EngineConfig {
-        selector: if env::var("ORBITTE_HOST_MODE")?.as_str() == "installed-rail-health" {
+        selector: if env::var("ORBITE_HOST_MODE")?.as_str() == "installed-rail-health" {
             Some(super::rail_health::policy(case)?)
         } else {
             case.selector
                 .then(|| super::selector::config(case))
                 .transpose()?
         },
-        runtime_queue: case.selector.then_some(orbit_te::RuntimeQueueConfig {
+        runtime_queue: case.selector.then_some(orbite::RuntimeQueueConfig {
             max_outstanding_owners: 1,
             max_dispatch_owners: 1,
             deadline_aware: true,
@@ -148,7 +148,7 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
         max_inflight_bytes: case.parents * case.payload,
         handler_threads: case.parents + 2,
         handler_timeout: if matches!(
-            env::var("ORBITTE_HOST_MODE").as_deref(),
+            env::var("ORBITE_HOST_MODE").as_deref(),
             Ok("installed-interruption"
                 | "installed-lost-completion"
                 | "installed-cleanup-failure"
@@ -174,7 +174,7 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             gid_index: if automatic {
                 None
             } else {
-                Some(env::var("ORBITTE_SHARED_GID")?.parse()?)
+                Some(env::var("ORBITE_SHARED_GID")?.parse()?)
             },
             device_mask: if case.selective && case.source {
                 3
@@ -215,10 +215,10 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             engine.register_memory(vec![0; 64].into_boxed_slice(), Permission::RemoteReadWrite);
         engine.close(TIMEOUT)?;
         match registration {
-            Err(orbit_te::Error::Unavailable(_)) => {
+            Err(orbite::Error::Unavailable(_)) => {
                 clean(&engine)?;
                 println!(
-                    "ORBITTE_INSTALLED_DISCOVERY_PIN {{\"gid_index\":255,\"unavailable\":true}}"
+                    "ORBITE_INSTALLED_DISCOVERY_PIN {{\"gid_index\":255,\"unavailable\":true}}"
                 );
             }
             Err(error) => return Err(error.into()),
@@ -241,15 +241,15 @@ pub(super) fn inventory(case: &Case, engine: &TransferEngine) -> Result<()> {
     {
         return Err("two distinct physical RNIC contexts are required".into());
     }
-    let automatic = env::var("ORBITTE_HOST_DISCOVERY").as_deref() == Ok("auto");
+    let automatic = env::var("ORBITE_HOST_DISCOVERY").as_deref() == Ok("auto");
     if automatic {
         println!(
-            "ORBITTE_INSTALLED_DISCOVERY_CONFIG {{\"device\":null,\"port\":null,\"gid_index\":null,\"whitelist\":{:?},\"blacklist\":{:?}}}",
+            "ORBITE_INSTALLED_DISCOVERY_CONFIG {{\"device\":null,\"port\":null,\"gid_index\":null,\"whitelist\":{:?},\"blacklist\":{:?}}}",
             case.rails, case.rails
         );
         for (id, nic) in topology.nic_list.iter().enumerate() {
             println!(
-                "ORBITTE_INSTALLED_TOPOLOGY_NIC {{\"id\":{id},\"name\":{:?},\"pci\":{:?},\"numa\":{},\"attrs\":{:?}}}",
+                "ORBITE_INSTALLED_TOPOLOGY_NIC {{\"id\":{id},\"name\":{:?},\"pci\":{:?},\"numa\":{},\"attrs\":{:?}}}",
                 nic.name,
                 nic.pci_bus_id.as_deref().ok_or("missing PCI identity")?,
                 nic.numa_node
@@ -259,7 +259,7 @@ pub(super) fn inventory(case: &Case, engine: &TransferEngine) -> Result<()> {
         }
         for memory in &topology.mem_list {
             println!(
-                "ORBITTE_INSTALLED_TOPOLOGY_MEMORY {{\"name\":{:?},\"numa\":{},\"ranks\":{:?}}}",
+                "ORBITE_INSTALLED_TOPOLOGY_MEMORY {{\"name\":{:?},\"numa\":{},\"ranks\":{:?}}}",
                 memory.name,
                 memory
                     .numa_node
@@ -273,7 +273,7 @@ pub(super) fn inventory(case: &Case, engine: &TransferEngine) -> Result<()> {
             return Err("selected topology escaped the locked RNIC list".into());
         }
         println!(
-            "ORBITTE_INSTALLED_NIC {{\"name\":{:?},\"pci\":{:?},\"gid\":{:?},\"gid_type\":{:?}}}",
+            "ORBITE_INSTALLED_NIC {{\"name\":{:?},\"pci\":{:?},\"gid\":{:?},\"gid_type\":{:?}}}",
             nic.name,
             nic.pci_bus_id.as_deref().ok_or("missing PCI identity")?,
             nic.device_attrs.get("rdma.gid").ok_or("missing GID")?,
@@ -297,7 +297,7 @@ pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, R
 
 pub(super) fn maps() -> Result<()> {
     std::fs::write(
-        env::var_os("ORBITTE_SHARED_MAPS").ok_or("missing maps path")?,
+        env::var_os("ORBITE_SHARED_MAPS").ok_or("missing maps path")?,
         std::fs::read("/proc/self/maps")?,
     )?;
     Ok(())

@@ -154,7 +154,7 @@ impl Workers {
                 let run = Arc::clone(&context);
                 let (started, ready) = std::sync::mpsc::sync_channel(1);
                 match thread::Builder::new()
-                    .name(format!("orbitte-rdma-{id}"))
+                    .name(format!("orbite-rdma-{id}"))
                     .spawn(move || run.run(started))
                 {
                     Ok(handle) => {

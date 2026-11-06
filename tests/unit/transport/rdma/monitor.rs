@@ -160,7 +160,7 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
     });
     assert_eq!(
         *gated.native.acknowledgments.lock().unwrap(),
-        ["orbitte-rdma-monitor"]
+        ["orbite-rdma-monitor"]
     );
     for source in &mut sources {
         source
@@ -180,7 +180,7 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
     for source in &mut sources {
         assert_eq!(
             *source.native.acknowledgments.lock().unwrap(),
-            ["orbitte-rdma-monitor"]
+            ["orbite-rdma-monitor"]
         );
         source.registration.stop().unwrap();
     }
@@ -229,7 +229,7 @@ fn a_lost_source_does_not_stop_other_devices_or_allow_native_close() {
 }
 
 pub(super) fn observe(source: &Source) {
-    if std::env::var_os("ORBITTE_SHARED_RAILS").is_none() {
+    if std::env::var_os("ORBITE_SHARED_RAILS").is_none() {
         return;
     }
     use std::collections::BTreeSet;
@@ -243,7 +243,7 @@ pub(super) fn observe(source: &Source) {
     let current = thread::current();
     assert_eq!(
         current.name(),
-        Some("orbitte-rdma-monitor"),
+        Some("orbite-rdma-monitor"),
         "native events escaped the transport monitor"
     );
     let thread = format!("{:?}", current.id());
@@ -254,7 +254,7 @@ pub(super) fn observe(source: &Source) {
         thread.clone(),
     )) {
         println!(
-            "ORBITTE_MONITOR_SOURCE {{\"kind\":\"{kind}\",\"handle\":{handle},\"fd\":{},\"thread\":\"{thread}\"}}",
+            "ORBITE_MONITOR_SOURCE {{\"kind\":\"{kind}\",\"handle\":{handle},\"fd\":{},\"thread\":\"{thread}\"}}",
             source.fd()
         );
     }

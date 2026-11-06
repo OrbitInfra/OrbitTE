@@ -17,12 +17,12 @@ def verify(profile, case, evidence):
                 or not before or before != after or result.get('inventory_error')
                 or any(before.get(k) != node[k] for k in ('hostname', 'boot_id'))):
             raise ValueError('discovery inventory is missing, changed or from another host')
-        if records(record, 'ORBITTE_INSTALLED_DISCOVERY_CONFIG ') != [dict(
+        if records(record, 'ORBITE_INSTALLED_DISCOVERY_CONFIG ') != [dict(
                 device=None, port=None, gid_index=None, whitelist=profile['rails'], blacklist=profile['rails'])]:
             raise ValueError('discovery was pinned or escaped its locked devices')
-        if records(record, 'ORBITTE_INSTALLED_DISCOVERY_PIN ') != [dict(gid_index=255, unavailable=True)]:
+        if records(record, 'ORBITE_INSTALLED_DISCOVERY_PIN ') != [dict(gid_index=255, unavailable=True)]:
             raise ValueError('strict unavailable GID did not reject fallback')
-        nics = records(record, 'ORBITTE_INSTALLED_TOPOLOGY_NIC ')
+        nics = records(record, 'ORBITE_INSTALLED_TOPOLOGY_NIC ')
         if ([n['name'] for n in nics] != sorted(profile['rails'])
                 or [n['id'] for n in nics] != [0, 1]
                 or [d['name'] for d in before['devices']] != sorted(profile['rails'])
@@ -50,7 +50,7 @@ def verify(profile, case, evidence):
             if (any(attrs.get(k) != v for k, v in expected.items())
                     or ipaddress.IPv6Address(attrs['rdma.gid']) != ipaddress.IPv6Address(gid['address'])):
                 raise ValueError('automatic route differs from the independently inventoried GID')
-            published = next(n for n in records(record, 'ORBITTE_INSTALLED_NIC ') if n['name'] == nic['name'])
+            published = next(n for n in records(record, 'ORBITE_INSTALLED_NIC ') if n['name'] == nic['name'])
             if published['pci'] != nic['pci'] or ipaddress.IPv6Address(published['gid']) != ipaddress.IPv6Address(gid['address']) or published['gid_type'] != 'RoCE v2':
                 raise ValueError('public route and topology snapshots disagree')
         expected_memory = []
@@ -59,5 +59,5 @@ def verify(profile, case, evidence):
             remote = [n['id'] for n in nics if n['id'] not in local]
             expected_memory.append(dict(name='*' if numa is None else 'cpu:' + str(numa),
                                         numa=numa, ranks=[local, [], remote]))
-        if records(record, 'ORBITTE_INSTALLED_TOPOLOGY_MEMORY ') != expected_memory:
+        if records(record, 'ORBITE_INSTALLED_TOPOLOGY_MEMORY ') != expected_memory:
             raise ValueError('memory priority ranks disagree with physical NUMA placement')

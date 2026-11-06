@@ -125,7 +125,7 @@ pub(super) fn run(
         assert_eq!(stats.route_recoveries, before.route_recoveries + 1);
     }
     println!(
-        "ORBITTE_MONITOR_RECOVERY {{\"source\":{source},\"target\":{target},\"rail\":{rail},\"native_queries\":{},\"injections\":{},\"monitor_ticks\":{},\"route_recoveries\":{},\"same_pd\":true,\"same_mrs\":true,\"healthy_rail_reused\":true,\"idle_recovery\":true,\"recovery_event_injected\":false,\"physical_port_fault\":false,\"reconnected_rounds\":2}}",
+        "ORBITE_MONITOR_RECOVERY {{\"source\":{source},\"target\":{target},\"rail\":{rail},\"native_queries\":{},\"injections\":{},\"monitor_ticks\":{},\"route_recoveries\":{},\"same_pd\":true,\"same_mrs\":true,\"healthy_rail_reused\":true,\"idle_recovery\":true,\"recovery_event_injected\":false,\"physical_port_fault\":false,\"reconnected_rounds\":2}}",
         trace.native_queries, trace.injections, stats.monitor_ticks, stats.route_recoveries
     );
 }

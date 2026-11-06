@@ -31,13 +31,9 @@ fn render(
     }
 }
 
-// SAFETY: uniquely named symbol with the signature in include/orbitte/diagnostics.h.
+// SAFETY: uniquely named symbol with the signature in include/orbite/diagnostics.h.
 #[unsafe(no_mangle)]
-pub extern "C" fn orbitte_diagnostics_version(
-    format: u32,
-    emit: Emit,
-    context: *mut c_void,
-) -> i32 {
+pub extern "C" fn orbite_diagnostics_version(format: u32, emit: Emit, context: *mut c_void) -> i32 {
     render(&version_snapshot(), format, false, emit, context)
 }
 
@@ -49,9 +45,9 @@ unsafe fn read_json<T: DeserializeOwned>(data: *const u8, len: usize) -> Option<
     serde_json::from_slice(unsafe { std::slice::from_raw_parts(data, len) }).ok()
 }
 
-// SAFETY: uniquely named symbol with the signature in include/orbitte/diagnostics.h.
+// SAFETY: uniquely named symbol with the signature in include/orbite/diagnostics.h.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orbitte_diagnostics_render(
+pub unsafe extern "C" fn orbite_diagnostics_render(
     data: *const u8,
     len: usize,
     format: u32,
@@ -83,9 +79,9 @@ struct RedactionInput {
     text: String,
 }
 
-// SAFETY: uniquely named symbol with the signature in include/orbitte/diagnostics.h.
+// SAFETY: uniquely named symbol with the signature in include/orbite/diagnostics.h.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn orbitte_diagnostics_redact(
+pub unsafe extern "C" fn orbite_diagnostics_redact(
     data: *const u8,
     len: usize,
     emit: Emit,

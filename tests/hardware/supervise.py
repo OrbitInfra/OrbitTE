@@ -12,25 +12,25 @@ import time
 
 
 def fault_scope(environment):
-    mode = environment.get('ORBITTE_HOST_MODE')
-    role = environment.get('ORBITTE_SHARED_ROLE')
-    if environment.get('ORBITTE_STAGING_OBSERVE') == '1':
+    mode = environment.get('ORBITE_HOST_MODE')
+    role = environment.get('ORBITE_SHARED_ROLE')
+    if environment.get('ORBITE_STAGING_OBSERVE') == '1':
         return (mode is None and role in ('source', 'requester')
-                and environment.get('ORBITTE_STAGING_CHUNK_COUNT') in tuple(str(n) for n in range(1, 17))
-                and environment.get('ORBITTE_STAGING_PIPELINE_DEPTH', '1') == environment.get('ORBITTE_STAGING_CHUNK_COUNT')
-                and environment.get('ORBITTE_GDR_OBSERVE') is None
-                and environment.get('ORBITTE_IPC_HOLD') is None)
-    if environment.get('ORBITTE_GDR_OBSERVE') == '1':
+                and environment.get('ORBITE_STAGING_CHUNK_COUNT') in tuple(str(n) for n in range(1, 17))
+                and environment.get('ORBITE_STAGING_PIPELINE_DEPTH', '1') == environment.get('ORBITE_STAGING_CHUNK_COUNT')
+                and environment.get('ORBITE_GDR_OBSERVE') is None
+                and environment.get('ORBITE_IPC_HOLD') is None)
+    if environment.get('ORBITE_GDR_OBSERVE') == '1':
         return (mode is None and role in ('source', 'requester')
-                and environment.get('ORBITTE_RDMA_CUDA_MEMORY') == 'direct'
+                and environment.get('ORBITE_RDMA_CUDA_MEMORY') == 'direct'
                 and environment.get('MLX5_SCATTER_TO_CQE') == '0')
     if mode == 'installed-memory-cleanup':
-        owner = environment.get('ORBITTE_CLEANUP_KIND')
-        return (role in ('source', 'requester') and role == environment.get('ORBITTE_CLEANUP_ROLE')
+        owner = environment.get('ORBITE_CLEANUP_KIND')
+        return (role in ('source', 'requester') and role == environment.get('ORBITE_CLEANUP_ROLE')
                 and owner in ('mr', 'mw') and (owner != 'mw' or role == 'source'))
     if mode == 'installed-cleanup-failure':
-        return (role == 'requester' and environment.get('ORBITTE_CLEANUP_KIND', 'qp') in ('qp', 'cq', 'channel', 'pd')
-                and (environment.get('ORBITTE_CLEANUP_KIND') != 'channel' or environment.get('ORBITTE_RDMA_EVENTS') == '1'))
+        return (role == 'requester' and environment.get('ORBITE_CLEANUP_KIND', 'qp') in ('qp', 'cq', 'channel', 'pd')
+                and (environment.get('ORBITE_CLEANUP_KIND') != 'channel' or environment.get('ORBITE_RDMA_EVENTS') == '1'))
     return (role == 'requester'
             and mode in ('installed-lost-completion', 'installed-inflight-dma', 'installed-rail-accounting'))
 
@@ -63,13 +63,13 @@ def supervise(config_path):
         # Protect direct peer connections from process-wide HTTP proxy settings.
         for name in ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
             environment.pop(name, None)
-        if environment.get('ORBITTE_HOST_DISCOVERY') == 'auto':
+        if environment.get('ORBITE_HOST_DISCOVERY') == 'auto':
             inventory = root.parent / 'discovery_inventory.py'
             expected = config.get('inventory_tool_sha256')
             if (not expected or hashlib.sha256(inventory.read_bytes()).hexdigest() != expected
-                    or environment.get('ORBITTE_HOST_MODE') != 'installed-rail-accounting'):
+                    or environment.get('ORBITE_HOST_MODE') != 'installed-rail-accounting'):
                 raise ValueError('discovery inventory scope or immutable hash mismatch')
-            inventory_command = [sys.executable, str(inventory), *environment['ORBITTE_SHARED_RAILS'].split(',')]
+            inventory_command = [sys.executable, str(inventory), *environment['ORBITE_SHARED_RAILS'].split(',')]
             observed = json.loads(subprocess.check_output(inventory_command, text=True, timeout=10))
             write(root / 'inventory-before.json', observed)
             result['inventory_tool_sha256'] = expected
@@ -89,17 +89,17 @@ def supervise(config_path):
         phases = []
         for generation in range(process_generations):
             if restart:
-                environment['ORBITTE_RESTART_GENERATION'] = str(generation)
-                environment['ORBITTE_RESTART_ROOT'] = str(root)
+                environment['ORBITE_RESTART_GENERATION'] = str(generation)
+                environment['ORBITE_RESTART_ROOT'] = str(root)
             fault_hash = config.get('fault_library_sha256')
             if fault_hash:
-                library = root.parent / 'liborbitte_cq_fault.so'
+                library = root.parent / 'liborbite_cq_fault.so'
                 if (hashlib.sha256(library.read_bytes()).hexdigest() != fault_hash
                         or environment.get('LD_PRELOAD') != str(library)
                         or not fault_scope(environment)):
                     raise RuntimeError('fault library scope or immutable hash mismatch')
-                environment['ORBITTE_RESTART_GENERATION'] = str(generation)
-                environment['ORBITTE_RESTART_ROOT'] = str(root)
+                environment['ORBITE_RESTART_GENERATION'] = str(generation)
+                environment['ORBITE_RESTART_ROOT'] = str(root)
                 result['fault_library_sha256'] = fault_hash
             elif environment.get('LD_PRELOAD'):
                 raise RuntimeError('unexpected unpinned preload library')
@@ -170,8 +170,8 @@ def supervise(config_path):
                 result.update(status='failed', inventory_error=str(error))
         # The peer arms this marker after checking the RNIC/GID, admin state and
         # independent control route. A killed peer cannot run its Rust Drop.
-        netdev = config.get('env', {}).get('ORBITTE_FAULT_NETDEV')
-        if (config.get('env', {}).get('ORBITTE_HOST_MODE') == 'installed-rail-health'
+        netdev = config.get('env', {}).get('ORBITE_FAULT_NETDEV')
+        if (config.get('env', {}).get('ORBITE_HOST_MODE') == 'installed-rail-health'
                 and netdev and (root / 'rail-link-armed').is_file()):
             try:
                 if (root / 'rail-link-armed').read_text() != netdev:

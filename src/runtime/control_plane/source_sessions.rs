@@ -38,7 +38,7 @@ impl Sessions {
             let stopping = Arc::clone(stopping);
             workers.push(
                 thread::Builder::new()
-                    .name(format!("orbitte-source-stage-{index}"))
+                    .name(format!("orbite-source-stage-{index}"))
                     .spawn(move || {
                         loop {
                             let pin = receiver.lock().unwrap_or_else(|p| p.into_inner()).recv();

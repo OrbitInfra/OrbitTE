@@ -2,11 +2,11 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use orbit_te::{
+use orbite::{
     EngineConfig, Error, HostMemory, Permission, TransferEngine, TransferOp, TransferRequest,
 };
 
-fn main() -> orbit_te::Result<()> {
+fn main() -> orbite::Result<()> {
     let allocation = Arc::new(Mutex::new(vec![0; 64].into_boxed_slice()));
     let address = {
         let mut bytes = allocation
@@ -33,7 +33,7 @@ fn main() -> orbit_te::Result<()> {
         Duration::from_secs(1),
     )?;
     let transfer = TransferRequest::new(
-        orbit_te::Transport::Tcp,
+        orbite::Transport::Tcp,
         destination.base_address(),
         memory.base_address() + 16,
         5,

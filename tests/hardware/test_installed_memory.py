@@ -22,25 +22,25 @@ class InstalledMemoryEvidence(unittest.TestCase):
         resource = 1 if case['cleanup_kind'] == 'mr' else 2
         for role, pid in [('source', 11), ('requester', 12)]:
             target = case['fault_role'] == role
-            rows = [('ORBITTE_INSTALLED_NIC ', dict(name=name, pci=str(index)))
+            rows = [('ORBITE_INSTALLED_NIC ', dict(name=name, pci=str(index)))
                     for _ in range(2) for index, name in enumerate(self.profile['rails'])]
-            rows += [('ORBITTE_INSTALLED_ROUND ', dict(phase=phase, round=n, opened_qps=1, closed_qps=0,
+            rows += [('ORBITE_INSTALLED_ROUND ', dict(phase=phase, round=n, opened_qps=1, closed_qps=0,
                      opened_mrs=4, completed_grants=n + 1, reused_qps=n, read_bytes=0,
                      write_bytes=(n + 1) * 65536 if role == 'requester' else 0)) for phase in (0, 1) for n in range(3)]
-            rows += [('ORBITTE_INSTALLED_MEMORY_OWNER ', dict(pid=pid, address=1024, target=target)),
-                     ('ORBITTE_INSTALLED_MEMORY_REPLACED ', dict(pid=pid, address=2048, endpoint='host:1234',
+            rows += [('ORBITE_INSTALLED_MEMORY_OWNER ', dict(pid=pid, address=1024, target=target)),
+                     ('ORBITE_INSTALLED_MEMORY_REPLACED ', dict(pid=pid, address=2048, endpoint='host:1234',
                       old_epoch='old', new_epoch='new', same_process=True, stale_epoch_before_qp=True)),
-                     ('ORBITTE_INSTALLED_MEMORY_RESULT ', dict(protocol=installed.PROTOCOL, pid=pid, target=target,
+                     ('ORBITE_INSTALLED_MEMORY_RESULT ', dict(protocol=installed.PROTOCOL, pid=pid, target=target,
                       resource=resource, healthy_rounds=6, full_bytes_and_guards=True, fresh_engine_drained=True,
                       fresh_backing_released=True, old_backing_retained=target))]
             record = dict.fromkeys(['cq-fault-0.jsonl', 'cq-fault-1.jsonl', 'cq-fault-2.jsonl'])
             supervisor = dict(native_pid=pid, exit_code=0, child_reaped=True, resource_locks_released=True)
             record['maps.txt'] = '/lib/libibverbs.so.1\n/lib/libmlx5.so.1\n'
             if resource == 2 and role == 'requester':
-                rows.append(('ORBITTE_INSTALLED_MEMORY_REQUEST ', dict(pid=pid, failed=True, locally_drained=True)))
+                rows.append(('ORBITE_INSTALLED_MEMORY_REQUEST ', dict(pid=pid, failed=True, locally_drained=True)))
             if target:
                 supervisor['fault_library_sha256'] = 'a' * 64
-                record['maps.txt'] += '/tmp/liborbitte_cq_fault.so\n'
+                record['maps.txt'] += '/tmp/liborbite_cq_fault.so\n'
                 native = [dict(kind='context', context=i, provider='/lib/libmlx5.so.1') for i in (0, 1)]
                 native += [dict(kind='memory_arm', context=0, resource=resource, source=int(role == 'source'), address=1024)]
                 if resource == 2:
@@ -59,7 +59,7 @@ class InstalledMemoryEvidence(unittest.TestCase):
                              retained_windows=int(resource == 2), retained_grants=int(resource == 2),
                              key_indices=4, burned_keys=4, sq_debt=0, rq_debt=0,
                              direct_bytes=65536 if resource == 2 else 0)
-                rows.append(('ORBITTE_INSTALLED_MEMORY_RETAINED ', proof))
+                rows.append(('ORBITE_INSTALLED_MEMORY_RETAINED ', proof))
                 record['cq-fault-0.jsonl'] = '\n'.join(map(json.dumps, native))
             record['stdout.log'] = '\n'.join(prefix + json.dumps(row) for prefix, row in rows)
             record['result.json'] = json.dumps(supervisor)
@@ -103,17 +103,17 @@ class InstalledMemoryEvidence(unittest.TestCase):
                 installed.validate({**self.case(), **invalid})
         _, environment = installed.command(dict(nodes={'a': dict(bind='host:0')}, rails=['r0', 'r1'], gid_index=3),
                                             self.case(), 'a', 'source', '/tmp/run')
-        self.assertEqual(environment['ORBITTE_CLEANUP_ROLE'], 'requester')
-        self.assertNotIn('ORBITTE_RESTART_GENERATIONS', environment)
+        self.assertEqual(environment['ORBITE_CLEANUP_ROLE'], 'requester')
+        self.assertNotIn('ORBITE_RESTART_GENERATIONS', environment)
         for kind, role in [('mr', 'source'), ('mr', 'requester'), ('mw', 'source')]:
-            env = dict(environment, ORBITTE_CLEANUP_KIND=kind, ORBITTE_CLEANUP_ROLE=role,
-                       ORBITTE_SHARED_ROLE=role)
+            env = dict(environment, ORBITE_CLEANUP_KIND=kind, ORBITE_CLEANUP_ROLE=role,
+                       ORBITE_SHARED_ROLE=role)
             self.assertTrue(supervise.fault_scope(env))
-            for change in [dict(ORBITTE_SHARED_ROLE='wrong'), dict(ORBITTE_CLEANUP_ROLE='wrong'),
-                           dict(ORBITTE_CLEANUP_KIND='pd'), dict(ORBITTE_HOST_MODE='installed-host')]:
+            for change in [dict(ORBITE_SHARED_ROLE='wrong'), dict(ORBITE_CLEANUP_ROLE='wrong'),
+                           dict(ORBITE_CLEANUP_KIND='pd'), dict(ORBITE_HOST_MODE='installed-host')]:
                 self.assertFalse(supervise.fault_scope({**env, **change}))
-        self.assertFalse(supervise.fault_scope(dict(environment, ORBITTE_CLEANUP_KIND='mw',
-                                                   ORBITTE_SHARED_ROLE='requester')))
+        self.assertFalse(supervise.fault_scope(dict(environment, ORBITE_CLEANUP_KIND='mw',
+                                                   ORBITE_SHARED_ROLE='requester')))
 
 
 

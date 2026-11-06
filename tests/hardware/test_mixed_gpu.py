@@ -27,8 +27,8 @@ class MixedGPU(unittest.TestCase):
 
     def test_tcp_or_staging_only_bytes_cannot_pass_as_gpu_direct(self):
         case = dict(staged_leg='tcp-pin')
-        source = 'ORBITTE_MIXED_OK source tcp-pin rdma_read=0 rdma_write=0 private_pds=4 staged_bytes=26 pins=2'
-        requester = 'ORBITTE_MIXED_OK requester tcp-pin rdma_read=14 rdma_write=14 private_pds=0 staged_bytes=26 pins=0'
+        source = 'ORBITE_MIXED_OK source tcp-pin rdma_read=0 rdma_write=0 private_pds=4 staged_bytes=26 pins=2'
+        requester = 'ORBITE_MIXED_OK requester tcp-pin rdma_read=14 rdma_write=14 private_pds=0 staged_bytes=26 pins=0'
         def verify(s, r):
             mixed_gpu.verify(case, {'source': {'stdout.log': s}, 'requester': {'stdout.log': r}})
         verify(source, requester)

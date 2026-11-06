@@ -20,7 +20,7 @@ def fixture():
         row['seq'] = seq
         if row['kind'] == 'arm':
             row['expected'] = 1
-    prefix = 'ORBITTE_INSTALLED_CQE_PENDING '
+    prefix = 'ORBITE_INSTALLED_CQE_PENDING '
     stdout = []
     for line in record['stdout.log'].splitlines():
         if line.startswith(prefix):
@@ -43,7 +43,7 @@ def fixture():
                  unregistered=True, backing_retained=True, post_drop_native_query=True,
                  fixture_owners_dropped=True, batch_busy=True, memory_busy=True,
                  close_attempts=2, locally_drained=False)
-    stdout.append('ORBITTE_INSTALLED_CLEANUP ' + json.dumps(proof))
+    stdout.append('ORBITE_INSTALLED_CLEANUP ' + json.dumps(proof))
     record['stdout.log'] = '\n'.join(stdout)
     record['cq-fault-0.jsonl'] = '\n'.join(json.dumps(row) for row in rows)
     return case, evidence

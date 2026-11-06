@@ -1,4 +1,4 @@
-use orbit_te::{Error, NotificationEffect, NotificationFailure};
+use orbite::{Error, NotificationEffect, NotificationFailure};
 use std::ffi::{c_char, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{self, NonNull};

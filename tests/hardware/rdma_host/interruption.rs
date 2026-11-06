@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use orbit_te::{Batch, BatchState, Error, RemoteEffect, TaskState};
+use orbite::{Batch, BatchState, Error, RemoteEffect, TaskState};
 
 use super::completion::CompletionFault;
 use super::gate::GrantGate;
@@ -19,7 +19,7 @@ pub(super) fn pending(
 ) -> Result<Vec<Batch>> {
     let (gate, fault) = controls;
     let lost = matches!(
-        env::var("ORBITTE_HOST_MODE")?.as_str(),
+        env::var("ORBITE_HOST_MODE")?.as_str(),
         "installed-lost-completion" | "installed-cleanup-failure"
     );
     if let Some(gate) = gate {
@@ -125,7 +125,7 @@ pub(super) fn pending(
         return Err("pending DMA loan did not exclude CPU writes".into());
     }
     println!(
-        "ORBITTE_INSTALLED_PENDING {{\"phase\":{phase},\"pid\":{},\"held_grants\":{count},\"active_grants\":{},\"sq_debt\":{},\"rq_debt\":{},\"windows\":{},\"batches\":{},\"opened_qps\":{},\"read_bytes\":{},\"write_bytes\":{},\"memory_busy\":true,\"batch_busy\":{},\"progress_failures\":{},\"progress_recoveries\":{}}}",
+        "ORBITE_INSTALLED_PENDING {{\"phase\":{phase},\"pid\":{},\"held_grants\":{count},\"active_grants\":{},\"sq_debt\":{},\"rq_debt\":{},\"windows\":{},\"batches\":{},\"opened_qps\":{},\"read_bytes\":{},\"write_bytes\":{},\"memory_busy\":true,\"batch_busy\":{},\"progress_failures\":{},\"progress_recoveries\":{}}}",
         std::process::id(),
         rdma.active_grants,
         rdma.work_requests,
@@ -141,7 +141,7 @@ pub(super) fn pending(
     );
     if let Some(receipt) = receipt {
         println!(
-            "ORBITTE_INSTALLED_CQE_PENDING {{\"phase\":{phase},\"pid\":{},\"posts\":{},\"lost\":{},\"sequence\":{},\"destroyed_qps\":{}}}",
+            "ORBITE_INSTALLED_CQE_PENDING {{\"phase\":{phase},\"pid\":{},\"posts\":{},\"lost\":{},\"sequence\":{},\"destroyed_qps\":{}}}",
             std::process::id(),
             receipt.posts,
             receipt.lost,
@@ -163,7 +163,7 @@ pub(super) fn drained(
 ) -> Result<()> {
     let (gate, fault) = controls;
     let lost = matches!(
-        env::var("ORBITTE_HOST_MODE")?.as_str(),
+        env::var("ORBITE_HOST_MODE")?.as_str(),
         "installed-lost-completion" | "installed-cleanup-failure"
     );
     if let Some(gate) = gate {
@@ -223,7 +223,7 @@ pub(super) fn drained(
             return Err("lost native CQE did not retire any QP".into());
         }
         println!(
-            "ORBITTE_INSTALLED_CQE_DRAIN {{\"phase\":{phase},\"pid\":{},\"posts\":{},\"lost\":{},\"sequence\":{},\"destroyed_qps\":{},\"write_effect_unknown\":{}}}",
+            "ORBITE_INSTALLED_CQE_DRAIN {{\"phase\":{phase},\"pid\":{},\"posts\":{},\"lost\":{},\"sequence\":{},\"destroyed_qps\":{},\"write_effect_unknown\":{}}}",
             std::process::id(),
             receipt.posts,
             receipt.lost,
@@ -249,7 +249,7 @@ pub(super) fn drained(
     }
     memory.write(0, &expected)?;
     println!(
-        "ORBITTE_INSTALLED_DRAIN {{\"phase\":{phase},\"pid\":{},\"failed_batches\":{failed},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"persistent_mrs\":{},\"read_bytes\":{},\"write_bytes\":{},\"locally_drained\":true,\"bytes_verified\":true,\"payload_completed\":{},\"memory_writable\":true,\"progress_failures\":{},\"progress_recoveries\":{}}}",
+        "ORBITE_INSTALLED_DRAIN {{\"phase\":{phase},\"pid\":{},\"failed_batches\":{failed},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"persistent_mrs\":{},\"read_bytes\":{},\"write_bytes\":{},\"locally_drained\":true,\"bytes_verified\":true,\"payload_completed\":{},\"memory_writable\":true,\"progress_failures\":{},\"progress_recoveries\":{}}}",
         std::process::id(),
         rdma.work_requests,
         rdma.receive_work_requests,

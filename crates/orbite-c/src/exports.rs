@@ -5,7 +5,7 @@ use crate::abi::{
 use crate::boundary::*;
 use crate::memory::Opt;
 use crate::{batch, engine, segments};
-use orbit_te::Notification;
+use orbite::Notification;
 use std::ffi::{c_char, c_int, c_void};
 use std::ptr;
 

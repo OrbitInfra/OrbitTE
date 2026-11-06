@@ -1,4 +1,4 @@
-"""Compare packaged OrbitTE and frozen OrbitKV on one exclusively allocated CUDA GPU."""
+"""Compare packaged OrbiTE and frozen OrbitKV on one exclusively allocated CUDA GPU."""
 import argparse
 import fcntl
 import hashlib
@@ -53,13 +53,13 @@ def main():
     binary = Path(manifest['binary'])
     driver = Path(__file__).resolve()
     if (manifest['status'] != 'passed' or manifest['dirty'] or manifest['consumer'] != 'local-copy'
-            or manifest['protocol'] != 'orbitte-installed-local-copy'
+            or manifest['protocol'] != 'orbite-installed-local-copy'
             or digest(binary) != manifest['binary_sha256']
             or digest(Path(manifest['archive'])) != manifest['archive_sha256']
             or digest(driver) != manifest['fixture_files_sha256']['tests/hardware/local_copy_run.py']):
         raise ValueError('packaged public consumer or driver identity mismatch')
     env = {**os.environ, 'CUDA_VISIBLE_DEVICES': args.gpu}
-    evidence = {'status': 'running', 'gpu': args.gpu, 'orbitte': manifest['source_commit'],
+    evidence = {'status': 'running', 'gpu': args.gpu, 'orbite': manifest['source_commit'],
                 'orbitkv': ORBITKV, 'artifact_sha256': manifest['archive_sha256'],
                 'scope': 'CPU wall time from submission entry through physical completion on the default stream',
                 'cases': []}
@@ -98,13 +98,13 @@ def main():
             for index, (blocks, width) in enumerate(CASES):
                 baseline = output / f'orbitkv-{blocks}.jsonl'
                 pair = {}
-                for name in (('orbitkv', 'orbitte') if index % 2 == 0 else ('orbitte', 'orbitkv')):
+                for name in (('orbitkv', 'orbite') if index % 2 == 0 else ('orbite', 'orbitkv')):
                     if name == 'orbitkv':
                         run(f'oracle-{blocks}', [oracle, '--output', baseline, '--samples', str(SAMPLES),
                                                  '--blocks', str(blocks), '--fragment-bytes', str(width)])
                         data = baseline.read_text()
                     else:
-                        data = run(f'orbitte-{blocks}', [binary, str(blocks), str(width), str(SAMPLES)])
+                        data = run(f'orbite-{blocks}', [binary, str(blocks), str(width), str(SAMPLES)])
                     pair[name] = checked_rows(data, args.gpu, blocks, width)
                 evidence['cases'].append({'blocks': blocks, 'fragment_bytes': width, 'medians': pair})
         evidence['status'] = 'passed'

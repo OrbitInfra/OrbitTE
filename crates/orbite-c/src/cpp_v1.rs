@@ -6,7 +6,7 @@ use crate::{
     engine,
     segments::Target,
 };
-use orbit_te::{EngineConfig, Error, IntentType};
+use orbite::{EngineConfig, Error, IntentType};
 use std::{
     ffi::{c_char, c_int},
     time::{Duration, Instant},
@@ -25,7 +25,7 @@ struct RequestV1 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_create_v1(source: u32, config: *const c_char) -> Handle {
+unsafe extern "C" fn orbite_create_v1(source: u32, config: *const c_char) -> Handle {
     guard(std::ptr::null_mut(), || {
         engine::create_using(|| {
             Ok(match source {
@@ -81,7 +81,7 @@ fn request_rows<'a>(rows: *const RequestV1, count: usize) -> Result<&'a [Request
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_submit_v1(
+unsafe extern "C" fn orbite_submit_v1(
     h: Handle,
     id: u64,
     rows: *const RequestV1,
@@ -163,7 +163,7 @@ unsafe extern "C" fn orbitte_submit_v1(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_progress_v1(h: Handle, id: u64, out: *mut Status) -> c_int {
+unsafe extern "C" fn orbite_progress_v1(h: Handle, id: u64, out: *mut Status) -> c_int {
     call(|| {
         checked(out, 1)?;
         engine::with(h, |e| {
@@ -182,7 +182,7 @@ struct TaskV1 {
     unquiesced: u32,
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_tasks_v1(
+unsafe extern "C" fn orbite_tasks_v1(
     h: Handle,
     id: u64,
     out: *mut TaskV1,
@@ -216,7 +216,7 @@ unsafe extern "C" fn orbitte_tasks_v1(
         })
     })
 }
-fn drained(batch: &orbit_te::Batch) -> Result<()> {
+fn drained(batch: &orbite::Batch) -> Result<()> {
     if !batch.locally_drained()? {
         if batch.observe_tasks(None)?.iter().any(|t| {
             t.failure
@@ -230,7 +230,7 @@ fn drained(batch: &orbit_te::Batch) -> Result<()> {
     Ok(())
 }
 #[unsafe(no_mangle)]
-extern "C" fn orbitte_drained_v1(h: Handle, id: u64) -> c_int {
+extern "C" fn orbite_drained_v1(h: Handle, id: u64) -> c_int {
     call(|| {
         engine::with(h, |e| {
             let b = e.batch(id)?;
@@ -240,18 +240,14 @@ extern "C" fn orbitte_drained_v1(h: Handle, id: u64) -> c_int {
     })
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_scatter_peer_v1(
-    h: Handle,
-    name: *const c_char,
-    id: *mut u64,
-) -> c_int {
+unsafe extern "C" fn orbite_scatter_peer_v1(h: Handle, name: *const c_char, id: *mut u64) -> c_int {
     call(|| {
         checked(id, 1)?;
         engine::with(h, |e| put(id, e.open_scoped(text(name, 4097)?, true)?))
     })
 }
 #[unsafe(no_mangle)]
-extern "C" fn orbitte_reap_v1(h: Handle, id: u64) -> c_int {
+extern "C" fn orbite_reap_v1(h: Handle, id: u64) -> c_int {
     call(|| {
         engine::with(h, |e| {
             let holder = e.batch(id)?;
@@ -265,7 +261,7 @@ extern "C" fn orbitte_reap_v1(h: Handle, id: u64) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn orbitte_probe_v1(h: Handle, id: u64) -> c_int {
+extern "C" fn orbite_probe_v1(h: Handle, id: u64) -> c_int {
     call(|| {
         engine::with(h, |e| match e.target(id)? {
             Target::Peer(_) => Ok(()),
@@ -275,7 +271,7 @@ extern "C" fn orbitte_probe_v1(h: Handle, id: u64) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_limits_v1(h: Handle, out: *mut usize) -> c_int {
+unsafe extern "C" fn orbite_limits_v1(h: Handle, out: *mut usize) -> c_int {
     call(|| engine::with(h, |e| put(out, e.core.config().max_batch_requests)))
 }
 
@@ -291,7 +287,7 @@ fn local_topology(e: &engine::Engine) -> Result<String> {
         if !n.device_attrs.is_empty(){row["device_attrs"]=json!(n.device_attrs);}
         row
     }).collect();
-    let mems:Vec<_>=t.mem_list.iter().map(|m| json!({"name":m.name,"pci_bus_id":m.pci_bus_id.as_deref().unwrap_or(""),"numa_node":m.numa_node.map(i64::from).unwrap_or(-1),"type":match m.kind {orbit_te::MemType::Host=>0,orbit_te::MemType::Cuda=>1},"device_list":{"rank0":m.device_list[0],"rank1":m.device_list[1],"rank2":m.device_list[2]}})).collect();
+    let mems:Vec<_>=t.mem_list.iter().map(|m| json!({"name":m.name,"pci_bus_id":m.pci_bus_id.as_deref().unwrap_or(""),"numa_node":m.numa_node.map(i64::from).unwrap_or(-1),"type":match m.kind {orbite::MemType::Host=>0,orbite::MemType::Cuda=>1},"device_list":{"rank0":m.device_list[0],"rank1":m.device_list[1],"rank2":m.device_list[2]}})).collect();
     Ok(json!({"nics":nics,"mems":mems}).to_string())
 }
 
@@ -300,7 +296,7 @@ fn local_topology(_e: &engine::Engine) -> Result<String> {
     Ok("{}".into())
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_topology_v1(h: Handle, buf: *mut c_char, size: *mut usize) -> c_int {
+unsafe extern "C" fn orbite_topology_v1(h: Handle, buf: *mut c_char, size: *mut usize) -> c_int {
     call(|| {
         engine::with(h, |e| {
             let size = checked(size, 1)?;
@@ -325,7 +321,7 @@ struct Notice {
     message: *const c_char,
     message_len: usize,
 }
-fn notice(p: *const Notice, limit: usize) -> Result<orbit_te::Notification> {
+fn notice(p: *const Notice, limit: usize) -> Result<orbite::Notification> {
     let n = input(p, 1)?[0];
     if n.name_len
         .checked_add(n.message_len)
@@ -341,13 +337,13 @@ fn notice(p: *const Notice, limit: usize) -> Result<orbit_te::Notification> {
             .map_err(|_| INVALID)?
             .to_owned())
     };
-    Ok(orbit_te::Notification {
+    Ok(orbite::Notification {
         name: string(n.name, n.name_len)?,
         message: string(n.message, n.message_len)?,
     })
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_notify_v1(h: Handle, id: u64, note: *const Notice) -> c_int {
+unsafe extern "C" fn orbite_notify_v1(h: Handle, id: u64, note: *const Notice) -> c_int {
     call(|| {
         engine::with(h, |e| {
             let n = notice(note, e.core.config().max_notification_bytes)?;
@@ -362,7 +358,7 @@ unsafe extern "C" fn orbitte_notify_v1(h: Handle, id: u64, note: *const Notice) 
     })
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn orbitte_recv_v1(h: Handle, out: *mut *mut u8, len: *mut usize) -> c_int {
+unsafe extern "C" fn orbite_recv_v1(h: Handle, out: *mut *mut u8, len: *mut usize) -> c_int {
     call(|| {
         checked(out, 1)?;
         checked(len, 1)?;
@@ -390,12 +386,12 @@ unsafe extern "C" fn orbitte_recv_v1(h: Handle, out: *mut *mut u8, len: *mut usi
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn orbitte_close_v1(h: Handle) -> c_int {
+extern "C" fn orbite_close_v1(h: Handle) -> c_int {
     call(|| engine::with(h, |e| Ok(e.core.close(e.timeout())?)))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn orbitte_abandon_v1(h: Handle, id: u64) -> c_int {
+extern "C" fn orbite_abandon_v1(h: Handle, id: u64) -> c_int {
     call(|| {
         engine::with(h, |e| {
             // Dropping Batch closes logical admission and delegates outstanding work

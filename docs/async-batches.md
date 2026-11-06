@@ -136,7 +136,7 @@ fallback and acknowledgements.
 independently of the retained-owner budgets:
 
 ```rust
-use orbit_te::{EngineConfig, RuntimeQueueConfig, TransferEngine};
+use orbite::{EngineConfig, RuntimeQueueConfig, TransferEngine};
 
 let engine = TransferEngine::new(EngineConfig {
     max_inflight_batches: 128,
@@ -149,7 +149,7 @@ let engine = TransferEngine::new(EngineConfig {
     }),
     ..EngineConfig::default()
 })?;
-# Ok::<(), orbit_te::Error>(())
+# Ok::<(), orbite::Error>(())
 ```
 
 The queue admits all physical owners of a submit together. Defaults allow
@@ -161,7 +161,7 @@ published. Notification bytes count once on the first owner. Requester-wide
 
 `staging_owner_reserve` and `staging_byte_reserve` default to zero. Ordinary
 admission can consume only the total minus each reserve. Internal staging can
-use available capacity up to both totals. OrbitTE reserves once for the
+use available capacity up to both totals. OrbiTE reserves once for the
 validated ProxyManager session that runs PRE/CROSS/POST. Its child chunks
 share that charge. A public staging intent alone cannot spend the reserve.
 
@@ -207,7 +207,7 @@ resolve to `default`/`unspec`. Names are trimmed and lowercased, at most 256
 bytes and unique; at most 4096 contracts compile.
 
 ```rust
-use orbit_te::{EngineConfig, Priority, QosConfig, QosPolicyFields,
+use orbite::{EngineConfig, Priority, QosConfig, QosPolicyFields,
     QosRequestContext, QosTenantContract, TransferEngine};
 
 let requester = TransferEngine::new(EngineConfig {
@@ -237,7 +237,7 @@ let policy = requester.resolve_qos(&QosRequestContext {
 })?;
 assert_eq!(policy.effective_priority(), Priority::High);
 // Use request.with_qos(policy.clone()) for repeated submissions.
-# Ok::<(), orbit_te::Error>(())
+# Ok::<(), orbite::Error>(())
 ```
 
 `EffectiveQosPolicy` is an immutable, engine-bound handle; attach it with
@@ -261,7 +261,7 @@ Accepted work keeps its charge until its prepared owner is actually released;
 resolution, and `policy.usage()` reports current owners, bytes and requests.
 Submission uses numeric slots with no per-slice lookup. TENT's
 `QosContractResolver` only resolves policy (`diagnostic_scope=resolution_only`);
-OrbitTE also enforces priority and caps. QoS actions `fallback_transport`,
+OrbiTE also enforces priority and caps. QoS actions `fallback_transport`,
 `local_recompute` and `compress` fail configuration. Each matched contract
 has its own local cap. See
 [qualification](qualification.md#qos-contract-consumption).
@@ -282,7 +282,7 @@ Delay requires `EngineConfig::runtime_queue`; otherwise engine creation returns
 `InvalidConfig`:
 
 ```rust
-use orbit_te::{EngineConfig, QosConfig, RuntimeQueueConfig, TransferEngine};
+use orbite::{EngineConfig, QosConfig, RuntimeQueueConfig, TransferEngine};
 
 let engine = TransferEngine::new(EngineConfig {
     runtime_queue: Some(RuntimeQueueConfig::default()),
@@ -292,7 +292,7 @@ let engine = TransferEngine::new(EngineConfig {
     }}}"#)?,
     ..Default::default()
 })?;
-# Ok::<(), orbit_te::Error>(())
+# Ok::<(), orbite::Error>(())
 ```
 
 When delay is enabled anywhere, every capped contract acquires capacity at its
@@ -301,7 +301,7 @@ partial charge while waiting; independent batches can pass a blocked head. If a
 reject-only slot fills after enqueue, that owner fails at dispatch with no
 remote effect and its later tasks are skipped. Waiting never extends the
 deadline. TENT parses these action names but does not execute them; this
-behavior is OrbitTE's extension. See
+behavior is OrbiTE's extension. See
 [qualification](qualification.md#qos-admission-actions).
 
 ### JSON QoS configuration
@@ -334,13 +334,13 @@ for `EngineConfig::qos`. Other sections are ignored.
 ```
 
 ```rust
-use orbit_te::{EngineConfig, QosConfig, TransferEngine};
+use orbite::{EngineConfig, QosConfig, TransferEngine};
 
 let engine = TransferEngine::new(EngineConfig {
     qos: QosConfig::from_json_file("transfer-engine.json")?,
     ..EngineConfig::default()
 })?;
-# Ok::<(), orbit_te::Error>(())
+# Ok::<(), orbite::Error>(())
 ```
 
 | Field | Accepted values |
@@ -389,7 +389,7 @@ keeps that epoch fenced even after local drain. A fresh epoch cannot replace
 it. `ReceiverCreditStats::resource(tag)` exposes each grant, consumption
 and currently available balance. TENT's
 `SenderCreditLedger` provides this accounting model but is not wired into its
-admission path; OrbitTE consumes it per physical owner. See
+admission path; OrbiTE consumes it per physical owner. See
 [qualification](qualification.md#receiver-credit-gating).
 
 ## Automatic receiver windows
@@ -400,7 +400,7 @@ receiving peer and `max_receiver_credit_sessions` on the requester, then call
 share that credit owner with no manual update loop:
 
 ```rust
-use orbit_te::{EngineConfig, ReceiverCreditConfig, TransferEngine};
+use orbite::{EngineConfig, ReceiverCreditConfig, TransferEngine};
 use std::time::Duration;
 
 let source = TransferEngine::new(EngineConfig {
@@ -422,7 +422,7 @@ requester.connect_receiver_credit(&peer, 0, Duration::from_secs(3))?;
 // Register memory and submit through the ordinary APIs.
 // After every accepted data owner has completed and dropped:
 requester.disconnect_receiver_credit(&peer, Duration::from_secs(3))?;
-# Ok::<(), orbit_te::Error>(())
+# Ok::<(), orbite::Error>(())
 ```
 
 The receiver reserves a fixed byte/request window per sender engine;
@@ -441,7 +441,7 @@ and leaves a tombstone. Sender crashes are not reclaimed automatically.
 `receiver_credit_issuer_stats()` reports sender and window counts.
 
 TENT has no receiver issuer or network consumer; the `CreditSync` and
-`CreditClose` frames and this issuer are OrbitTE extensions. See
+`CreditClose` frames and this issuer are OrbiTE extensions. See
 [qualification](qualification.md#automatic-receiver-credit-windows).
 
 ## Staging and consumer owner credits
@@ -509,7 +509,7 @@ backing, pinned chunk and admission with `locally_drained = false`.
 
 Per-request [remote staging](staging.md#serial-remote-staging) can join the same
 batch. TENT's `commitPreparedSubmit` gives each physical owner a transport and
-staging plan; OrbitTE keeps that split with ordered batch execution. See
+staging plan; OrbiTE keeps that split with ordered batch execution. See
 [qualification](qualification.md#mixed-gpu-batches).
 
 ## TENT correspondence and limits
@@ -517,7 +517,7 @@ staging plan; OrbitTE keeps that split with ordered batch execution. See
 TENT's
 [`TransferEngineImpl`](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp)
 allocates batch capacity, appends tasks and defers freeing pending batches.
-OrbitTE uses one lock per batch and keeps the caller's status reads observational.
+OrbiTE uses one lock per batch and keeps the caller's status reads observational.
 TENT can drive hooks and queue progress while reading status. Here the existing
 batch executor publishes transport receipts and explicit progress can dispatch a
 pending hook. Seal fixes the terminal task set. When free or an abandoned stage

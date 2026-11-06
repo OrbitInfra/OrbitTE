@@ -71,7 +71,7 @@ def main():
         if len(ready) != 6 or ready[0] != "READY":
             raise RuntimeError(f"source bootstrap failed: {ready}")
         file = Path(ready[5]).resolve(strict=True)
-        if file.parent != root or not file.name.startswith("orbitte-shm-"):
+        if file.parent != root or not file.name.startswith("orbite-shm-"):
             raise RuntimeError("source mapping does not belong to the requested mount")
         info = mount(file)
         physical = {}

@@ -152,7 +152,7 @@ impl ProgressWorker {
         }
         let runner = Arc::clone(&wakes);
         let thread = thread::Builder::new()
-            .name("orbitte-progress".into())
+            .name("orbite-progress".into())
             .spawn(move || runner.run(&budget, queue, interval))?;
         Ok(Self {
             wakes,

@@ -277,9 +277,9 @@ def run(args):
 
     def start(role, ordinal):
         env = {**os.environ, 'CUDA_VISIBLE_DEVICES': ','.join(manifest['gpu_uuids']),
-               'LD_PRELOAD': str(args.observer.resolve()), 'ORBITTE_IPC_LOG': str(root/(role+'.native.jsonl'))}
-        if role == 'requester' and mode != 'stale': env['ORBITTE_IPC_HOLD'] = str(root/'release-close')
-        if args.mode == 'sync-healthy': env['ORBITTE_SYNC_OBSERVE'] = '1'
+               'LD_PRELOAD': str(args.observer.resolve()), 'ORBITE_IPC_LOG': str(root/(role+'.native.jsonl'))}
+        if role == 'requester' and mode != 'stale': env['ORBITE_IPC_HOLD'] = str(root/'release-close')
+        if args.mode == 'sync-healthy': env['ORBITE_SYNC_OBSERVE'] = '1'
         command = [str(args.binary.resolve()), role, str(ordinal), str(args.payload), str(root), args.mode, args.memory]
         output = (root/(role+'.stdout')).open('w'); error = (root/(role+'.stderr')).open('w')
         files.extend([output,error])

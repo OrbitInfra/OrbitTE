@@ -51,24 +51,24 @@ class InstalledRailAccounting(unittest.TestCase):
             append('close_context', 2, context=rail, code=0)
         evidence = {}
         for role, pid, base in [('source', 10, 1000), ('requester', 20, 2000)]:
-            lines = [('ORBITTE_INSTALLED_NIC ', dict(name=name, pci=str(i)))
+            lines = [('ORBITE_INSTALLED_NIC ', dict(name=name, pci=str(i)))
                      for i, name in enumerate(self.profile['rails'])]
-            lines += [('ORBITTE_INSTALLED_RAIL_MEMORY ', dict(pid=pid, address=base))]
+            lines += [('ORBITE_INSTALLED_RAIL_MEMORY ', dict(pid=pid, address=base))]
             for phase in range(3):
-                lines.append(('ORBITTE_INSTALLED_ROUND ', dict(phase=0, round=phase, opened_qps=2,
+                lines.append(('ORBITE_INSTALLED_ROUND ', dict(phase=0, round=phase, opened_qps=2,
                     closed_qps=0, reused_qps=phase * 64, completed_grants=(phase + 1) * 64, opened_mrs=4,
                     read_bytes=(phase + 1) * 16 * payload if role == 'requester' and operation == 1 else 0,
                     write_bytes=(phase + 1) * 16 * payload if role == 'requester' and operation == 2 else 0)))
             if role == 'requester':
-                lines += [('ORBITTE_INSTALLED_RAIL_ROUND ', row) for row in summaries]
-            lines.append(('ORBITTE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL, status='passed',
+                lines += [('ORBITE_INSTALLED_RAIL_ROUND ', row) for row in summaries]
+            lines.append(('ORBITE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL, status='passed',
                 role=role, operation=case['operation'], parents=16, payload=payload, rounds=3,
                 full_bytes_and_guards=True, locally_drained=True)))
             result = dict(exit_code=0, child_reaped=True, resource_locks_released=True, native_pid=pid)
             maps = '/lib/libibverbs.so.1\n/lib/libmlx5.so.1\n'
             if role == 'requester':
                 result['fault_library_sha256'] = 'a' * 64
-                maps += '/lib/liborbitte_cq_fault.so\n'
+                maps += '/lib/liborbite_cq_fault.so\n'
             evidence[role] = {'stdout.log': '\n'.join(prefix + json.dumps(row) for prefix, row in lines),
                               'result.json': json.dumps(result), 'maps.txt': maps}
         evidence['requester']['cq-fault-0.jsonl'] = '\n'.join(map(json.dumps, native))
@@ -121,4 +121,4 @@ class InstalledRailAccounting(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 installed.validate({**self.case, **change})
         for role in ('source', 'requester'):
-            self.assertEqual(fault_scope(dict(ORBITTE_HOST_MODE=self.case['mode'], ORBITTE_SHARED_ROLE=role)), role == 'requester')
+            self.assertEqual(fault_scope(dict(ORBITE_HOST_MODE=self.case['mode'], ORBITE_SHARED_ROLE=role)), role == 'requester')

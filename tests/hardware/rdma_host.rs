@@ -7,7 +7,7 @@ use std::sync::Barrier;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbit_te::{
+use orbite::{
     RegisteredMemory, RemoteSegment, SourceEpoch, TransferEngine, TransferOp, TransferRequest,
     Transport,
 };
@@ -47,7 +47,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 const GUARD: usize = 64;
 const ROUNDS: usize = 3;
 const TIMEOUT: Duration = Duration::from_secs(20);
-const PROTOCOL: &str = "orbitte-installed-host-v4";
+const PROTOCOL: &str = "orbite-installed-host-v4";
 
 fn number(name: &str) -> Result<usize> {
     Ok(env::var(name)?.parse()?)
@@ -70,34 +70,34 @@ struct Case {
 impl Case {
     fn load() -> Result<Self> {
         let case = Self {
-            selective: env::var("ORBITTE_HOST_MODE")? == "installed-selective",
-            selector: env::var("ORBITTE_HOST_MODE")?.as_str() == "installed-selector",
-            source: match env::var("ORBITTE_SHARED_ROLE")?.as_str() {
+            selective: env::var("ORBITE_HOST_MODE")? == "installed-selective",
+            selector: env::var("ORBITE_HOST_MODE")?.as_str() == "installed-selector",
+            source: match env::var("ORBITE_SHARED_ROLE")?.as_str() {
                 "source" => true,
                 "requester" => false,
                 _ => return Err("invalid peer role".into()),
             },
-            read: match env::var("ORBITTE_RAIL_OPERATION")?.as_str() {
+            read: match env::var("ORBITE_RAIL_OPERATION")?.as_str() {
                 "read" => true,
                 "write" => false,
                 _ => return Err("invalid operation".into()),
             },
-            parents: number("ORBITTE_HOST_PARENTS")?,
-            payload: number("ORBITTE_HOST_PAYLOAD")?,
-            block: number("ORBITTE_HOST_BLOCK")?,
-            lanes: number("ORBITTE_RDMA_LANES")?,
-            mask: env::var("ORBITTE_RAIL_MASK")?.parse()?,
-            events: match env::var("ORBITTE_RDMA_EVENTS")?.as_str() {
+            parents: number("ORBITE_HOST_PARENTS")?,
+            payload: number("ORBITE_HOST_PAYLOAD")?,
+            block: number("ORBITE_HOST_BLOCK")?,
+            lanes: number("ORBITE_RDMA_LANES")?,
+            mask: env::var("ORBITE_RAIL_MASK")?.parse()?,
+            events: match env::var("ORBITE_RDMA_EVENTS")?.as_str() {
                 "0" => false,
                 "1" => true,
                 _ => return Err("invalid progress mode".into()),
             },
-            rails: env::var("ORBITTE_SHARED_RAILS")?
+            rails: env::var("ORBITE_SHARED_RAILS")?
                 .split(',')
                 .map(str::to_owned)
                 .collect(),
         };
-        let max_block = if env::var("ORBITTE_HOST_MODE")?.as_str() == "installed-inflight-dma" {
+        let max_block = if env::var("ORBITE_HOST_MODE")?.as_str() == "installed-inflight-dma" {
             16 << 20
         } else {
             4 << 20
@@ -173,7 +173,7 @@ fn control(source: bool, bind: SocketAddr, peer: Option<SocketAddr>) -> Result<T
     let stream = if source {
         let listener = TcpListener::bind(bind)?;
         listener.set_nonblocking(true)?;
-        println!("ORBITTE_READY {}", listener.local_addr()?);
+        println!("ORBITE_READY {}", listener.local_addr()?);
         std::io::stdout().flush()?;
         let deadline = Instant::now() + TIMEOUT;
         loop {
@@ -192,7 +192,7 @@ fn control(source: bool, bind: SocketAddr, peer: Option<SocketAddr>) -> Result<T
         TcpStream::connect_timeout(
             &match peer {
                 Some(address) => address,
-                None => env::var("ORBITTE_SHARED_PEER")?.parse()?,
+                None => env::var("ORBITE_SHARED_PEER")?.parse()?,
             },
             TIMEOUT,
         )?
@@ -382,7 +382,7 @@ fn rounds(
                 0
             };
             println!(
-                "ORBITTE_MAPPED_RAIL {{\"round\":{round},\"nic\":{:?},\"allocated\":{},\"alternate_allocated\":{},\"peer_rank\":{rank}}}",
+                "ORBITE_MAPPED_RAIL {{\"round\":{round},\"nic\":{:?},\"allocated\":{},\"alternate_allocated\":{},\"peer_rank\":{rank}}}",
                 selected.device_name, selected.allocated_bytes, other.allocated_bytes
             );
             let caps = stats
@@ -393,7 +393,7 @@ fn rounds(
                 - baseline.completed_writes;
             let cqes = stats.payload_send_cqes - baseline.payload_send_cqes;
             println!(
-                "ORBITTE_SELECTIVE {{\"round\":{round},\"wrs\":{wrs},\"cqes\":{cqes},\"atomics\":{},\"init_limit\":{},\"resp_limit\":{},\"init\":{},\"resp\":{}}}",
+                "ORBITE_SELECTIVE {{\"round\":{round},\"wrs\":{wrs},\"cqes\":{cqes},\"atomics\":{},\"init_limit\":{},\"resp_limit\":{},\"init\":{},\"resp\":{}}}",
                 caps.supports_atomics,
                 caps.initiator_limit,
                 caps.responder_limit,
@@ -439,7 +439,7 @@ fn rounds(
             return Err(format!("native RDMA byte counters disagree: {stats:?}").into());
         }
         println!(
-            "ORBITTE_INSTALLED_ROUND {{\"phase\":{phase},\"round\":{round},\"opened_qps\":{},\"closed_qps\":{},\"reused_qps\":{},\"completed_grants\":{},\"opened_mrs\":{},\"read_bytes\":{},\"write_bytes\":{}}}",
+            "ORBITE_INSTALLED_ROUND {{\"phase\":{phase},\"round\":{round},\"opened_qps\":{},\"closed_qps\":{},\"reused_qps\":{},\"completed_grants\":{},\"opened_mrs\":{},\"read_bytes\":{},\"write_bytes\":{}}}",
             stats.opened_connections,
             stats.closed_connections,
             stats.reused_connections,
@@ -457,7 +457,7 @@ fn rounds(
 
 fn result(case: &Case) -> Result<()> {
     println!(
-        "ORBITTE_INSTALLED_RESULT {{\"protocol\":\"{PROTOCOL}\",\"status\":\"passed\",\"role\":\"{}\",\"operation\":\"{}\",\"parents\":{},\"payload\":{},\"rounds\":{ROUNDS},\"full_bytes_and_guards\":true,\"locally_drained\":true}}",
+        "ORBITE_INSTALLED_RESULT {{\"protocol\":\"{PROTOCOL}\",\"status\":\"passed\",\"role\":\"{}\",\"operation\":\"{}\",\"parents\":{},\"payload\":{},\"rounds\":{ROUNDS},\"full_bytes_and_guards\":true,\"locally_drained\":true}}",
         if case.source { "source" } else { "requester" },
         if case.read { "read" } else { "write" },
         case.parents,
@@ -481,7 +481,7 @@ fn main() -> Result<()> {
         return Err("only --protocol or explicit profile environment is supported".into());
     }
     let case = Case::load()?;
-    match env::var("ORBITTE_HOST_MODE")?.as_str() {
+    match env::var("ORBITE_HOST_MODE")?.as_str() {
         "installed-restart"
         | "installed-interruption"
         | "installed-lost-completion"
@@ -493,7 +493,7 @@ fn main() -> Result<()> {
         | "installed-selective"
         | "installed-selector"
         | "installed-rail-health") => {
-            let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
+            let bind = env::var("ORBITE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;
             let mut stream = control(case.source, bind, None)?;
             let peer = open_peer(&case, &engine, &memory, &mut stream, engine.endpoint())?;
@@ -507,7 +507,7 @@ fn main() -> Result<()> {
             barrier(&mut stream, "closed")?;
             if mode == "installed-rail-health" {
                 println!(
-                    "ORBITTE_RAIL_DRAINED {}",
+                    "ORBITE_RAIL_DRAINED {}",
                     if case.source { "source" } else { "requester" }
                 );
                 Ok(())

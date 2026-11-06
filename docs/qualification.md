@@ -20,7 +20,7 @@ Source CI builds the public consumers for the default, `rdma`, `cuda` and combin
 features on Linux, and checks that native features are rejected on other
 targets; these compile checks exercise no device.
 
-The [S16 reference checks](https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory)
+The [S16 reference checks](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
 compare the frozen C headers, configuration precedence, provider metadata and
 native request/reply bytes on Linux. TCP data fixtures also run against a real
 registered TENT source with guard bytes. These checks supply inputs for S23's
@@ -66,24 +66,24 @@ external output directory; failed runs are kept.
 | C++ classic scatter on RDMA and GPU Direct | Implemented; installed profile unqualified | [Packaged C++ scatter requester and Rust source](#native-c-scatter) | CPU loopback HP-TCP plus CUDA/verbs shim controls |
 | C ABI on GPU and two RNICs | Implemented; installed profile unqualified | Install the packaged libraries on each host, then run the [two-process C hardware gate](#native-c-transfer-engine) with TCP/CUDA or RDMA and two visible NICs. | Installed C loopback CPU controls |
 | Caller-stream local CUDA copy | Implemented; installed profile unqualified | [Packaged comparison on one GPU](#caller-stream-local-cuda-copy) | Linux CUDA shim, byte guards, planning and event retention |
-| CPU-only requester to peer GPU over ordinary TCP | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-gpu-source --output "$ART/source"` and `python3 tests/hardware/build_installed.py --consumer peer-gpu-requester --output "$ART/requester"`. Run `python3 "$ART/source/peer_gpu_tcp_run.py" --source "$ART/source/installed/bin/orbitte-peer-gpu-source" --requester "$ART/requester/installed/bin/orbitte-peer-gpu-requester" --gpu "$GPU_UUID"`. | Separate CPU-only requester and CUDA-shim source processes in CI |
-| Remote staging source controls and Pin capacity (F19/F07) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer staging-control --toolchain stable --output "$ART"`, then `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbitte-staging-control" --gpu "$GPU_UUID"`. For RNIC loopback run `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbitte-staging-control" --gpu "$GPU_UUID" --rdma "$RNIC" "$GID_INDEX"`. Repeat on 1.85.0 using a fresh output directory. | One GPU, loopback TCP and optional RNIC loopback. Hold a real Pin reply while Describe and a competing Pin complete, then verify guarded WRITE/READ and drain. The two-host RDMA pipeline gate remains queued below. |
+| CPU-only requester to peer GPU over ordinary TCP | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-gpu-source --output "$ART/source"` and `python3 tests/hardware/build_installed.py --consumer peer-gpu-requester --output "$ART/requester"`. Run `python3 "$ART/source/peer_gpu_tcp_run.py" --source "$ART/source/installed/bin/orbite-peer-gpu-source" --requester "$ART/requester/installed/bin/orbite-peer-gpu-requester" --gpu "$GPU_UUID"`. | Separate CPU-only requester and CUDA-shim source processes in CI |
+| Remote staging source controls and Pin capacity (F19/F07) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer staging-control --toolchain stable --output "$ART"`, then `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbite-staging-control" --gpu "$GPU_UUID"`. For RNIC loopback run `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbite-staging-control" --gpu "$GPU_UUID" --rdma "$RNIC" "$GID_INDEX"`. Repeat on 1.85.0 using a fresh output directory. | One GPU, loopback TCP and optional RNIC loopback. Hold a real Pin reply while Describe and a competing Pin complete, then verify guarded WRITE/READ and drain. The two-host RDMA pipeline gate remains queued below. |
 | Remote CUDA staging on the current build: requester ring, CROSS windows, shared shards, event loop, concurrent RDMA CROSS, Delegate queries, socket/connection/setup/finish progress, MR publication, QP retirement, host staging location | Implemented; source-accepted | [Pipeline validation](staging.md#installed-pipeline-validation) with `remote_staging: true` | [Pipeline](#bounded-remote-cuda-pipeline), [serial](#serial-remote-cuda-staging) |
-| Legacy NVLink single small copy and exact context restoration | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer nvlink --toolchain stable --output "$ART"`. Run `python3 "$ART/nvlink_run.py" --binary "$ART/installed/bin/orbitte-nvlink" --observer "$ART/libnvlink_observer.so" --binary-sha256 "$BIN_SHA" --observer-sha256 "$OBSERVER_SHA" --devices 0,1 --lock-root "$GPU_LOCK_ROOT" --output "$RUN" --mode sync-healthy --memory device --payload 65536`. Repeat with `--memory host` and a fresh output directory. | Guarded READ/WRITE, native copy, device drain and matching caller bindings. |
+| Legacy NVLink single small copy and exact context restoration | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer nvlink --toolchain stable --output "$ART"`. Run `python3 "$ART/nvlink_run.py" --binary "$ART/installed/bin/orbite-nvlink" --observer "$ART/libnvlink_observer.so" --binary-sha256 "$BIN_SHA" --observer-sha256 "$OBSERVER_SHA" --devices 0,1 --lock-root "$GPU_LOCK_ROOT" --output "$RUN" --mode sync-healthy --memory device --payload 65536`. Repeat with `--memory host` and a fresh output directory. | Guarded READ/WRITE, native copy, device drain and matching caller bindings. |
 | CUDA IPC grouped completion, stream pool, event progress, native batch copy and cache reclamation | Implemented | `nvlink_run.py` batch and cache modes ([recipe](cuda-ipc.md#installed-qualification)) | [Cache](#bounded-cross-submission-cuda-ipc-cache), [subbatches](#bounded-cuda-ipc-subbatches) |
-| Mixed GPU Direct and staged batches, producer readiness | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer mixed-gpu --toolchain stable --output "$ART"`. Run `python3 -B tests/hardware/run.py --profile "$MIXED_GPU_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbitte-mixed-gpu" --output "$RUN"`. Repeat with Rust 1.85.0 in a fresh directory. | [Two-host profile and CPU controls](#mixed-gpu-batches), [producer events](#cuda-producer-readiness) |
+| Mixed GPU Direct and staged batches, producer readiness | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer mixed-gpu --toolchain stable --output "$ART"`. Run `python3 -B tests/hardware/run.py --profile "$MIXED_GPU_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbite-mixed-gpu" --output "$RUN"`. Repeat with Rust 1.85.0 in a fresh directory. | [Two-host profile and CPU controls](#mixed-gpu-batches), [producer events](#cuda-producer-readiness) |
 | CUDA and custom topology, bandwidth-aware and weighted rails, effective link rate, priority, promotion and shared slots, transport selection, QoS and credits on RDMA | Implemented | Installed host and GPU consumers on multi-RNIC hosts, plus matched performance | [Bandwidth](#rdma-bandwidth-selection), [priority](#rdma-request-priority) |
 | Host-shared priority slots, exact NIC slice accounting and automatic receiver credits | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/quota_run.py --artifact "$ART" --nic "$RNIC" --nic-lock "$RNIC_LOCK" --output "$RUN"` | Two packaged processes on a locked RNIC, guarded READ/WRITE, sender and NIC drain |
 | Named NIC masks, endpoint QP pools, merged owners and deadline drops on two physical RNICs | Implemented, installed profile unqualified | Build with `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN"` | [Selector controls](#transport-policy-selection) |
 | Selective RDMA signaling and QP depths on two rails | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --selective --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN/selective"`. For a non-atomic HCA pair run `python3 tests/hardware/selector_run.py --non-atomic --profile "$NON_ATOMIC_HOST_PROFILE" --artifact "$ART" --output "$RUN/non-atomic"`. | Each pinned requester rail, a lower-ranked mapped peer among two source NICs, guarded READ/WRITE, eight WRs and three CQEs per round, and applied depths on both hosts. |
 | RDMA rail cooldown and recovery after physical RoCE data-link loss | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN" --fault-netdev "$DEDICATED_ROCE_NETDEV"` | [Rail health](rdma-cuda.md#rail-health) |
-| GPUDirect GPU source QP/MR reuse (B04) | Implemented; installed profile unqualified | Build `CC=gcc CXX=g++ python3 tests/hardware/build_installed.py --consumer gpu --toolchain stable --output "$ART"`, then run `python3 -B tests/hardware/run.py --require-gpu-source-reuse --profile "$GPU_SOURCE_REUSE_PROFILE" --binary "$ART/installed/bin/orbitte-hardware-peer" --installation "$ART/manifest.json" --gdr-observer "$ART/liborbitte_cq_fault.so" --output "$RUN"`. Repeat with Rust 1.85.0 and fresh output. GPU-source cases require `gpu_source_reuse: true` on two inventoried hosts. This gate must pass before enabling `RdmaConfig::gpu_source_reuse` by default. | CUDA/verbs controls cover key scope, guarded READ/WRITE, unregister during DMA and failed cleanup. |
+| GPUDirect GPU source QP/MR reuse (B04) | Implemented; installed profile unqualified | Build `CC=gcc CXX=g++ python3 tests/hardware/build_installed.py --consumer gpu --toolchain stable --output "$ART"`, then run `python3 -B tests/hardware/run.py --require-gpu-source-reuse --profile "$GPU_SOURCE_REUSE_PROFILE" --binary "$ART/installed/bin/orbite-hardware-peer" --installation "$ART/manifest.json" --gdr-observer "$ART/liborbite_cq_fault.so" --output "$RUN"`. Repeat with Rust 1.85.0 and fresh output. GPU-source cases require `gpu_source_reuse: true` on two inventoried hosts. This gate must pass before enabling `RdmaConfig::gpu_source_reuse` by default. | CUDA/verbs controls cover key scope, guarded READ/WRITE, unregister during DMA and failed cleanup. |
 | GPUDirect host-wide context non-growth | Unqualified | [GPUDirect gate](rdma-cuda.md#gpudirect-rdma-ownership) | [GPUDirect](#gpudirect-rdma) |
-| RDMA terminal QP/MR teardown on the current build | Implemented; installed profile unqualified | Using the packaged host artifact above, run `python3 tests/hardware/run.py --profile "$TWO_RNIC_CLEANUP_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbitte-rdma-host" --output "$RUN/teardown"` with `installed-cleanup-failure` and `installed-memory-cleanup` cases. | [Earlier installed cleanup profiles](installed-host.md#native-cleanup-failure) |
+| RDMA terminal QP/MR teardown on the current build | Implemented; installed profile unqualified | Using the packaged host artifact above, run `python3 tests/hardware/run.py --profile "$TWO_RNIC_CLEANUP_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbite-rdma-host" --output "$RUN/teardown"` with `installed-cleanup-failure` and `installed-memory-cleanup` cases. | [Earlier installed cleanup profiles](installed-host.md#native-cleanup-failure) |
 | P4 InfiniBand profile, physical link/device loss, provider teardown | Unqualified; needs disposable hardware | [Installed host](installed-host.md) | [P4 review](#p4-independent-review) |
 | CUDA↔file through DRAM staging, pinned slots and exact caller contexts | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer storage-cuda --toolchain stable --output "$ART"`. Run `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | Native pinned slot, charged oversized fallback, absent/custom caller binding and full guarded bytes. [Shim and real-file controls](#local-file-segments) |
 | Native GDS / NVMe ext4 with nvidia-fs | Implemented, installed profile unqualified | `python3 "$ART/gds_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | cuFile and CUDA shim controls |
-| Engine failover after RDMA bootstrap rejection | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `ORBITTE_FAILOVER_NIC="$RNIC" "$ART/installed/bin/orbitte-rdma-host" --failover` | Real RNIC baseline, one rejected grant, TCP bytes and guards |
+| Engine failover after RDMA bootstrap rejection | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `ORBITE_FAILOVER_NIC="$RNIC" "$ART/installed/bin/orbite-rdma-host" --failover` | Real RNIC baseline, one rejected grant, TCP bytes and guards |
 | SHM | Qualified on same-host Linux CI for POSIX DRAM | [Physical CXL gate](#shared-memory-and-cxl-verification) | CXL unrun |
 | HP-TCP | Qualified for DRAM on IPv4 loopback | [Physical two-rail gate](#hp-tcp-rail-verification) | Physical profile unrun |
 | MNNVL fabric and EGM | Implemented; installed profile unqualified | [Two-node fabric gate](#multi-node-nvlink-fabric) | VMM table and stream/event shims |
@@ -98,7 +98,7 @@ qualified in CI and do not wait here.
 Build the following artifacts on the source and requester respectively.
 Use a routed RNIC, a free control endpoint and a requester `MC_TENT_CONF`
 whose memory policy selects RDMA. The requester must use registered host
-memory. Keep `ORBITTE_RDMA_SLICE_BYTES` unset for the default three slices.
+memory. Keep `ORBITE_RDMA_SLICE_BYTES` unset for the default three slices.
 
 ```bash
 python3 tests/hardware/build_installed.py --consumer gpu --toolchain stable --output "$SOURCE_ART"
@@ -108,15 +108,15 @@ python3 tests/hardware/build_installed.py --consumer cpp-abi --toolchain stable 
 On the source, then the requester, use the address printed by the source.
 
 ```bash
-"$SOURCE_ART/installed/bin/orbitte-hardware-peer" source "$BIND" "$RNIC" "$GID_INDEX" cpu 4096 37 rdma
-"$REQUESTER_ART/installed/bin/orbitte-cpp-hardware" "$SOURCE_ENDPOINT" cpu
+"$SOURCE_ART/installed/bin/orbite-hardware-peer" source "$BIND" "$RNIC" "$GID_INDEX" cpu 4096 37 rdma
+"$REQUESTER_ART/installed/bin/orbite-cpp-hardware" "$SOURCE_ENDPOINT" cpu
 ```
 
 For a directly registered GPU source run:
 
 ```bash
-MLX5_SCATTER_TO_CQE=0 ORBITTE_RDMA_CUDA_MEMORY=direct "$SOURCE_ART/installed/bin/orbitte-hardware-peer" source "$BIND" "$RNIC" "$GID_INDEX" cuda:0 4096 37 rdma
-"$REQUESTER_ART/installed/bin/orbitte-cpp-hardware" "$SOURCE_ENDPOINT" cuda
+MLX5_SCATTER_TO_CQE=0 ORBITE_RDMA_CUDA_MEMORY=direct "$SOURCE_ART/installed/bin/orbite-hardware-peer" source "$BIND" "$RNIC" "$GID_INDEX" cuda:0 4096 37 rdma
+"$REQUESTER_ART/installed/bin/orbite-cpp-hardware" "$SOURCE_ENDPOINT" cuda
 ```
 
 The clients check every payload byte and guard on each host. The requester
@@ -137,15 +137,15 @@ hostname. For RDMA, expose two RNICs and enable both ordinary TCP and RDMA.
 On the source and requester respectively run:
 
 ```bash
-"$ART/installed/bin/orbitte-c-hardware" source rdma '*'
-"$ART/installed/bin/orbitte-c-hardware" requester rdma '*' "$SOURCE_ENDPOINT"
+"$ART/installed/bin/orbite-c-hardware" source rdma '*'
+"$ART/installed/bin/orbite-c-hardware" requester rdma '*' "$SOURCE_ENDPOINT"
 ```
 
 Repeat with `cuda:0` in place of `'*'` for GPU Direct. For CUDA via TCP run:
 
 ```bash
-"$ART/installed/bin/orbitte-c-hardware" source tcp cuda:0
-"$ART/installed/bin/orbitte-c-hardware" requester tcp cuda:0 "$SOURCE_ENDPOINT"
+"$ART/installed/bin/orbite-c-hardware" source tcp cuda:0
+"$ART/installed/bin/orbite-c-hardware" requester tcp cuda:0 "$SOURCE_ENDPOINT"
 ```
 
 Use the endpoint printed by the source. The client checks both guards and
@@ -185,7 +185,7 @@ with an incomplete request. Real TCP and io_uring, the RDMA and CUDA shims,
 and the cuFile table check transport attribution at their executing owners.
 The release control in `tests/metrics/overhead.rs` compares empty CPU submissions, a physical owner that expires before payload I/O,
 and guarded 64-byte and 4 MiB TCP, HP-TCP and SHM same-host READs and WRITEs with metrics compiled out, configured
-off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the original TCP measurements. The [same-host comparison](https://github.com/OrbitInfra/OrbitTE/pull/145) includes all three transports and both sizes. The [HP-TCP comparison](hp-tcp.md#rails-and-ownership) reports same-host medians for rotating and least-loaded lanes. Physical
+off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbiTE/pull/138) records the original TCP measurements. The [same-host comparison](https://github.com/OrbitInfra/OrbiTE/pull/145) includes all three transports and both sizes. The [HP-TCP comparison](hp-tcp.md#rails-and-ownership) reports same-host medians for rotating and least-loaded lanes. Physical
 NIC and GPU performance remains unmeasured.
 
 ## Multi-node NVLink fabric
@@ -225,7 +225,7 @@ and the [NVLink counter definitions](https://docs.nvidia.com/deploy/nvidia-smi/i
 
 ## Shared memory and CXL verification
 
-The [Linux CI runs](https://github.com/OrbitInfra/OrbitTE/pull/145/checks) include `Install and exercise same-host SHM with POSIX names and a tmpfs directory`, which
+The [Linux CI runs](https://github.com/OrbitInfra/OrbiTE/pull/145/checks) include `Install and exercise same-host SHM with POSIX names and a tmpfs directory`, which
 builds a packaged consumer on stable and Rust 1.85. Two processes perform 1,048,583-byte
 READs and WRITEs, check both guards and read-only denial, and verify the source name
 was removed. The lifetime suite repeats 50 times, including process death with a live
@@ -237,8 +237,8 @@ Linux CXL region. The driver checks the actual mapped inode's DAX flag and verif
 that its pmem resource range lies inside the selected CXL region.
 
 ```bash
-python3 tests/hardware/build_installed.py --consumer shm --output /tmp/orbitte-shm-installed
-python3 /tmp/orbitte-shm-installed/shm_run.py --binary /tmp/orbitte-shm-installed/installed/bin/orbitte-shm \
+python3 tests/hardware/build_installed.py --consumer shm --output /tmp/orbite-shm-installed
+python3 /tmp/orbite-shm-installed/shm_run.py --binary /tmp/orbite-shm-installed/installed/bin/orbite-shm \
   --cxl "$CXL_MOUNT_PATH" --region "$CXL_REGION"
 ```
 
@@ -254,8 +254,8 @@ the resulting binary at the same absolute path. Run the driver on the
 requester with two IPv4 addresses per host, ordered by their static pairing.
 
 ```bash
-python3 tests/hardware/build_installed.py --consumer hp-tcp --output /tmp/orbitte-hp-installed
-python3 tests/hardware/hp_tcp_run.py --binary /tmp/orbitte-hp-installed/installed/bin/orbitte-hp-tcp \
+python3 tests/hardware/build_installed.py --consumer hp-tcp --output /tmp/orbite-hp-installed
+python3 tests/hardware/hp_tcp_run.py --binary /tmp/orbite-hp-installed/installed/bin/orbite-hp-tcp \
   --source-ssh "$SOURCE_SSH" --source-rails "$SOURCE_RAIL_A,$SOURCE_RAIL_B" \
   --requester-rails "$REQUESTER_RAIL_A,$REQUESTER_RAIL_B"
 ```
@@ -282,15 +282,15 @@ holds an admitted write while the pathname is replaced and close times out.
 The test checks the entire original and replacement files, then verifies fd
 release and slot reuse after drain. The same tests run in the Linux feature
 matrix. All `io-uring` feature sets require a live kernel
-ring (`ORBITTE_REQUIRE_IO_URING=1`), ext4 direct I/O and tmpfs buffered I/O.
+ring (`ORBITE_REQUIRE_IO_URING=1`), ext4 direct I/O and tmpfs buffered I/O.
 **DRAM/file io_uring is qualified on Linux CI.** At `b9fb99a` (#128),
 `real_files_move_full_bytes_on_ext4_and_tmpfs` checked READ and WRITE
 payloads and guards on both filesystems. The suite also covered EOF/truncation,
 short submission, syscall failure, queued cancellation, QoS, deadlines and
-concurrent close. [Stable job](https://github.com/OrbitInfra/OrbitTE/actions/runs/41639331592/job/125928520140) · [Rust 1.85 job](https://github.com/OrbitInfra/OrbitTE/actions/runs/41639331592/job/125928520599)
+concurrent close. [Stable job](https://github.com/OrbitInfra/OrbiTE/actions/runs/41639331592/job/125928520140) · [Rust 1.85 job](https://github.com/OrbitInfra/OrbiTE/actions/runs/41639331592/job/125928520599)
 
 On main after the storage closeout (`017654d`), the same real-file test passed on
-[stable](https://github.com/OrbitInfra/OrbitTE/actions/runs/41671078266/job/126039289755) and [Rust 1.85](https://github.com/OrbitInfra/OrbitTE/actions/runs/41671078266/job/126039289814).
+[stable](https://github.com/OrbitInfra/OrbiTE/actions/runs/41671078266/job/126039289755) and [Rust 1.85](https://github.com/OrbitInfra/OrbiTE/actions/runs/41671078266/job/126039289814).
 
 Vectored host controls on ext4 and tmpfs check guarded ranges, zero-filled
 gaps and tails, and the exact prefix after truncation inside a gap. The loader audit runs disabled,
@@ -911,10 +911,10 @@ rejected the concurrency control with `ResourceExhausted`; that failed control
 is preserved, and the accepted control uses the existing default RDMA budgets.
 Independent source review accepts `3db26ee` for this source/CPU ownership scope.
 `independent-review/source-review-3db26ee.json` binds the frozen source, diff
-and 16 passing independent gates. [CI](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594882)
+and 16 passing independent gates. [CI](https://github.com/OrbitInfra/OrbiTE/actions/runs/40835594882)
 passes all eight feature/compiler combinations; the
-[frozen TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594607)
-and [documentation checks](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594687)
+[frozen TENT CPU comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/40835594607)
+and [documentation checks](https://github.com/OrbitInfra/OrbiTE/actions/runs/40835594687)
 also pass for that source. No new hardware task is requested.
 Installed v19 execution, physical overlap and performance remain unqualified.
 The requester event-loop substage above supersedes the local window barrier.
@@ -942,7 +942,7 @@ tails, self-peer admission and final POST drain controls remain.
 Evidence is stored outside Git at
 `/root/orbitte-artifacts/async-cross-20261029/`.
 Independent review accepts the production source contract at
-[`4441017`](https://github.com/OrbitInfra/OrbitTE/commit/444101700732e33098329962d689aff82fac2b3c).
+[`4441017`](https://github.com/OrbitInfra/OrbiTE/commit/444101700732e33098329962d689aff82fac2b3c).
 Stable and Rust 1.85 combined runs with the integrated panic regression each pass
 303 unit tests, eight integration tests and one doctest; CUDA-only tests/Clippy,
 combined Clippy, all 50 hardware controller controls, the CPU trace fixture and
@@ -974,7 +974,7 @@ retirement failures retain actual owners and admissions after ordinary reference
 drop; MR controls cover both sides, directions and depths one and three.
 
 Independent review accepts the source contract at
-[`c87c403`](https://github.com/OrbitInfra/OrbitTE/commit/c87c403fd021872c3bd68fde55078bd6bdead9bb),
+[`c87c403`](https://github.com/OrbitInfra/OrbiTE/commit/c87c403fd021872c3bd68fde55078bd6bdead9bb),
 whose production and installed-consumer inputs are unchanged from `027efad`.
 Stable and Rust 1.85 combined runs each pass 299 unit tests, eight integration
 tests and one doctest; all-target Clippy, 50 hardware-controller controls and
@@ -1007,7 +1007,7 @@ failure. Source controls cover asymmetric chunks/tails, simultaneous opposite
 directions, shared-pool exhaustion, IPC/RDMA interlocks and sticky native failure.
 
 Independent review accepts the source contract at
-[`460d825`](https://github.com/OrbitInfra/OrbitTE/commit/460d825d6438fc70883e7acd61a83d099406b3e7),
+[`460d825`](https://github.com/OrbitInfra/OrbiTE/commit/460d825d6438fc70883e7acd61a83d099406b3e7),
 whose production and installed-consumer inputs are unchanged from `fc183ab`.
 Stable and Rust 1.85 combined runs each pass 294 unit tests, eight integration
 tests and one doctest. Targeted Clippy, wire-v19 relay, all 50 hardware-controller
@@ -1032,7 +1032,7 @@ hardware qualification. Broader location scheduling and performance remain open.
 ## Bounded remote CUDA pipeline
 
 Clean stable 1.99.1 and Rust 1.85.0 installed consumers from
-[`c0f6a9e`](https://github.com/OrbitInfra/OrbitTE/commit/c0f6a9e3517f7b6999b1238e652fb7db77b96d43)
+[`c0f6a9e`](https://github.com/OrbitInfra/OrbiTE/commit/c0f6a9e3517f7b6999b1238e652fb7db77b96d43)
 pass 24 cases on two fresh physical H20 hosts. Each compiler covers TCP/RDMA,
 CPU/GPU requesters, both host directions, asymmetric caps, negotiated widths
 1/2/3/4/16 and a cap shortened by the request's chunk count. Main pipeline
@@ -1059,7 +1059,7 @@ The unchanged 16-slot RDMA case performs 300 CROSS operations. It exposed
 native MW index reuse exhausting the low-byte key tags. The PD now retains an
 exhausted, never-bound MW while allocating another index; key history remains
 intact and bounded. Both compiler runs show 300 binds/invalidations, one index
-rollover and zero final live/retained windows. This is OrbitTE's authorization
+rollover and zero final live/retained windows. This is OrbiTE's authorization
 lifetime mechanism; it is not a claim that TENT uses the same key policy.
 Accepted control sockets also disable Nagle. CROSS setup errors now use the
 nested transport epoch; a socket close may still precede delivery of the error.
@@ -1101,12 +1101,12 @@ nonce-only replies could accept a repeated prior receipt as final completion;
 success replies now echo the full operation and range. The retained failing
 control and current source-gate evidence live outside Git in
 `/root/orbitte-artifacts/proxy-remote-20261028/`. Independent review accepts source
-correctness at [`64c9899`](https://github.com/OrbitInfra/OrbitTE/commit/64c9899fa088898b01000fe87ccb924bed356c32),
+correctness at [`64c9899`](https://github.com/OrbitInfra/OrbiTE/commit/64c9899fa088898b01000fe87ccb924bed356c32),
 including a fresh real TCP relay control that repeats the previous phase receipt
 while withholding Unpin. Both directions reject early completion. The review
 record is `independent-review/final-source-review.json` in that artifact root.
 Production code is unchanged in the clean installed consumers from
-[`9f2ad39`](https://github.com/OrbitInfra/OrbitTE/commit/9f2ad3967ee9d12f16c13a87050c41a71268e567).
+[`9f2ad39`](https://github.com/OrbitInfra/OrbiTE/commit/9f2ad3967ee9d12f16c13a87050c41a71268e567).
 The consumer now waits for its first submission to drain before reusing the
 single batch admission slot. An earlier run correctly returned
 `ResourceExhausted` when the fixture overlapped two submissions; that failed
@@ -1163,10 +1163,10 @@ C++/Rust wire interoperability remain open. See
 
 ## Local CUDA staging chunks
 
-Production source [`37e99ae`](https://github.com/OrbitInfra/OrbitTE/commit/37e99ae7bb5f2415a0a4fdd3f77bc25c9ffea477)
+Production source [`37e99ae`](https://github.com/OrbitInfra/OrbiTE/commit/37e99ae7bb5f2415a0a4fdd3f77bc25c9ffea477)
 introduces one engine-owned `ProxyManager` pool shared by TCP and staged RDMA.
 Clean installed consumers from
-[`e44a6d1`](https://github.com/OrbitInfra/OrbitTE/commit/e44a6d117a18f2770984f0da41bb2419dd6782cf)
+[`e44a6d1`](https://github.com/OrbitInfra/OrbiTE/commit/e44a6d117a18f2770984f0da41bb2419dd6782cf)
 include corrected fixture accounting and native-ledger lifetime validation;
 production code is unchanged between those commits.
 
@@ -1225,7 +1225,7 @@ complete P5 or full TENT ProxyManager parity. See [local staging](staging.md).
 
 ## Bounded cross-submission CUDA IPC cache
 
-Source [`7da43b2`](https://github.com/OrbitInfra/OrbitTE/commit/7da43b21db8fbee69018830228deaab3f5f13206)
+Source [`7da43b2`](https://github.com/OrbitInfra/OrbiTE/commit/7da43b21db8fbee69018830228deaab3f5f13206)
 adds opt-in transport-owned imports across submissions. Concurrent first users
 share one bounded entry; each reuse rechecks source authority. A separate export
 owner holds the actual registration, whole allocation and physical charge until
@@ -1291,7 +1291,7 @@ existing limits. This substage does not establish complete P5 or TENT parity.
 
 ## Local pinned host CUDA IPC
 
-Source [`9adf5a5`](https://github.com/OrbitInfra/OrbitTE/commit/9adf5a5eabb8bb5b8dce312ba10d77275da75ab1)
+Source [`9adf5a5`](https://github.com/OrbitInfra/OrbiTE/commit/9adf5a5eabb8bb5b8dce312ba10d77275da75ab1)
 qualifies local owned pinned host READ/WRITE against remote owned GPU exports,
 including mixed host/GPU requester groups on one native context. It follows
 frozen TENT's local DRAM/GPU and remote CUDA-only distinction. Ordinary/external
@@ -1342,7 +1342,7 @@ exporter crashes and native GPU cleanup faults remain open. See [the contract](c
 
 ## Bounded CUDA IPC subbatches
 
-Source [`818b53e`](https://github.com/OrbitInfra/OrbitTE/commit/818b53ebac70b1e53257c5e82161b927f4c4bb63)
+Source [`818b53e`](https://github.com/OrbitInfra/OrbiTE/commit/818b53ebac70b1e53257c5e82161b927f4c4bb63)
 qualifies reuse of one import by consecutive requests in a single submission.
 Two distinct owned requester allocations sharing one native CUDA context issue
 three slices in input order. Each slice drains its own event; native import
@@ -1404,7 +1404,7 @@ open. See [the ownership contract](cuda-ipc.md) and the
 
 ## Cooperative CUDA IPC and NVLink
 
-Source [`e19b3a5`](https://github.com/OrbitInfra/OrbitTE/commit/e19b3a5100f9eac37852db2d47437f6321b5862f)
+Source [`e19b3a5`](https://github.com/OrbitInfra/OrbiTE/commit/e19b3a5100f9eac37852db2d47437f6321b5862f)
 qualifies the initial cooperative, owned GPU/GPU path on two physical H20 hosts.
 Each host runs separate exporter/requester processes on its local GPU 0/1,
 in both directions; their topology reports NV18. No cross-host GPU IPC or
@@ -1465,7 +1465,7 @@ open for those requirements; this substage does not establish full TENT parity.
 
 ## GPUDirect RDMA
 
-Source [`cda0fdf`](https://github.com/OrbitInfra/OrbitTE/commit/cda0fdf16aec7b128e21c60fa860c340c164cf03)
+Source [`cda0fdf`](https://github.com/OrbitInfra/OrbiTE/commit/cda0fdf16aec7b128e21c60fa860c340c164cf03)
 qualifies explicit Direct RDMA for owned `CudaMemory` on two physical H20 hosts,
 using one
 selected GPU and two locked mlx5 RoCEv2 RNICs per host. Both stable 1.99.1 and
@@ -1521,7 +1521,7 @@ See the [ownership and reproduction contract](rdma-cuda.md#gpudirect-rdma-owners
 
 ## CUDA copy streams and completion events
 
-Source [`ce86269`](https://github.com/OrbitInfra/OrbitTE/commit/ce86269d38ce766d4aadd79c7dc245c7ce013699)
+Source [`ce86269`](https://github.com/OrbitInfra/OrbiTE/commit/ce86269d38ce766d4aadd79c7dc245c7ce013699)
 adds owned, serialized copy streams/events. Both stable 1.99.1 and Rust 1.85
 pass 233 unit tests, eight integration tests, one doctest and all-feature Clippy.
 The CUDA controls delay actual shim copies until completion, reject premature
@@ -1560,7 +1560,7 @@ producer integration remain P5 work.
 ## P4 independent review
 
 An independent reviewer inspected exact main
-[`121ab95`](https://github.com/OrbitInfra/OrbitTE/commit/121ab95a77f94a80286617c4a2032654e692f9b4)
+[`121ab95`](https://github.com/OrbitInfra/OrbiTE/commit/121ab95a77f94a80286617c4a2032654e692f9b4)
 against frozen TENT `e2d6e8e` on 2026-10-27. The accepted scope is the reviewed
 source and bounded RoCE evidence, including fresh independent live repetition. No blocking production-code finding
 was reported. One stale architecture statement about installed-consumer
@@ -1589,7 +1589,7 @@ P5 work with available hardware while keeping these gaps explicit.
 
 ## Installed automatic discovery
 
-Source [`36890c8`](https://github.com/OrbitInfra/OrbitTE/commit/36890c87b71c56922149824633d5b5811bc479e4)
+Source [`36890c8`](https://github.com/OrbitInfra/OrbiTE/commit/36890c87b71c56922149824633d5b5811bc479e4)
 passes four frozen two-host configurations: READ/polling and WRITE/events with
 stable 1.99.1, then both in the reverse direction with Rust 1.85.0. Each process
 leaves device, port and GID pins unset and selects within its two locked mlx5
@@ -1597,7 +1597,7 @@ RNICs. An identical blacklist confirms whitelist precedence. Before normal
 registration, a separate engine attempts a 64-byte registration with absent
 strict GID 255; registration returns `Unavailable`, and close leaves no owners.
 
-A packaged, hash-pinned collector reads sysfs without importing OrbitTE's
+A packaged, hash-pinned collector reads sysfs without importing OrbiTE's
 selection code. Before/after inventories must match under the original resource
 locks. Published PCI addresses, NUMA nodes, port state, RoCEv2 GIDs, physical
 network interfaces/indices and memory priority tiers agree with that inventory.
@@ -1629,7 +1629,7 @@ existing stages and acceptance gates.
 
 ## Installed physical rail accounting
 
-Source [`cc6ab0f`](https://github.com/OrbitInfra/OrbitTE/commit/cc6ab0fe0092c0d1d06792bb7190f48832f0eae9)
+Source [`cc6ab0f`](https://github.com/OrbitInfra/OrbiTE/commit/cc6ab0fe0092c0d1d06792bb7190f48832f0eae9)
 passes four frozen two-host configurations: READ/polling and WRITE/events with
 stable 1.99.1, then both cases in the reverse physical direction with Rust
 1.85.0. Both peers use two distinct mlx5 PCI RNICs on RoCEv2. The ordinary
@@ -1663,7 +1663,7 @@ Physical link/device loss, InfiniBand and independent acceptance remain open.
 
 ## Current source delivery
 
-Source [`9e1fdea`](https://github.com/OrbitInfra/OrbitTE/commit/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578)
+Source [`9e1fdea`](https://github.com/OrbitInfra/OrbiTE/commit/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578)
 retains initially paused contexts and reselects automatic GIDs during recovery,
 following the frozen TENT context lifecycle. Persistent MRs remain on the same
 PD; explicit pins and physical drain still gate route publication. Public API
@@ -1671,9 +1671,9 @@ and wire v14 are unchanged. The preceding `4fbe01d` delivery reorganizes context
 ownership and records the [source audit](architecture.md#p4-source-audit).
 
 Stable 1.99.1 and Rust 1.85.0 each pass all-feature Clippy and **239
-CPU/integration/doc tests**. The [eight-variant CI](https://github.com/OrbitInfra/OrbitTE/actions/runs/40448463937),
-[frozen TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/40448463956)
-and [documentation checks](https://github.com/OrbitInfra/OrbitTE/actions/runs/40448463913)
+CPU/integration/doc tests**. The [eight-variant CI](https://github.com/OrbitInfra/OrbiTE/actions/runs/40448463937),
+[frozen TENT CPU comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/40448463956)
+and [documentation checks](https://github.com/OrbitInfra/OrbiTE/actions/runs/40448463913)
 pass for that delivery. Local manifests and logs are in
 `/root/orbitte-artifacts/rdma-context-recovery-20261027/delivery.json`.
 
@@ -1681,7 +1681,7 @@ pass for that delivery. Local manifests and logs are in
 
 The [native context/GID gate](rdma-cuda.md#initially-paused-contexts-and-gid-reselection)
 now passes on one physical mlx5 RoCE RNIC with stable 1.99.1 and Rust
-1.85.0. Execution source is [`bde9284`](https://github.com/OrbitInfra/OrbitTE/commit/bde9284a950dd93bfa4069061ddb54943af0cc61);
+1.85.0. Execution source is [`bde9284`](https://github.com/OrbitInfra/OrbiTE/commit/bde9284a950dd93bfa4069061ddb54943af0cc61);
 its runtime, fixtures and Cargo inputs are identical to `9e1fdea`. Each
 binary runs automatic and strict-pin cases: GID 0 changes to 3 only in
 automatic mode, both cases complete two pause/drain/resume cycles with
@@ -1727,7 +1727,7 @@ scoped to its own artifact; independent acceptance is still open.
 ### Installed in-flight DMA fixture
 
 The [installed in-flight profile](installed-host.md#in-flight-dma-interruption)
-passes with source [`56edccc`](https://github.com/OrbitInfra/OrbitTE/commit/56edcccd3c94d6504b5f65f8cb14f66051cbdc10):
+passes with source [`56edccc`](https://github.com/OrbitInfra/OrbiTE/commit/56edcccd3c94d6504b5f65f8cb14f66051cbdc10):
 stable 1.99.1 READ/polling with one 4 MiB WR, and Rust 1.85 WRITE/events with
 one 16 MiB WR. Both use two registered mlx5 contexts and one active RoCE rail.
 The actual failed WC and successful QP destruction identify the accepted
@@ -1755,7 +1755,7 @@ Four frozen cases pass on **two distinct physical hosts**, each with eight H20
 GPUs and two selected 400G mlx5 RoCE RNICs. The tests use host memory only.
 Both installed artifacts were built from `56edccc`; their runtime and native
 fixtures are identical to controller source
-[`9a6c270`](https://github.com/OrbitInfra/OrbitTE/commit/9a6c27056ea4a68855b296cfa03ead1607dc7e86).
+[`9a6c270`](https://github.com/OrbitInfra/OrbiTE/commit/9a6c27056ea4a68855b296cfa03ead1607dc7e86).
 Stable 1.99.1 runs READ/polling on rail mask 1; Rust 1.85 runs WRITE/events in
 the opposite direction on mask 2. Each artifact runs one 64 KiB requester QP
 cleanup-failure case and one in-flight DMA case (4 MiB READ or 16 MiB WRITE).
@@ -1786,9 +1786,9 @@ and the remaining [P4 gates](completion-plan.md#p4-remaining-delivery) stay open
 
 The [installed MR/MW gate](installed-host.md#mrmw-cleanup-and-engine-replacement)
 passes **six frozen two-host cases**, three on each compiler artifact built
-from [`1428138`](https://github.com/OrbitInfra/OrbitTE/commit/1428138b83a1ef16b55053d7f83a7c7eefcb80c3).
+from [`1428138`](https://github.com/OrbitInfra/OrbiTE/commit/1428138b83a1ef16b55053d7f83a7c7eefcb80c3).
 Controller source is
-[`b83dbc3`](https://github.com/OrbitInfra/OrbitTE/commit/b83dbc32867cb434e130e8ec3b3b9b4d50fd1d33);
+[`b83dbc3`](https://github.com/OrbitInfra/OrbiTE/commit/b83dbc32867cb434e130e8ec3b3b9b4d50fd1d33);
 its runtime and native consumer sources are identical to those packages.
 The two physical hosts and locked mlx5 RoCE devices are the same separately
 inventoried allocation used above. Stable 1.99.1 runs A to B; Rust 1.85 runs
@@ -1836,7 +1836,7 @@ It adds no GPU payload, performance or TENT wire/API compatibility claim.
 
 The [CQ/channel/PD gate](installed-host.md#cq-completion-channel-and-pd-dependency-failures)
 passes **six frozen two-host cases**, three on each compiler artifact built
-from [`78127d7`](https://github.com/OrbitInfra/OrbitTE/commit/78127d7c12aa05789308d0974fa9cd22c84274b0).
+from [`78127d7`](https://github.com/OrbitInfra/OrbiTE/commit/78127d7c12aa05789308d0974fa9cd22c84274b0).
 Stable 1.99.1 runs A to B; Rust 1.85 runs B to A on the same independently
 inventoried hosts and locked mlx5 RoCE RNICs. Each case has one requester,
 one 64 KiB payload, one QP/active rail, two registered contexts and two process
@@ -1888,14 +1888,14 @@ providers, workload, controls and limits.
 
 | Profile and frozen source | Recorded scope | External directory and detailed record |
 | --- | --- | --- |
-| Installed lost completion — `02c15bd` | Across both compiler artifacts: 40 two-host/two-RNIC configurations, including 32 completion-loss cases. The tool observes actual successful payload CQEs, withholds them from the engine, then supervises peer death and survivor drain/reconnect. | `rdma-installed-completion-20261026`; [record](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#latest-installed-lost-completion-delivery) |
-| Installed posted-RQ interruption — `c27029c` | Peer death after real completion receives and MWs are posted, before the requester receives payload authority. The surviving engine keeps its PD/MRs. | `rdma-installed-interruption-20261026`; [record](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-installed-posted-rq-interruption-delivery) |
-| Installed peer restart — `0b6229c` | Idle persistent-resource restart with one surviving engine; old epochs are rejected before new native payload work. | `rdma-installed-failures-20261026`; [record](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-installed-peer-restart-delivery) |
-| Native cleanup — `d5514d4` | Across both compiler artifacts: 44 configurations. Actual QP destructor EIO and completion-channel EBUSY, with CQ/PD and MR/MW regressions, verify retained owners and fresh-process recovery. | `rdma-native-cleanup-20261026`; [record](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-native-cleanup-delivery) |
-| Installed healthy host — `ba09b1f` | 72 configurations across two compiler artifacts: READ/WRITE, both directions, polling/events, widths 1/3, rail masks 1/2/3 and selected 12/16/32-parent workloads. | `rdma-installed-host-20261026`; [record](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-installed-host-delivery) |
-| Periodic monitor recovery — `08fb8ac` | Across both compiler artifacts: 276 public configurations, including 64 process-local query-failure recovery cases, plus 32 internal shared-QP cases. PD/MRs and healthy-rail QPs survive drained-lane replacement. | `rdma-monitor-recovery-20261026`; [record](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-periodic-monitor-recovery-delivery) |
-| Fixed-width cold construction — `2d44743` | Concurrent first requests reserve bounded array slots before native QP creation; subsequent rounds reuse the published connections. | `rdma-cold-connections-20261026`; [record](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-fixed-width-cold-construction-delivery) |
-| Public concurrent grants — `8511c53` | Public v14 grants share physical QPs with separate grant/SQ/RQ limits and exact completion dispatch. | `rdma-public-qp-20261026`; [record](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-public-concurrent-grant-delivery) |
+| Installed lost completion — `02c15bd` | Across both compiler artifacts: 40 two-host/two-RNIC configurations, including 32 completion-loss cases. The tool observes actual successful payload CQEs, withholds them from the engine, then supervises peer death and survivor drain/reconnect. | `rdma-installed-completion-20261026`; [record](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#latest-installed-lost-completion-delivery) |
+| Installed posted-RQ interruption — `c27029c` | Peer death after real completion receives and MWs are posted, before the requester receives payload authority. The surviving engine keeps its PD/MRs. | `rdma-installed-interruption-20261026`; [record](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-installed-posted-rq-interruption-delivery) |
+| Installed peer restart — `0b6229c` | Idle persistent-resource restart with one surviving engine; old epochs are rejected before new native payload work. | `rdma-installed-failures-20261026`; [record](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-installed-peer-restart-delivery) |
+| Native cleanup — `d5514d4` | Across both compiler artifacts: 44 configurations. Actual QP destructor EIO and completion-channel EBUSY, with CQ/PD and MR/MW regressions, verify retained owners and fresh-process recovery. | `rdma-native-cleanup-20261026`; [record](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-native-cleanup-delivery) |
+| Installed healthy host — `ba09b1f` | 72 configurations across two compiler artifacts: READ/WRITE, both directions, polling/events, widths 1/3, rail masks 1/2/3 and selected 12/16/32-parent workloads. | `rdma-installed-host-20261026`; [record](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-installed-host-delivery) |
+| Periodic monitor recovery — `08fb8ac` | Across both compiler artifacts: 276 public configurations, including 64 process-local query-failure recovery cases, plus 32 internal shared-QP cases. PD/MRs and healthy-rail QPs survive drained-lane replacement. | `rdma-monitor-recovery-20261026`; [record](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-periodic-monitor-recovery-delivery) |
+| Fixed-width cold construction — `2d44743` | Concurrent first requests reserve bounded array slots before native QP creation; subsequent rounds reuse the published connections. | `rdma-cold-connections-20261026`; [record](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-fixed-width-cold-construction-delivery) |
+| Public concurrent grants — `8511c53` | Public v14 grants share physical QPs with separate grant/SQ/RQ limits and exact completion dispatch. | `rdma-public-qp-20261026`; [record](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-public-concurrent-grant-delivery) |
 
 These are scoped correctness results. Lost CQEs after successful DMA do not
 prove interruption of in-flight DMA. Query-failure injection and QP ERR do not
@@ -1903,9 +1903,9 @@ prove physical cable/device loss. Native libtest cleanup faults do not qualify
 an installed public consumer's cleanup-failure path. RoCE does not qualify
 InfiniBand, GPU direct transfer or throughput/fairness.
 
-The [earlier evidence index](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-qualified-native-source-concurrent-grant-records)
+The [earlier evidence index](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/qualification.md#previous-qualified-native-source-concurrent-grant-records)
 preserves the preceding QP ownership, worker pool, CQ lane, multirail,
-MR/MW-failure and live-recovery records. The [historical RDMA guide](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/rdma-cuda.md)
+MR/MW-failure and live-recovery records. The [historical RDMA guide](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/rdma-cuda.md)
 retains their exact recipes and external artifact locations. Old protocol
 names, filenames and remaining-work lists describe those revisions only.
 
@@ -1948,7 +1948,7 @@ retain their existing stages. OrbitKV integration follows accepted P4.
 ## Historical record preservation
 
 The documentation cleanup preserves the complete pre-cleanup pages at
-[source `9e1fdea`](https://github.com/OrbitInfra/OrbitTE/tree/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs).
+[source `9e1fdea`](https://github.com/OrbitInfra/OrbiTE/tree/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs).
 An external byte-for-byte archive and SHA-256 manifest are also retained at
 `/root/orbitte-artifacts/p4-closeout-20261027/documentation-before/manifest.json`.
 Original experiment directories remain in place. This reorganization changes
@@ -2031,7 +2031,7 @@ toolchain, focused IPC/NVLink gates, formatting and all-target Clippy. Independe
 review and final CI records are recorded in that directory before PR readiness.
 This review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`: its
 transport relocation map caches imported pointers and closes them at uninstall.
-The bounded LRU and source release protocol are deliberate OrbitTE extensions.
+The bounded LRU and source release protocol are deliberate OrbiTE extensions.
 
 No new hardware task was requested. Current installed v21 dynamic-working-set
 DMA, native cleanup faults and throughput remain unqualified. Historical fixed
@@ -2069,7 +2069,7 @@ recorded in that directory before PR readiness.
 
 This review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
 Its `NVLinkSubBatch` / `startTransfer` also associates a group with one trailing
-event. OrbitTE follows the ordered async-copy path while reusing allocation-owned
+event. OrbiTE follows the ordered async-copy path while reusing allocation-owned
 stream/event resources; native `cudaMemcpyBatchAsync`, device-wide pooling and
 nonblocking completion queries are separate work. Producer readiness remains an
 explicit handoff and final success still requires the cooperating source receipt.
@@ -2105,7 +2105,7 @@ Evidence directory: `/root/orbitte-artifacts/nvlink-stream-pool-20261101/`.
 hashes. Independent review and final CI are recorded there before PR readiness.
 This review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`; its lazy
 per-device stream pool and move-only handles supply the naming and ownership
-pattern. OrbitTE adds actual-context matching, a cross-context slot bound,
+pattern. OrbiTE adds actual-context matching, a cross-context slot bound,
 reusable completion events and explicit quarantine/close ownership.
 
 No hardware task was requested. Current installed v21 DMA, cross-context native
@@ -2149,7 +2149,7 @@ log hashes. Initial failed checks are preserved separately. Independent review
 and final CI are recorded in that directory before PR readiness.
 
 Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` retains task streams/events
-in `NVLinkSubBatch` and calls `cudaEventQuery` from `getTransferStatus`. OrbitTE's
+in `NVLinkSubBatch` and calls `cudaEventQuery` from `getTransferStatus`. OrbiTE's
 shared worker is the runtime adaptation of that completion lifetime. Setup,
 control receipts and each Batch's FIFO execution are unchanged; this does not
 claim a fully asynchronous scheduler, native batch-copy dispatch, automatic
@@ -2192,7 +2192,7 @@ Independent review and final CI are recorded in the same external directory.
 
 Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` uses
 `NVLinkSubBatch` / `startTransfer` arrays, stream-ordered source attributes,
-`cudaMemcpyBatchAsync` and one trailing event. OrbitTE implements the CUDA 13
+`cudaMemcpyBatchAsync` and one trailing event. OrbiTE implements the CUDA 13
 Driver API counterpart, selects fallback before submission, and preserves
 ordered dependent-copy semantics. A failed native call never triggers replay.
 
@@ -2232,7 +2232,7 @@ are recorded in the same external directory before PR readiness.
 
 Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` uses
 `CallerSyncEventPool` / `syncWithCallerStream` to record `cudaStreamPerThread`
-and wait on the CPU. OrbitTE preserves that scoped wait, accepts the actual
+and wait on the CPU. OrbiTE preserves that scoped wait, accepts the actual
 explicit stream, and attaches the generation to allocation ownership across
 transports. Consumption is CPU-blocking and cannot be interrupted by a request
 deadline. This avoids device-wide producer synchronization but is not a measured
@@ -2272,7 +2272,7 @@ Independent review and final-head CI are recorded in this directory before
 PR readiness. No new hardware task was requested.
 
 Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` records a reusable
-caller-sync event and waits on the CPU before NVLink submission. OrbitTE reuses
+caller-sync event and waits on the CPU before NVLink submission. OrbiTE reuses
 that event contract at actual pinned-owner access across transports, keeping
 the common state machine. Consumption remains CPU-blocking and deadlines cannot
 interrupt it. No throughput/latency gain is claimed. Native producer ordering,
@@ -2316,7 +2316,7 @@ independent of PCI rank and explicit masks; unknown locality remains eligible.
 
 The topology review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
 `platform/cuda/cuda_probe.cpp`, `runtime/topology.*` and
-`transport/rdma/quota.h`. OrbitTE follows its three-tier discovery and
+`transport/rdma/quota.h`. OrbiTE follows its three-tier discovery and
 `strict_local_numa` eligibility contracts. Invalid/unknown PCI distance cannot
 win the nearest tier. Immutable rank arrays are compiled once, so per-slice
 selection performs no native discovery, string construction or tier scans.
@@ -2347,7 +2347,7 @@ F02 custom topology configuration is implemented for the RDMA inventory. The
 reference was TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
 `runtime/topology.cpp` (`parsePriorityMatrix`, `parseCustomTopology`,
 `loadFromConfig`) and `transport/rdma/quota.cpp` candidate construction.
-OrbitTE accepts the two JSON forms and inline-over-file precedence, resolving
+OrbiTE accepts the two JSON forms and inline-over-file precedence, resolving
 them against physical discovery instead of replacing device identity. Invalid
 explicit configuration is rejected instead of silently falling back. These
 differences preserve stable context IDs and known physical NUMA restrictions.
@@ -2581,7 +2581,7 @@ remain unqualified. No hardware job was requested for this delivery.
 
 Source connects frozen TENT's cumulative `SenderCreditLedger` accounting model
 to actual sync/async transport handoff and runtime queue eligibility. The frozen
-ledger has no transport consumer and ignores TTL; OrbitTE's consumer and
+ledger has no transport consumer and ignores TTL; OrbiTE's consumer and
 freshness gate are explicit additions. Applications deliver grants through the
 local Rust API. The automatic issuer handles negotiated receiver windows
 separately. The manual ledger accepts partial grants of all four resources
@@ -2611,7 +2611,7 @@ throughput remain unqualified. No new hardware task is requested.
 
 Source implements typed `QosContractResolver` overlays and immutable engine-bound
 `EffectiveQosPolicy` handles. Frozen TENT supplies the resolution model only;
-OrbitTE additionally feeds effective priority into existing transports and
+OrbiTE additionally feeds effective priority into existing transports and
 atomically reserves permits for physical owners against their compiled
 contract. The frozen resolver has no parent-charge tree or cluster allocator.
 
@@ -2711,7 +2711,7 @@ uses ABI fixtures; no new hardware task or performance measurement is involved.
 
 Frozen reference `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` supplies the
 `QosContractResolver::loadFromConfig`, priority and binary byte parsing behavior.
-Unlike its resolution-only metadata, OrbitTE accepts only fields consumed by its
+Unlike its resolution-only metadata, OrbiTE accepts only fields consumed by its
 runtime. Rejecting duplicate normalized keys and non-object empty nodes is a
 deliberate strictness difference. Native schema/action/API parity remains open.
 
@@ -2744,7 +2744,7 @@ cannot reacquire quota. Both discovered pre-fix failures remain in external evid
 
 Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` supplies names and
 field overlay semantics, not execution policy: its resolver is
-`resolution_only`. OrbitTE's [defined behavior](async-batches.md#qos-admission-actions)
+`resolution_only`. OrbiTE's [defined behavior](async-batches.md#qos-admission-actions)
 is explicit. Unsupported QoS fallback, recompute and compression actions
 return typed configuration errors. The frozen resolver combines fields into
 one effective budget.
@@ -2757,7 +2757,7 @@ v23 qualification or matched throughput/fairness result is claimed.
 
 ## Transport policy selection
 
-The [initial selector](https://github.com/OrbitInfra/OrbitTE/pull/118) established
+The [initial selector](https://github.com/OrbitInfra/OrbiTE/pull/118) established
 strict hints and source-owned Describe capabilities. S6 exercises named and
 intent-selected requests through TCP sync/async, NVLink grants, remote staging
 and real file transfers. A two-device verbs shim checks completed bytes on

@@ -1,12 +1,12 @@
 //! Offline diagnostic command. All collection and rendering lives in the library.
-use orbit_te::diagnostics::version_snapshot;
+use orbite::diagnostics::version_snapshot;
 use std::{
     ffi::OsString,
     io::{self, Write},
     process::ExitCode,
 };
 
-const ROOT: &str = "tent [OPTIONS] diagnostics\n  diagnostics    Run offline diagnostics";
+const ROOT: &str = "tent [OPTIONS] diagnostics\n  diagnostics    Run OrbiTE offline diagnostics";
 const DIAGNOSTICS: &str =
     "tent diagnostics [OPTIONS] version\n  version        Show build and feature information";
 const VERSION: &str = "tent diagnostics version [--json]\n  --json         Emit JSON";

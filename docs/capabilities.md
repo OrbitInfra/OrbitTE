@@ -12,7 +12,7 @@ crates.io only reserves the package name.
 
 [Qualification](qualification.md) records the exact artifacts, cases and limits
 behind every hardware result. The [v0.3.14 delta](tent-parity.md#v0314-delta)
-records the source alignment. The [S16 acceptance inventory](https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory)
+records the source alignment. The [S16 acceptance inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
 lists the six native direction flags and their provider conditions. Wire
 fixtures and CPU codec checks are available for the future mixed-peer profile.
 
@@ -59,7 +59,7 @@ fixtures and CPU codec checks are available for the future mixed-peer profile.
 | CUDA topology, custom priority matrices, bandwidth-aware rails | Implemented | Installed routing and throughput are unqualified. See [bandwidth-aware selection](rdma-cuda.md#bandwidth-aware-rdma-selection) |
 | Request priority and NIC arbitration | Implemented | RDMA orders High/Medium/Low with aging and opt-in deadline urgency; TCP and NVLink treat priority as advisory. See [priority](rdma-cuda.md#request-priority-and-bandwidth-arbitration) |
 | RDMA selective signaling and HCA READ depth | Implemented; installed profile unqualified | Per-post signal groups, QP depth clamps and exact flush accounting. See [RDMA ownership](rdma-cuda.md#failure-drain-and-resource-ownership) |
-| Adaptive congestion core | Implemented, CPU controls | Opt-in callable device and route domains with off/observe/enforce. TENT and OrbitTE workers leave live policy to the caller. |
+| Adaptive congestion core | Implemented, CPU controls | Opt-in callable device and route domains with off/observe/enforce. TENT and OrbiTE workers leave live policy to the caller. |
 | RDMA quota accounting | Implemented, installed gate unrun | Per-NIC smart inflight bytes and exact slice charges. A POSIX shared-memory name enables host-wide priority slots. See [shared slots](rdma-cuda.md#priority-promotion-and-shared-slots) |
 | Runtime FIFO/EDF admission | Implemented | Merged memory requests, public alias status, physical dispatch windows, staging reserves and transport-aware deadline drops. See [dispatch window](async-batches.md#runtime-admission-and-dispatch-window) |
 | QoS contracts | Implemented | Global, tenant and intent fields resolve to one local byte/request budget. Delay and reject execute. Unsupported actions return a field-specific error. See [QoS](async-batches.md#qos-contracts) |
@@ -84,7 +84,7 @@ fixtures and CPU codec checks are available for the future mixed-peer profile.
 | TENT C++ and classic TE | Implemented (F21) | [Installed C++20 clients](cpp-api.md) on Linux loopback, including explicit progress, guarded TCP transfers and cancellable HP-TCP scatter. RNIC and GPU Direct profiles await hardware |
 | TENT Python API | Planned (P9) | S21 |
 | TENT configuration and metadata stores | Configuration implemented (F01), P2P available | File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Optional S18 covers etcd, Redis and HTTP |
-| TENT wire interoperability | Planned (P9) | OrbitTE peers use a pre-release protocol and must run the same build. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries) |
+| TENT wire interoperability | Planned (P9) | OrbiTE peers use a pre-release protocol and must run the same build. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries) |
 
 ## Provider selection
 
@@ -102,7 +102,7 @@ for selection and resource ownership.
 ## Scope of support
 
 The target is CPU DRAM, NVIDIA GPUs and local SSDs: OrbitKV hands every
-end-to-end cache transfer, including GPU↔DRAM and GPU↔SSD, to OrbitTE. Storage
+end-to-end cache transfer, including GPU↔DRAM and GPU↔SSD, to OrbiTE. Storage
 transports use the opt-in Linux `io-uring` and `gds` features. A network/memory-only
 build loads no storage libraries. Other accelerators are outside the selected
 scope. Architectural correspondence with frozen TENT does not establish full

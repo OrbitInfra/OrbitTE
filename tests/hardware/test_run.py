@@ -19,7 +19,7 @@ class ResourceSelection(unittest.TestCase):
             binary.write_bytes(b'not-executed')
             profile = root / 'profile.json'
             profile.write_text(json.dumps(dict(
-                runner='orbitte-installed-host',
+                runner='orbite-installed-host',
                 nodes={name: dict(hostname='host-' + name, boot_id='same-boot')
                        for name in ('a', 'b')},
                 cases=[dict(mode='installed-host', transport='rdma', source_kind='cpu',
@@ -67,7 +67,7 @@ class ResourceSelection(unittest.TestCase):
                     'nodes': {'a': {'bind': '127.0.0.1:0'}, 'b': {'bind': '127.0.0.1:0'}}}
             case = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
                     'transport': 'rdma', 'payload': 4096, 'seed': 1, 'rdma_max_cqes': 1, 'rdma_max_send_wr': 1}
-            for profile in [None, 'orbitte-shared-cq', 'orbitte-connected']:
+            for profile in [None, 'orbite-shared-cq', 'orbite-connected']:
                 for enabled in [False, True]:
                     with self.subTest(profile=profile, enabled=enabled):
                         controller = runner.Controller({**base, 'runner': profile}, binary, root)
@@ -80,7 +80,7 @@ class ResourceSelection(unittest.TestCase):
                         controller.start = start
                         with self.assertRaises(CapturedStart):
                             controller.case(0, {**case, 'rdma_events': enabled})
-                        self.assertEqual(observed[0]['ORBITTE_RDMA_EVENTS'], str(int(enabled)))
+                        self.assertEqual(observed[0]['ORBITE_RDMA_EVENTS'], str(int(enabled)))
             for flags in [{'rdma_events': 1}, {'rdma_events': 'true'}, {'rdma_events': None},
                           {'rdma_events': True, 'transport': 'tcp'}]:
                 with self.subTest(flags=flags), self.assertRaises(ValueError):
@@ -94,7 +94,7 @@ class ResourceSelection(unittest.TestCase):
             root = Path(directory)
             binary = root / 'fixture'
             binary.write_bytes(b'not-executed')
-            profile = {'runner': 'orbitte-shared-cq', 'rnic': 'fixture', 'gid_index': 3,
+            profile = {'runner': 'orbite-shared-cq', 'rnic': 'fixture', 'gid_index': 3,
                        'nodes': {name: {'bind': '127.0.0.1:0'} for name in ['a', 'b']}}
             case = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
                     'transport': 'rdma', 'payload': 8192, 'seed': 1, 'rdma_max_cqes': 4,
@@ -105,7 +105,7 @@ class ResourceSelection(unittest.TestCase):
                 controller.start = lambda *args: started.append(args)
 
                 def collect(*args):
-                    return {'stdout.log': 'ORBITTE_READY 127.0.0.1:1234\n',
+                    return {'stdout.log': 'ORBITE_READY 127.0.0.1:1234\n',
                             'result.json': json.dumps({'status': 'passed'}) if len(started) == 2 else None,
                             'maps.txt': 'fixture'}
 
@@ -113,8 +113,8 @@ class ResourceSelection(unittest.TestCase):
                 controller.case(0, {**case, 'shared_qp': mode})
                 self.assertEqual(len(started), 2)
                 for args in started:
-                    self.assertEqual(args[-1]['ORBITTE_SHARED_QP'], mode)
-                    self.assertEqual(args[-1]['ORBITTE_SHARED_OPERATION'], 'read')
+                    self.assertEqual(args[-1]['ORBITE_SHARED_QP'], mode)
+                    self.assertEqual(args[-1]['ORBITE_SHARED_OPERATION'], 'read')
             for invalid in [{'shared_qp': 'unknown'}, {'operation': 'unknown'},
                             {'rdma_max_cqes': 1}, {'rdma_max_send_wr': 2}, {'duplex': True}]:
                 controller = runner.Controller(profile, binary, root)
@@ -131,7 +131,7 @@ class ResourceSelection(unittest.TestCase):
             root = Path(directory)
             binary = root / 'fixture'
             binary.write_bytes(b'not-executed')
-            profile = {'runner': 'orbitte-window', 'rnic': 'fixture', 'gid_index': 3,
+            profile = {'runner': 'orbite-window', 'rnic': 'fixture', 'gid_index': 3,
                        'nodes': {'a': {'bind': '127.0.0.1:0'}, 'b': {'bind': '127.0.0.1:0'}}}
             base = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
                     'transport': 'rdma', 'payload': 12288, 'seed': 1,
@@ -141,8 +141,8 @@ class ResourceSelection(unittest.TestCase):
                     controller = runner.Controller(profile, binary, root)
 
                     def start(*args):
-                        self.assertEqual(args[-1]['ORBITTE_WINDOW_PROBE'], probe)
-                        self.assertEqual(args[-1]['ORBITTE_RDMA_EVENTS'], str(int(events)))
+                        self.assertEqual(args[-1]['ORBITE_WINDOW_PROBE'], probe)
+                        self.assertEqual(args[-1]['ORBITE_RDMA_EVENTS'], str(int(events)))
                         raise CapturedStart()
 
                     controller.start = start
@@ -162,7 +162,7 @@ class ResourceSelection(unittest.TestCase):
             root = Path(directory)
             binary = root / 'fixture'
             binary.write_bytes(b'not-executed')
-            profile = {'runner': 'orbitte-shared-cq', 'rnic': 'fixture', 'gid_index': 3,
+            profile = {'runner': 'orbite-shared-cq', 'rnic': 'fixture', 'gid_index': 3,
                        'nodes': {'a': {'bind': '127.0.0.1:0'}, 'b': {'bind': '127.0.0.1:0'}}}
             case = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
                     'transport': 'rdma', 'payload': 4096, 'seed': 1,
@@ -170,7 +170,7 @@ class ResourceSelection(unittest.TestCase):
             controller = runner.Controller(profile, binary, root)
 
             def start(*args):
-                self.assertEqual(args[-1]['ORBITTE_RDMA_MULTI_CONTEXT'], '1')
+                self.assertEqual(args[-1]['ORBITE_RDMA_MULTI_CONTEXT'], '1')
                 raise CapturedStart()
 
             controller.start = start
@@ -180,7 +180,7 @@ class ResourceSelection(unittest.TestCase):
                             {'duplex': True}, {'transport': 'tcp'}, {'requester_kind': 'cuda:0'}]:
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     runner.Controller(profile, binary, root).case(0, {**case, **invalid})
-            for selection in [None, 'orbitte-connected', 'orbitte-window', 'orbitkv-peer-host']:
+            for selection in [None, 'orbite-connected', 'orbite-window', 'orbitkv-peer-host']:
                 with self.subTest(selection=selection), self.assertRaises(ValueError):
                     runner.Controller({**profile, 'runner': selection}, binary, root).case(0, case)
 
@@ -190,16 +190,16 @@ class ResourceSelection(unittest.TestCase):
             root = Path(directory)
             binary = root / 'fixture'
             binary.write_bytes(b'not-executed')
-            profile = {'runner': 'orbitte-multirail', 'rails': ['mlx5_1', 'mlx5_2'], 'ssh_config': 'fixture-ssh',
+            profile = {'runner': 'orbite-multirail', 'rails': ['mlx5_1', 'mlx5_2'], 'ssh_config': 'fixture-ssh',
                        'nodes': {'a': {'alias': 'fixture', 'hostname': 'fixture', 'boot_id': 'fixture',
                                        'nic_locks': {'mlx5_1': '/fixture/nic1', 'mlx5_2': '/fixture/nic2'}}}}
-            for selection in ['orbitte-multirail', 'orbitte-installed-host']:
+            for selection in ['orbite-multirail', 'orbite-installed-host']:
                 with self.subTest(runner=selection):
                     controller = runner.Controller({**profile, 'runner': selection}, binary, root)
                     controller.ssh = lambda *args: None
                     controller.copy = lambda *args: None
                     with patch.object(runner.subprocess, 'Popen'):
-                        controller.start('a', '/fixture/case', 'cpu', [], 'rdma', {'ORBITTE_RAIL_MASK': '1'})
+                        controller.start('a', '/fixture/case', 'cpu', [], 'rdma', {'ORBITE_RAIL_MASK': '1'})
                     config = json.loads((root / 'case.json').read_text())
                     self.assertEqual(config['locks'], ['/fixture/nic1', '/fixture/nic2'])
             for rails, locks in [(['mlx5_1', 'mlx5_1'], profile['nodes']['a']['nic_locks']),
@@ -219,17 +219,17 @@ class ResourceSelection(unittest.TestCase):
             binary = root / 'fixture'
             binary.write_bytes(b'not-executed')
             nodes = {name: {'bind': '127.0.0.1:0', 'nic_locks': {'mlx5_1': '/fixture/nic1', 'mlx5_2': '/fixture/nic2'}} for name in ['a', 'b']}
-            profile = {'runner': 'orbitte-multirail', 'rails': ['mlx5_1', 'mlx5_2'], 'gid_index': 3, 'nodes': nodes}
+            profile = {'runner': 'orbite-multirail', 'rails': ['mlx5_1', 'mlx5_2'], 'gid_index': 3, 'nodes': nodes}
             case = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
                     'transport': 'rdma', 'rdma_events': True, 'mode': 'healthy', 'operation': 'read', 'mask': 1, 'fault_rail': 1}
             controller = runner.Controller(profile, binary, root)
 
             def start(*args):
-                self.assertEqual(args[-1]['ORBITTE_RDMA_LANES'], '1')
-                self.assertEqual(args[-1]['ORBITTE_SHARED_RAILS'], 'mlx5_1,mlx5_2')
-                self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '1')
-                self.assertEqual(args[-1]['ORBITTE_RAIL_FAULT'], '1')
-                self.assertEqual(args[-1]['ORBITTE_RDMA_EVENTS'], '1')
+                self.assertEqual(args[-1]['ORBITE_RDMA_LANES'], '1')
+                self.assertEqual(args[-1]['ORBITE_SHARED_RAILS'], 'mlx5_1,mlx5_2')
+                self.assertEqual(args[-1]['ORBITE_RAIL_MASK'], '1')
+                self.assertEqual(args[-1]['ORBITE_RAIL_FAULT'], '1')
+                self.assertEqual(args[-1]['ORBITE_RDMA_EVENTS'], '1')
                 raise CapturedStart()
 
             controller.start = start
@@ -237,14 +237,14 @@ class ResourceSelection(unittest.TestCase):
                 controller.case(0, case)
             for count in [2, 3, 64]:
                 def pool_start(*args):
-                    self.assertEqual(args[-1]['ORBITTE_RDMA_LANES'], str(count))
+                    self.assertEqual(args[-1]['ORBITE_RDMA_LANES'], str(count))
                     raise CapturedStart()
 
                 controller.start = pool_start
                 with self.subTest(workers=count), self.assertRaises(CapturedStart):
                     controller.case(0, {**case, 'num_lanes': count})
             def blocking_start(*args):
-                self.assertEqual(args[-1]['ORBITTE_RDMA_LANES'], '2')
+                self.assertEqual(args[-1]['ORBITE_RDMA_LANES'], '2')
                 raise CapturedStart()
 
             controller.start = blocking_start
@@ -259,8 +259,8 @@ class ResourceSelection(unittest.TestCase):
                          'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
                          'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy', 'large-qp-cleanup-error', 'large-channel-busy', 'live-reconnect', 'mr-cleanup-error', 'mw-cleanup-error', 'monitor-recovery']:
                 def concurrent_start(*args):
-                    self.assertEqual(args[-1]['ORBITTE_RAIL_MODE'], mode)
-                    self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '3')
+                    self.assertEqual(args[-1]['ORBITE_RAIL_MODE'], mode)
+                    self.assertEqual(args[-1]['ORBITE_RAIL_MASK'], '3')
                     raise CapturedStart()
 
                 controller.start = concurrent_start

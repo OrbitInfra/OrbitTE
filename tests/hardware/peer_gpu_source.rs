@@ -1,5 +1,5 @@
 //! Installed CUDA source for the ordinary TCP CPU-requester gate.
-use orbit_te::{EngineConfig, Permission, TransferEngine, cuda::CudaMemory};
+use orbite::{EngineConfig, Permission, TransferEngine, cuda::CudaMemory};
 use std::{
     error::Error,
     io::{self, Write},
@@ -8,7 +8,7 @@ use std::{
 
 fn main() -> Result<(), Box<dyn Error>> {
     if std::env::args().nth(1).as_deref() == Some("--protocol") {
-        println!("orbitte-peer-gpu-source");
+        println!("orbite-peer-gpu-source");
         return Ok(());
     }
     let gpu = std::sync::Arc::new(CudaMemory::allocate(0, 12)?);

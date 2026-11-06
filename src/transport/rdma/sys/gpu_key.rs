@@ -49,7 +49,7 @@ impl Driver {
     }
 }
 unsafe extern "C" {
-    fn orbitte_mlx5_pdn(init: Init, pd: *mut c_void, pdn: *mut u32) -> c_int;
+    fn orbite_mlx5_pdn(init: Init, pd: *mut c_void, pdn: *mut u32) -> c_int;
 }
 
 pub(super) unsafe fn open(device: *mut ffi::ibv_device) -> *mut c_void {
@@ -118,7 +118,7 @@ pub(super) unsafe fn caps(h: &DeviceHandles) -> GpuKeyRange {
         return caps;
     }
     // SAFETY: the optional header shim supplies the provider object layout for this PD.
-    if unsafe { orbitte_mlx5_pdn(d.init, h.pd, &mut caps.pdn) } == 0 && caps.pdn <= 0xff_ffff {
+    if unsafe { orbite_mlx5_pdn(d.init, h.pd, &mut caps.pdn) } == 0 && caps.pdn <= 0xff_ffff {
         caps.base = base;
         caps.count = count;
     }

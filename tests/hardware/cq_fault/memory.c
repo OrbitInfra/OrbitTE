@@ -80,7 +80,7 @@ static int memory_bind(struct context *context, struct ibv_qp *qp,
     return code;
 }
 
-int orbitte_memory_fault(unsigned command, unsigned kind, unsigned source, uint64_t base,
+int orbite_memory_fault(unsigned command, unsigned kind, unsigned source, uint64_t base,
                          const char *rail, struct memory_snapshot *output) {
     if (!output) return EINVAL;
     pthread_mutex_lock(&lock);

@@ -182,7 +182,7 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
         );
     }
     println!(
-        "ORBITTE_PUBLIC_QPS {{\"requester\":{},\"grants\":{},\"physical_qps\":{physical}}}",
+        "ORBITE_PUBLIC_QPS {{\"requester\":{},\"grants\":{},\"physical_qps\":{physical}}}",
         trace.requester,
         trace.owners.len()
     );
@@ -284,7 +284,7 @@ unsafe extern "C" fn post(
     let name = unsafe { CStr::from_ptr(ffi::ibv_get_device_name((*qp.context).device)) }
         .to_str()
         .unwrap();
-    let rails = env::var("ORBITTE_SHARED_RAILS").unwrap();
+    let rails = env::var("ORBITE_SHARED_RAILS").unwrap();
     let nic = rails.split(',').position(|rail| rail == name).unwrap();
     let (parent, slice, inject) = {
         let mut trace = TRACE.get().unwrap().lock().unwrap();
@@ -920,7 +920,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
             assert!(!trace.delivered_wr.contains(&missing));
             assert!(debt >= 1, "the dropped native CQE escaped before CQ drain");
             println!(
-                "ORBITTE_LOST_CQE_DEBT {{\"accepted\":{accepted},\"delivered\":{delivered},\"unresolved\":{debt},\"missing\":[{},{},{}]}}",
+                "ORBITE_LOST_CQE_DEBT {{\"accepted\":{accepted},\"delivered\":{delivered},\"unresolved\":{debt},\"missing\":[{},{},{}]}}",
                 missing.0, missing.1, missing.2
             );
         } else if trace.shape.parents == 8 {
@@ -952,7 +952,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         );
         let debt = receive.outstanding();
         println!(
-            "ORBITTE_LOST_RECEIVE_DEBT {{\"unresolved\":{debt},\"credits\":{},\"missing_wr\":{}}}",
+            "ORBITE_LOST_RECEIVE_DEBT {{\"unresolved\":{debt},\"credits\":{},\"missing_wr\":{}}}",
             receive.credited(),
             trace.injected_wr.unwrap().2
         );
@@ -1106,7 +1106,7 @@ pub(super) fn finish() {
         }
     }
     println!(
-        "ORBITTE_CONCURRENT_NATIVE {{\"opened_contexts\":{},\"closed_contexts\":{},\"registered_mrs\":{},\"deregistered_mrs\":{},\"payload_posts\":{},\"held_cqes_delivered\":{},\"fault_injections\":{},\"failed_cq_receipts\":{},\"admitted_owner_checks\":{},\"live_owner_checks\":{},\"already_drained_owner_checks\":{},\"injected_parent\":{:?},\"failed_parent_debt\":{:?},\"native_error_receipts\":{},\"accepted\":{:?}}}",
+        "ORBITE_CONCURRENT_NATIVE {{\"opened_contexts\":{},\"closed_contexts\":{},\"registered_mrs\":{},\"deregistered_mrs\":{},\"payload_posts\":{},\"held_cqes_delivered\":{},\"fault_injections\":{},\"failed_cq_receipts\":{},\"admitted_owner_checks\":{},\"live_owner_checks\":{},\"already_drained_owner_checks\":{},\"injected_parent\":{:?},\"failed_parent_debt\":{:?},\"native_error_receipts\":{},\"accepted\":{:?}}}",
         trace.opened,
         trace.closed,
         trace.registered,
@@ -1129,7 +1129,7 @@ pub(super) fn finish() {
             2 * trace.shape.parents * trace.shape.slices
         );
         println!(
-            "ORBITTE_RQ_NATIVE {{\"owner_checks\":{},\"pending_owner_checks\":{},\"posted\":{},\"delivered\":{},\"credits_drained\":true}}",
+            "ORBITE_RQ_NATIVE {{\"owner_checks\":{},\"pending_owner_checks\":{},\"posted\":{},\"delivered\":{},\"credits_drained\":true}}",
             trace.source_rq_checks,
             trace.source_pending_rq_checks,
             trace.accepted_receive.len(),
@@ -1149,7 +1149,7 @@ pub(super) fn finish() {
         assert!(trace.fault_debt.iter().all(|debt| *debt >= 1));
     }
     println!(
-        "ORBITTE_NATIVE_FAULT {{\"requester\":{},\"qp_err_transitions\":{},\"lost_cqes\":{},\"lost_receive\":{},\"target\":{:?},\"debt_before_cq\":{:?}}}",
+        "ORBITE_NATIVE_FAULT {{\"requester\":{},\"qp_err_transitions\":{},\"lost_cqes\":{},\"lost_receive\":{},\"target\":{:?},\"debt_before_cq\":{:?}}}",
         trace.requester,
         trace.qp_errors,
         trace.lost_completions,
@@ -1166,15 +1166,15 @@ pub(super) fn finish() {
         .map(|(status, count)| [*status, *count as u32])
         .collect::<Vec<_>>();
     println!(
-        "ORBITTE_NATIVE_ERRORS {{\"injected_wr_error_receipts\":{},\"all_error_receipts\":{},\"statuses\":{:?}}}",
+        "ORBITE_NATIVE_ERRORS {{\"injected_wr_error_receipts\":{},\"all_error_receipts\":{},\"statuses\":{:?}}}",
         trace.injected_error_receipts, trace.native_error_receipts, statuses
     );
     println!(
-        "ORBITTE_INJECTED_WINDOW {{\"accepted_wr_count\":{},\"debt_before_cq\":{:?}}}",
+        "ORBITE_INJECTED_WINDOW {{\"accepted_wr_count\":{},\"debt_before_cq\":{:?}}}",
         trace.injected_window, trace.fault_debt
     );
     println!(
-        "ORBITTE_NATIVE_WR_GEOMETRY {{\"accepted_per_slice\":{:?},\"expected_per_slice\":{:?}}}",
+        "ORBITE_NATIVE_WR_GEOMETRY {{\"accepted_per_slice\":{:?},\"expected_per_slice\":{:?}}}",
         trace.wr_counts,
         (0..shape.slices)
             .map(|index| shape.wr_lengths(index))

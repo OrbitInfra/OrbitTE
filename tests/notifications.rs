@@ -4,7 +4,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbit_te::{
+use orbite::{
     EngineConfig, Error, Notification, NotificationEffect, NotificationStatus, Permission,
     TransferEngine, TransferOp, TransferRequest,
 };
@@ -105,7 +105,7 @@ fn attached_delivery_and_queue_failure_preserve_exact_transfer_results() {
             .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
             .unwrap();
         let request = TransferRequest::new(
-            orbit_te::Transport::Tcp,
+            orbite::Transport::Tcp,
             local.base_address(),
             peer.regions()[0].base_address(),
             8,

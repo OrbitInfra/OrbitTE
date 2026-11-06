@@ -5,8 +5,8 @@ from installed_restart import records
 def verify(case, evidence, logs):
     kind = {'cq': 1, 'channel': 2, 'pd': 3}[case['cleanup_kind']]
     debt = kind != 3
-    proofs = records(evidence['requester'], 'ORBITTE_INSTALLED_CLEANUP ')
-    if len(proofs) != 1 or records(evidence['source'], 'ORBITTE_INSTALLED_CLEANUP '):
+    proofs = records(evidence['requester'], 'ORBITE_INSTALLED_CLEANUP ')
+    if len(proofs) != 1 or records(evidence['source'], 'ORBITE_INSTALLED_CLEANUP '):
         raise ValueError('dependency proof missing or in the wrong process')
     rows = logs[0]
     select = lambda name: [r for r in rows if r['kind'] == name]
@@ -14,7 +14,7 @@ def verify(case, evidence, logs):
     if len(arms) != 1 or len(errors) != 1 or len(queries) != 2:
         raise ValueError('missing dependency or repeated native destructor')
     arm, error, proof = arms[0], errors[0], proofs[0]
-    history = records(evidence['requester'], 'ORBITTE_INSTALLED_PHASE ')
+    history = records(evidence['requester'], 'ORBITE_INSTALLED_PHASE ')
     if (not arm['seq'] < error['seq'] < queries[0]['seq'] < queries[1]['seq']
             or proof['sequence'] != queries[1]['seq']
             or any(r['pid'] != history[0]['pid'] or r['phase'] != 0 for r in (arm, error, *queries, proof))
@@ -51,12 +51,12 @@ def verify(case, evidence, logs):
             raise ValueError('completion channel did not close before PD failure')
     if debt:
         posts = select('post')
-        pending = records(evidence['requester'], 'ORBITTE_INSTALLED_CQE_PENDING ')
+        pending = records(evidence['requester'], 'ORBITE_INSTALLED_CQE_PENDING ')
         if (len(posts) != 1 or len(pending) != 1 or pending[0]['sequence'] >= arm['seq']
                 or any(posts[0][key] != arm[key] for key in ('context', 'cq', 'qpn'))):
             raise ValueError('retained dependency does not belong to the lost payload')
     elif (select('arm') or select('post') or select('lost')
-          or records(evidence['requester'], 'ORBITTE_INSTALLED_PENDING ')):
+          or records(evidence['requester'], 'ORBITE_INSTALLED_PENDING ')):
         raise ValueError('idle PD teardown acquired payload debt')
     expected = dict(attempts=1, code=16, retained_grants=int(debt), retained_endpoints=0,
                     sq_debt=int(debt), direct_bytes=case['payload'] * int(debt),

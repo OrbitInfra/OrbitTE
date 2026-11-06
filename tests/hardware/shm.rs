@@ -1,5 +1,5 @@
 //! Independent public-API source and requester for the installed same-host SHM profile.
-use orbit_te::{
+use orbite::{
     EngineConfig, Error, Permission, Result, ShmConfig, TransferEngine, TransferOp,
     TransferRequest, Transport,
 };
@@ -16,7 +16,7 @@ const WAIT: Duration = Duration::from_secs(30);
 fn pattern(i: usize) -> u8 {
     (i % 241) as u8
 }
-fn verify(mem: &orbit_te::RegisteredMemory, expected: &[u8]) -> Result<()> {
+fn verify(mem: &orbite::RegisteredMemory, expected: &[u8]) -> Result<()> {
     let mut got = vec![0; expected.len()];
     mem.read(0, &mut got)?;
     if got != expected {
@@ -27,7 +27,7 @@ fn verify(mem: &orbit_te::RegisteredMemory, expected: &[u8]) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.as_slice() == ["--protocol"] {
-        println!("orbitte-installed-shm");
+        println!("orbite-installed-shm");
         return Ok(());
     }
     let mode = args

@@ -1,8 +1,8 @@
-# OrbitTE completion plan
+# OrbiTE completion plan
 
 Build an independently maintained Rust transfer engine for CPU DRAM, NVIDIA
 GPUs and local SSDs against the [frozen latest TENT contract](tent-parity.md).
-OrbitTE replaces OrbitKV's earlier Mooncake TENT dependency and must carry every
+OrbiTE replaces OrbitKV's earlier Mooncake TENT dependency and must carry every
 end-to-end KV cache path, including GPU↔DRAM and GPU↔SSD. CPU and CUDA are the
 selected platforms; other accelerator vendors are outside scope. The target
 keeps TENT's applicable runtime, language and operational behavior and all 10
@@ -13,7 +13,7 @@ Storage and optional network providers are opt-in builds, like `rdma` and
 cuFile or provider SDKs. This does not restrict CPU, SSD or network-device
 vendors, and no non-NVIDIA accelerator SDK is a dependency.
 
-This is OrbitTE's only status record and execution queue; the parity document
+This is OrbiTE's only status record and execution queue; the parity document
 defines requirements. OrbitKV keeps its own cache delivery queue, and this plan
 does not duplicate that project's state, storage-policy or adapter roadmap.
 
@@ -29,8 +29,8 @@ Every substage and every claimed hardware profile has one state:
 | Accepted | An independent reviewer inspected the diff, reran relevant gates and accepted the evidence and remaining limits |
 | Unqualified / Failed | Required hardware or evidence is unavailable, or a gate ran and failed; neither counts as passed |
 
-`orbit-te 0.1.0-alpha.1` on crates.io is an identity-only package; none of the
-implementation below has been published. [Capabilities](capabilities.md)
+The historical `orbit-te 0.1.0-alpha.1` on crates.io only reserved the old name;
+the current `orbite` implementation has not been published. [Capabilities](capabilities.md)
 summarizes current paths and [qualification](qualification.md) records the exact
 artifacts and hardware profiles.
 
@@ -102,7 +102,7 @@ OrbitKV uses the existing P2P control plane. S21–S26 retain their order.
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
 results apply to the recorded artifact and profile. See the
-[work order](https://github.com/OrbitInfra/OrbitTE/blob/main/AGENTS.md#7-work-order).
+[work order](https://github.com/OrbitInfra/OrbiTE/blob/main/AGENTS.md#7-work-order).
 
 ## P0 — Freeze contracts and executable comparison
 
@@ -117,7 +117,7 @@ Done:
   [CPU oracle](cpu-oracle.md). It covers selected valid-input CPU behavior only.
 
 - **S16 — acceptance inventory and wire fixtures (Implemented).** The
-  [reference inventory](https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory)
+  [reference inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
   maps all 33 C functions, configuration and environment inputs, direction flags,
   metrics, metadata, logical RPCs and 88 reference test sources. A native C probe
   freezes LP64 layouts. The pinned C++ codecs and loopback dispatcher check
@@ -191,9 +191,9 @@ Done (each Implemented):
   survive notification failure.
 - **P2.3 — OrbitKV TCP peer integration (consumer candidate).**
   [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304) adds an opt-in
-  `orbitte-tcp` provider; the limited source/H20 evidence was independently
+  `orbite-tcp` provider; the limited source/H20 evidence was independently
   accepted.
-- **S0b — frozen pre-release wire.** The OrbitTE-only control protocol stays at
+- **S0b — frozen pre-release wire.** The OrbiTE-only control protocol stays at
   version 1 until the first release; see the
   [wire policy](tent-parity.md#wire-and-consumer-boundaries).
 
@@ -234,7 +234,7 @@ implemented. Source and the bounded RoCE profile were independently accepted at
 `121ab95`, including four fresh live repeats; see
 [P4 review](qualification.md#p4-independent-review). The detailed P4.1–P4.12m
 history is in the
-[immutable plan before consolidation](https://github.com/OrbitInfra/OrbitTE/blob/f2c7e7f5d32bb9c231596752af6bd59142b1f3a9/docs/completion-plan.md#p4-implementation-record).
+[immutable plan before consolidation](https://github.com/OrbitInfra/OrbiTE/blob/f2c7e7f5d32bb9c231596752af6bd59142b1f3a9/docs/completion-plan.md#p4-implementation-record).
 
 ### P4 remaining delivery
 
@@ -430,7 +430,7 @@ Requirements: F22 and the applicable accepted backend and compatibility profiles
   installed prerequisite was accepted at consumer `eb1cc90f`
   ([OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307)).
 - [ ] A separate consumer contract before claiming DeepInfer support.
-- [ ] Matched TENT/OrbitTE comparisons (small/large, fragmented, READ/WRITE,
+- [ ] Matched TENT/OrbiTE comparisons (small/large, fragmented, READ/WRITE,
   cold/warm, mixed priority, CPU/device/file, multirail). Initial guards:
   goodput ≥ 0.95, p99 latency ≤ 1.05 and CPU-per-byte and peak-RSS ≤ 1.10 of the
   frozen reference, ratified in P0 before formal runs.
@@ -449,7 +449,7 @@ At OrbitKV `a9befeec596bb9064d25d34f93d07fe59077809d` the audited transfer owner
 needs stable allocator registration, P2P segment lookup, batched READ,
 authoritative source epochs, source close/drain, generation-scoped
 notifications and NIC-load observations; OrbitKV keeps its generation scopes and
-mailbox policy. Consumer PRs #303 and #304 pin OrbitTE `02d64e55`; their evidence
+mailbox policy. Consumer PRs #303 and #304 pin OrbiTE `02d64e55`; their evidence
 lives under `/root/orbitte-artifacts/` and is valid only for those artifacts.
 
 ## Code ownership and repository layout
@@ -461,7 +461,7 @@ lives under `/root/orbitte-artifacts/` and is valid only for those artifacts.
 | `src/runtime/` | Control plane, transport selection, admission queue, QoS, receiver credits and ProxyManager |
 | `src/transport/tcp/`, `src/transport/rdma/`, `src/transport/nvlink/` | Payload transports and their native resource owners |
 | `src/cuda/`, `src/platform/` | NVIDIA allocation, streams, IPC and host topology |
-| `crates/orbit-te-c/`, `include/` | Transfer-engine C library and installed header, plus the diagnostics header. C++ and Python packaging remain open |
+| `crates/orbite-c/`, `include/` | Transfer-engine C library and installed header, plus the diagnostics header. C++ and Python packaging remain open |
 | `tests/` | Unit (mirroring `src/`), integration, reference, fault and installed tests |
 | `benches/` | Future reusable traces and matched-run drivers |
 | `docs/` | Contracts, recipes, support matrix and this plan |

@@ -1,6 +1,6 @@
 # Rust API Guide
 
-The package is `orbit-te` and the crate is `orbit_te`. Generate the full type
+The package is `orbite` and the crate is `orbite`. Generate the full type
 documentation with:
 
 ```sh
@@ -38,9 +38,9 @@ engine. `engine.config()` borrows its effective settings.
 ### Loading TENT configuration
 
 ```rust
-use orbit_te::{EngineConfig, TransferEngine};
+use orbite::{EngineConfig, TransferEngine};
 
-fn open_engine() -> orbit_te::Result<TransferEngine> {
+fn open_engine() -> orbite::Result<TransferEngine> {
     TransferEngine::new(EngineConfig::from_tent_env()?)
 }
 ```
@@ -63,7 +63,7 @@ rejects malformed roots, duplicate keys, unsupported fields and out-of-range
 values before starting an engine. Each input document is limited to 1 MiB.
 You can reuse the returned configuration after deleting the file. Ordinary
 typed construction retains the existing subsystem environment switches.
-The [configuration inventory](https://github.com/OrbitInfra/OrbitTE/blob/main/tests/reference/inventory/config.tsv)
+The [configuration inventory](https://github.com/OrbitInfra/OrbiTE/blob/main/tests/reference/inventory/config.tsv)
 lists the owner or rejection for each field.
 
 | API | Contract |
@@ -176,7 +176,7 @@ for backoff, queue wakes, bounded retries and owner retirement.
 The CUDA feature accepts compatible cudarc 0.19 releases. Rust 1.85 builds
 use 0.19.0 in the checked-in lockfile. Consumers resolving a fresh lockfile
 on 1.85 can select it with `cargo update -p cudarc --precise 0.19.0`.
-Consumers using cudarc 0.19.8 share one registry package with OrbitTE on
+Consumers using cudarc 0.19.8 share one registry package with OrbiTE on
 Rust 1.88 or newer, as required by that release's libloading dependency.
 
 OrbitKV deliberately passes its `Arc<cudarc::driver::CudaStream>` as the

@@ -233,7 +233,7 @@ impl SharedSlotManager {
         });
         let owner = publisher.clone();
         let worker = thread::Builder::new()
-            .name("orbitte-rdma-slot".into())
+            .name("orbite-rdma-slot".into())
             .spawn(move || {
                 while !owner.stop.load(Ordering::Acquire) {
                     if let Err(e) = owner.mapping.refresh() {

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use orbit_te::{BatchState, EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest};
+use orbite::{BatchState, EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest};
 
-fn main() -> orbit_te::Result<()> {
+fn main() -> orbite::Result<()> {
     let timeout = Duration::from_secs(2);
     let source = TransferEngine::new(EngineConfig::default())?;
     let exported = source.register_memory(
@@ -20,7 +20,7 @@ fn main() -> orbit_te::Result<()> {
             TransferOp::Read,
             &peer,
             &[TransferRequest::new(
-                orbit_te::Transport::Tcp,
+                orbite::Transport::Tcp,
                 destination.base_address() + local_offset,
                 exported.base_address() + remote_offset,
                 8,

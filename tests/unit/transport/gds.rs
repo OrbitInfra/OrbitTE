@@ -268,8 +268,8 @@ impl Fixture {
     }
     pub(crate) fn with_engine(engine: TransferEngine, length: usize) -> Result<Self> {
         let dir =
-            std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
-        let path = dir.join(format!("orbitte-gds-{}", crate::SourceEpoch::generate()?));
+            std::env::var_os("ORBITE_EXT4_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+        let path = dir.join(format!("orbite-gds-{}", crate::SourceEpoch::generate()?));
         File::create(&path)?.set_len(length as u64)?;
         let segment = engine.open_file_segment(
             &format!("file://{}", path.display()),
@@ -684,12 +684,12 @@ fn a_forked_child_reopens_the_process_driver_before_use() {
 
 #[test]
 fn runtime_soname_symbols_properties_and_batch_abi() -> Result<()> {
-    if let Ok(mode) = std::env::var("ORBITTE_CUFILE_SHIM") {
+    if let Ok(mode) = std::env::var("ORBITE_CUFILE_SHIM") {
         let engine = TransferEngine::new(EngineConfig::default())?;
         assert_eq!(engine.stats()?.gds, GdsStats::default());
         // Empty file submission probes eligibility without presenting a user buffer.
         let probe_path = std::env::temp_dir().join(format!(
-            "orbitte-gds-probe-{}",
+            "orbite-gds-probe-{}",
             crate::SourceEpoch::generate()?
         ));
         fs::write(&probe_path, [])?;
@@ -707,12 +707,9 @@ fn runtime_soname_symbols_properties_and_batch_abi() -> Result<()> {
             "force" => assert_eq!(stats.mode, Some(GdsMode::CompatForced)),
             _ => {
                 assert_eq!(stats.mode, Some(GdsMode::NativeOnly));
-                let dir = std::env::var_os("ORBITTE_EXT4_DIR")
+                let dir = std::env::var_os("ORBITE_EXT4_DIR")
                     .map_or_else(std::env::temp_dir, PathBuf::from);
-                let path = dir.join(format!(
-                    "orbitte-cuFile-{}",
-                    crate::SourceEpoch::generate()?
-                ));
+                let path = dir.join(format!("orbite-cuFile-{}", crate::SourceEpoch::generate()?));
                 fs::write(&path, b"................")?;
                 let file = engine.open_file_segment(
                     &format!("file://{}", path.display()),
@@ -745,7 +742,7 @@ fn runtime_soname_symbols_properties_and_batch_abi() -> Result<()> {
         return Ok(());
     }
     let out = std::env::temp_dir().join(format!(
-        "orbitte-cufile-loader-{}",
+        "orbite-cufile-loader-{}",
         crate::SourceEpoch::generate()?
     ));
     fs::create_dir(&out)?;
@@ -766,7 +763,7 @@ fn runtime_soname_symbols_properties_and_batch_abi() -> Result<()> {
                 "--exact",
                 "transport::gds::tests::runtime_soname_symbols_properties_and_batch_abi",
             ])
-            .env("ORBITTE_CUFILE_SHIM", mode)
+            .env("ORBITE_CUFILE_SHIM", mode)
             .env("LD_LIBRARY_PATH", &out)
             .output()?;
         assert!(
@@ -870,10 +867,7 @@ fn file_selection_follows_named_order_and_only_selection_can_choose_io_uring() -
             16,
         )?;
         if !f.engine.io_uring.as_ref().is_some_and(|io| io.available()) {
-            assert_ne!(
-                std::env::var("ORBITTE_REQUIRE_IO_URING").as_deref(),
-                Ok("1")
-            );
+            assert_ne!(std::env::var("ORBITE_REQUIRE_IO_URING").as_deref(), Ok("1"));
             eprintln!("skipping optional io_uring path: kernel unavailable");
             return Ok(());
         }

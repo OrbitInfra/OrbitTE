@@ -1,6 +1,6 @@
-//! Compiled as an independent consumer whose only direct dependency is orbit-te.
-use orbit_te::cuda::local_copy::{LocalCopyConfig, LocalCopyEngine, ProducerEvent};
-use orbit_te::{RegisteredMemory, Result};
+//! Compiled as an independent consumer whose only direct dependency is orbite.
+use orbite::cuda::local_copy::{LocalCopyConfig, LocalCopyEngine, ProducerEvent};
+use orbite::{RegisteredMemory, Result};
 use std::ffi::c_void;
 use std::sync::Arc;
 

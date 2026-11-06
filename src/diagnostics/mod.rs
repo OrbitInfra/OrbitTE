@@ -8,7 +8,7 @@ mod redaction;
 pub use redaction::{RedactionMode, Redactor, Sensitivity};
 
 pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const BUILD_COMMIT: &str = env!("ORBITTE_BUILD_COMMIT");
+pub const BUILD_COMMIT: &str = env!("ORBITE_BUILD_COMMIT");
 pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -109,8 +109,8 @@ pub fn version_snapshot() -> Snapshot {
         build: BuildInfo {
             version: BUILD_VERSION.into(),
             commit: BUILD_COMMIT.into(),
-            compiler: env!("ORBITTE_BUILD_COMPILER").into(),
-            build_type: env!("ORBITTE_BUILD_PROFILE").into(),
+            compiler: env!("ORBITE_BUILD_COMPILER").into(),
+            build_type: env!("ORBITE_BUILD_PROFILE").into(),
             features: [
                 ("tent", true),
                 ("ascend", false),

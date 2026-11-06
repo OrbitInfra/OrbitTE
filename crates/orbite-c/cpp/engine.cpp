@@ -31,7 +31,7 @@ Status options(const MemoryOptions &in, tent_memory_options_t &out) {
     out.internal = in.internal;
     return Status::OK();
 }
-orbitte_notification_v1 view(const Notification &n) {
+orbite_notification_v1 view(const Notification &n) {
     return {n.name.data(), n.name.size(), n.msg.data(), n.msg.size()};
 }
 template <class C, class T, class Query, class Convert>
@@ -60,19 +60,19 @@ struct ConsumedBatch {
     BatchID id;
     ~ConsumedBatch() {
         if (id)
-            (void)orbitte_abandon_v1(engine, id);
+            (void)orbite_abandon_v1(engine, id);
     }
 };
 
 } // namespace
 
-TransferEngine::TransferEngine() : owner_(orbitte_create_v1(0, nullptr)) {}
+TransferEngine::TransferEngine() : owner_(orbite_create_v1(0, nullptr)) {}
 TransferEngine::TransferEngine(const std::string path)
-    : owner_(cstring(path) ? orbitte_create_v1(2, path.c_str()) : nullptr) {}
+    : owner_(cstring(path) ? orbite_create_v1(2, path.c_str()) : nullptr) {}
 TransferEngine::TransferEngine(std::shared_ptr<Config> config) {
     if (config) {
         auto json = config->dump(-1);
-        owner_ = orbitte_create_v1(1, json == "null" ? "{}" : json.c_str());
+        owner_ = orbite_create_v1(1, json == "null" ? "{}" : json.c_str());
     }
 }
 TransferEngine::~TransferEngine() { tent_destroy_engine(owner_); }
@@ -93,10 +93,10 @@ uint16_t TransferEngine::getRpcServerPort() const {
 }
 std::string TransferEngine::getLocalTopologyString() const {
     size_t n = 0;
-    if (orbitte_topology_v1(owner_, nullptr, &n) != -2 || !n || n > (1u << 20))
+    if (orbite_topology_v1(owner_, nullptr, &n) != -2 || !n || n > (1u << 20))
         return "{}";
     std::vector<char> json(n);
-    if (orbitte_topology_v1(owner_, json.data(), &n))
+    if (orbite_topology_v1(owner_, json.data(), &n))
         return "{}";
     return std::string(json.data(), n - 1);
 }
@@ -119,7 +119,7 @@ Status TransferEngine::closeSegment(SegmentID id) {
     return result(tent_close_segment(owner_, id), "close segment");
 }
 Status TransferEngine::probePeerAliveByID(SegmentID id) {
-    return result(orbitte_probe_v1(owner_, id), "probe peer");
+    return result(orbite_probe_v1(owner_, id), "probe peer");
 }
 Status TransferEngine::getSegmentInfo(SegmentID id, SegmentInfo &out) {
     tent_segment_info_t info{};
@@ -201,14 +201,14 @@ Status TransferEngine::freeBatch(BatchID b) {
 Status TransferEngine::submit(BatchID b, const std::vector<Request> &list, const Notification *n,
                               bool cancellable) {
     size_t limit = 0;
-    if (auto rc = orbitte_limits_v1(owner_, &limit))
+    if (auto rc = orbite_limits_v1(owner_, &limit))
         return result(rc, "submit limits");
     if (list.size() > limit)
         return Status::TooManyRequests("request vector exceeds engine capacity");
-    std::vector<orbitte_request_v1> rows;
+    std::vector<orbite_request_v1> rows;
     rows.reserve(list.size());
     for (const auto &r : list)
-        rows.push_back({sizeof(orbitte_request_v1),
+        rows.push_back({sizeof(orbite_request_v1),
                         1,
                         {r.opcode, r.source, r.target_id, r.target_offset, r.length, r.priority,
                          r.transport_hint},
@@ -217,10 +217,10 @@ Status TransferEngine::submit(BatchID b, const std::vector<Request> &list, const
                         r.deadline_ns,
                         static_cast<int32_t>(r.intent_type),
                         0});
-    orbitte_notification_v1 notification{};
+    orbite_notification_v1 notification{};
     if (n)
         notification = view(*n);
-    return result(orbitte_submit_v1(owner_, b, rows.data(), rows.size(),
+    return result(orbite_submit_v1(owner_, b, rows.data(), rows.size(),
                                     n ? &notification : nullptr, cancellable ? 1 : 0),
                   "submit transfer");
 }
@@ -254,19 +254,19 @@ Status TransferEngine::getTransferStatus(BatchID b, TransferStatus &s) {
 }
 Status TransferEngine::progressBatch(BatchID b, TransferStatus &s) {
     tent_status_t out{};
-    int rc = orbitte_progress_v1(owner_, b, &out);
+    int rc = orbite_progress_v1(owner_, b, &out);
     if (!rc)
         s = status(out);
     return result(rc, "progress batch");
 }
 Status TransferEngine::sendNotification(SegmentID id, const Notification &n) {
     auto note = view(n);
-    return result(orbitte_notify_v1(owner_, id, &note), "send notification");
+    return result(orbite_notify_v1(owner_, id, &note), "send notification");
 }
 Status TransferEngine::receiveNotification(std::vector<Notification> &out) {
     uint8_t *p = nullptr;
     size_t n = 0;
-    if (auto rc = orbitte_recv_v1(owner_, &p, &n))
+    if (auto rc = orbite_recv_v1(owner_, &p, &n))
         return result(rc, "receive notifications");
     std::unique_ptr<uint8_t, decltype(&std::free)> guard(p, std::free);
     std::vector<Notification> list;
@@ -306,7 +306,7 @@ Status TransferEngine::waitTransferCompletion(BatchID b) {
         if (!op.ok())
             return op;
         if (s.s != INITIAL && s.s != PENDING) {
-            const int rc = orbitte_reap_v1(owner_, b);
+            const int rc = orbite_reap_v1(owner_, b);
             if (rc != -TENT_ERROR_TOO_MANY_REQUESTS) {
                 if (rc)
                     return result(rc, "batch retirement");

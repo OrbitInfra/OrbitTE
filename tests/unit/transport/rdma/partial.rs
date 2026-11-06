@@ -124,7 +124,7 @@ pub(super) fn finish() {
     assert_eq!(provider.calls, 1);
     assert!(provider.restored && provider.closed);
     println!(
-        "ORBITTE_PARTIAL_POST {{\"attempted_wr\":3,\"native_accepted_wr\":1,\"native_bad_wr_index\":1,\"native_errno\":12,\"provider_calls\":1,\"provider_restored\":true,\"native_context_closed\":true}}"
+        "ORBITE_PARTIAL_POST {{\"attempted_wr\":3,\"native_accepted_wr\":1,\"native_bad_wr_index\":1,\"native_errno\":12,\"provider_calls\":1,\"provider_restored\":true,\"native_context_closed\":true}}"
     );
 }
 
@@ -144,6 +144,6 @@ pub(super) fn verify_prefix(memory: &crate::RegisteredMemory, original: &[u8], i
         }
     }
     println!(
-        "ORBITTE_PARTIAL_BYTES {{\"changed_prefix_bytes\":{changed},\"possible_prefix_bytes\":4096,\"unposted_suffix_and_guards_unchanged\":true,\"confirmed_completion_bytes\":0}}"
+        "ORBITE_PARTIAL_BYTES {{\"changed_prefix_bytes\":{changed},\"possible_prefix_bytes\":4096,\"unposted_suffix_and_guards_unchanged\":true,\"confirmed_completion_bytes\":0}}"
     );
 }

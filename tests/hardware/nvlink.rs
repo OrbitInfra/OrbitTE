@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use orbit_te::cuda::{CudaMemory, allocate_pinned_host, retained_resources};
-use orbit_te::{
+use orbite::cuda::{CudaMemory, allocate_pinned_host, retained_resources};
+use orbite::{
     EngineConfig, Error, HostMemory, Permission, RegisteredMemory, Result, TransferEngine,
     TransferOp, TransferRequest, Transport,
 };
@@ -381,7 +381,7 @@ fn requester(
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args == ["--protocol"] {
-        println!("orbitte-installed-nvlink-v1");
+        println!("orbite-installed-nvlink-v1");
         return Ok(());
     }
     if args.len() != 6 {

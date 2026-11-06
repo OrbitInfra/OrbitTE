@@ -60,7 +60,7 @@ static void accounting_complete(struct ibv_cq *cq, const struct ibv_wc *wc) {
             entry->context, (uintptr_t)cq, wc->qp_num, wc->wr_id, op, wc->status, wc->byte_len);
 }
 
-int orbitte_rail_accounting(unsigned command, unsigned phase, unsigned op,
+int orbite_rail_accounting(unsigned command, unsigned phase, unsigned op,
                            unsigned limit, struct accounting_snapshot *output) {
     if (!output) return EINVAL;
     pthread_mutex_lock(&lock);

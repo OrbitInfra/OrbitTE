@@ -65,7 +65,7 @@ int main(void) {
     assert(cuMemcpyHtoDAsync_v2_fn(456,host,17,(void *)2)==1);
     assert(cuMemcpyDtoHAsync_v2_fn(host,456,17,(void *)2)==700);
     assert(cuMemFreeHost_fn(host)==1);
-    assert(setenv("ORBITTE_STAGING_OBSERVE", "1", 1)==0);
+    assert(setenv("ORBITE_STAGING_OBSERVE", "1", 1)==0);
     LOAD(cuCtxPushCurrent_v2); LOAD(cuStreamCreate); LOAD(cuEventCreate);
     LOAD(cuStreamDestroy_v2); LOAD(cuEventDestroy_v2);
     void *stream=NULL, *event=NULL;
@@ -75,14 +75,14 @@ int main(void) {
     assert(cuEventDestroy_v2_fn(event)==700 && cuStreamDestroy_v2_fn(stream)==1);
     LOAD(cuEventQuery);
     assert(cuEventQuery_fn(event)==600 && cuEventQuery_fn(event)==0 && cuEventQuery_fn(event)==700);
-    assert(unsetenv("ORBITTE_STAGING_OBSERVE")==0);
+    assert(unsetenv("ORBITE_STAGING_OBSERVE")==0);
     queries=0;
     assert(cuEventQuery_fn(event)==600);
     LOAD(cuMemcpyBatchAsync_v2);
     uint64_t dsts[] = {456, 556}, srcs[] = {123, 223}; size_t sizes[] = {17, 23}, first = 0;
     copy_attributes attrs = {.source_order = 1};
     assert(cuMemcpyBatchAsync_v2_fn(dsts, srcs, sizes, 2, &attrs, &first, 1, (void *)2) == 700);
-    assert(setenv("ORBITTE_SYNC_OBSERVE","1",1)==0);
+    assert(setenv("ORBITE_SYNC_OBSERVE","1",1)==0);
     LOAD(cuMemcpy); LOAD(cuStreamSynchronize); LOAD(cuCtxGetCurrent);
     assert(cuCtxGetCurrent_fn(&context)==0 && context==(void *)42);
     assert(cuMemcpy_fn(456,123,17)==1 && cuStreamSynchronize_fn(NULL)==700);

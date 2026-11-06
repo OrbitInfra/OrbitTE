@@ -18,8 +18,7 @@ fn missing_cuda_entry_point_returns_unavailable_without_eager_loader_panic() {
 
 #[test]
 fn native_batch_probe_requires_supported_version_and_exact_v2_abi() {
-    let directory =
-        std::env::temp_dir().join(format!("orbitte-batch-probe-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("orbite-batch-probe-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     for old_only in [false, true] {
         let output = directory.join(if old_only { "old.so" } else { "v2.so" });

@@ -8,7 +8,7 @@ type Owners = BTreeMap<(usize, usize), (String, String)>;
 static OWNERS: OnceLock<Mutex<Owners>> = OnceLock::new();
 
 pub(super) fn count() -> usize {
-    let count = env::var("ORBITTE_RDMA_LANES")
+    let count = env::var("ORBITE_RDMA_LANES")
         .unwrap_or_else(|_| "1".into())
         .parse()
         .unwrap();
@@ -31,7 +31,7 @@ pub(super) unsafe fn observe(handles: *const sys::ConnectionHandles) {
     let device = unsafe { CStr::from_ptr((*(*context).device).name.as_ptr()) }
         .to_str()
         .unwrap();
-    let rails = env::var("ORBITTE_SHARED_RAILS").unwrap();
+    let rails = env::var("ORBITE_SHARED_RAILS").unwrap();
     let nic = rails.split(',').position(|name| name == device).unwrap();
     let lane_id = crate::transport::rdma::tests::cq_lane_owner(cq as usize);
     let current = thread::current();
@@ -39,7 +39,7 @@ pub(super) unsafe fn observe(handles: *const sys::ConnectionHandles) {
     let name = current.name().unwrap();
     assert_eq!(
         name,
-        format!("orbitte-rdma-{}", lane_id),
+        format!("orbite-rdma-{}", lane_id),
         "native CQ was polled by a foreign worker"
     );
     let key = (context as usize, cq as usize);
@@ -52,7 +52,7 @@ pub(super) unsafe fn observe(handles: *const sys::ConnectionHandles) {
         );
     } else {
         println!(
-            "ORBITTE_WORKER_CQ {{\"context\":{},\"cq\":{},\"nic_id\":{nic},\"lane_id\":{lane_id},\"device\":\"{device}\",\"worker\":\"{name}\",\"thread\":\"{thread}\"}}",
+            "ORBITE_WORKER_CQ {{\"context\":{},\"cq\":{},\"nic_id\":{nic},\"lane_id\":{lane_id},\"device\":\"{device}\",\"worker\":\"{name}\",\"thread\":\"{thread}\"}}",
             key.0, key.1
         );
         owners.insert(key, (thread, name.into()));
@@ -79,7 +79,7 @@ pub(super) fn running(engine: &crate::TransferEngine) {
         .workers
         .inflight_slices();
     println!(
-        "ORBITTE_WORKER_LOAD_END {{\"phase\":\"{}\",\"loads\":{loads:?}}}",
+        "ORBITE_WORKER_LOAD_END {{\"phase\":\"{}\",\"loads\":{loads:?}}}",
         if closed { "closed" } else { "running" }
     );
     if closed {
@@ -87,7 +87,7 @@ pub(super) fn running(engine: &crate::TransferEngine) {
     }
     let phase = if closed { "closed" } else { "running" };
     println!(
-        "ORBITTE_WORKERS_STATS {{\"phase\":\"{phase}\",\"configured\":{},\"workers\":{},\"opened\":{},\"lanes\":{},\"recoveries\":{}}}",
+        "ORBITE_WORKERS_STATS {{\"phase\":\"{phase}\",\"configured\":{},\"workers\":{},\"opened\":{},\"lanes\":{},\"recoveries\":{}}}",
         count(),
         stats.progress_workers,
         stats.opened_progress_workers,
@@ -101,7 +101,7 @@ pub(super) fn closed(stats: &RdmaStats) {
     assert_eq!((stats.progress_workers, stats.progress_lanes), (0, 0));
     assert!(stats.opened_progress_workers == 0 || stats.opened_progress_workers == count() as u64);
     println!(
-        "ORBITTE_WORKERS_STATS {{\"phase\":\"closed\",\"configured\":{},\"workers\":0,\"opened\":{},\"lanes\":0}}",
+        "ORBITE_WORKERS_STATS {{\"phase\":\"closed\",\"configured\":{},\"workers\":0,\"opened\":{},\"lanes\":0}}",
         count(),
         stats.opened_progress_workers
     );
@@ -124,7 +124,7 @@ pub(super) fn admitted(engine: &crate::TransferEngine, expected: usize) {
             "fresh slices ignored the least-loaded worker: {loads:?}"
         );
     }
-    println!("ORBITTE_WORKER_LOAD {{\"fresh\":{fresh},\"slices\":{expected},\"loads\":{loads:?}}}");
+    println!("ORBITE_WORKER_LOAD {{\"fresh\":{fresh},\"slices\":{expected},\"loads\":{loads:?}}}");
 }
 
 fn monitor_stats(stats: &RdmaStats) {
@@ -133,7 +133,7 @@ fn monitor_stats(stats: &RdmaStats) {
         assert_eq!(stats.monitor_workers, 0);
     }
     println!(
-        "ORBITTE_MONITOR_STATS {{\"workers\":{},\"opened\":{},\"async_sources\":{},\"completion_sources\":{}}}",
+        "ORBITE_MONITOR_STATS {{\"workers\":{},\"opened\":{},\"async_sources\":{},\"completion_sources\":{}}}",
         stats.monitor_workers,
         stats.opened_monitor_workers,
         stats.async_event_sources,
@@ -198,7 +198,7 @@ fn endpoint_arrays(runtime: &RdmaTransport, expected: usize) {
             );
             active += busy;
             println!(
-                "ORBITTE_ENDPOINT_ARRAY {{\"context\":{context},\"endpoint\":{},\"qps\":{},\"active\":{busy},\"max_grants_per_qp\":{max_grants},\"width\":{width},\"lanes\":{counts:?}}}",
+                "ORBITE_ENDPOINT_ARRAY {{\"context\":{context},\"endpoint\":{},\"qps\":{},\"active\":{busy},\"max_grants_per_qp\":{max_grants},\"width\":{width},\"lanes\":{counts:?}}}",
                 Arc::as_ptr(&endpoint) as usize,
                 counts.iter().sum::<usize>()
             );

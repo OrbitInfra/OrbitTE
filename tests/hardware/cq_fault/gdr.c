@@ -1,6 +1,6 @@
 /* Passive GPU registration/WR witnesses. No pointer ownership or data copying. */
 static int gdr_observe(void) {
-    const char *value = getenv("ORBITTE_GDR_OBSERVE");
+    const char *value = getenv("ORBITE_GDR_OBSERVE");
     return value && !strcmp(value, "1");
 }
 

@@ -23,7 +23,7 @@ fn fixture(contents: &[u8], chunk: usize, slots: usize, queued: bool) -> Result<
 }
 
 fn fixture_with_config(contents: &[u8], config: EngineConfig) -> Result<Fixture> {
-    let dir = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
+    let dir = std::env::var_os("ORBITE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
     Fixture::new(&dir, contents, TransferEngine::new(config)?)
 }
 
@@ -168,7 +168,7 @@ fn device_chunks_and_tail_use_one_ring_and_verify_both_files_and_guards() -> Res
     expected[..n].copy_from_slice(&original[3..3 + n]);
     expected[n + 3..n + 22].copy_from_slice(&original[n + 8..n + 27]);
     assert_eq!(fs::read(&f.path)?, expected);
-    if std::env::var_os("ORBITTE_EXT4_DIR").is_some() {
+    if std::env::var_os("ORBITE_EXT4_DIR").is_some() {
         assert_eq!(
             f.engine.file_segment_info(&f.segment)?.direct_io,
             Some(true)

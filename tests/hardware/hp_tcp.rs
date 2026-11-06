@@ -1,5 +1,5 @@
 //! Public two-process HP-TCP rail and byte-integrity consumer.
-use orbit_te::{
+use orbite::{
     EngineConfig, Error, HpTcpConfig, Permission, Result, TransferEngine, TransferOp,
     TransferRequest, Transport,
 };
@@ -16,7 +16,7 @@ fn expected() -> Vec<u8> {
 fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.as_slice() == ["--protocol"] {
-        println!("orbitte-installed-hp-tcp");
+        println!("orbite-installed-hp-tcp");
         return Ok(());
     }
     let usage = || Error::InvalidConfig("use serve RAIL_A,RAIL_B or run RAIL_A,RAIL_B PEER EPOCH");

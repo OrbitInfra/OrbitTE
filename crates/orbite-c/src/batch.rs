@@ -1,13 +1,13 @@
 use super::{abi, boundary::*, engine::Engine, memory::transport, segments::Target};
-use orbit_te::{Error, Notification, Priority, TaskState, TaskStatus, TransferOp, TransferRequest};
+use orbite::{Error, Notification, Priority, TaskState, TaskStatus, TransferOp, TransferRequest};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub(crate) struct Fields {
     pub cancellable: bool,
-    pub intent: orbit_te::IntentType,
-    pub policy: Option<orbit_te::PolicyName>,
+    pub intent: orbite::IntentType,
+    pub policy: Option<orbite::PolicyName>,
     pub deadline: Option<std::time::Instant>,
 }
 
@@ -119,7 +119,7 @@ pub(crate) fn terminal(tasks: &[TaskStatus]) -> Result<(i32, i32)> {
                     Error::Timeout | Error::Cancelled | Error::DeadlineInfeasible
                 ) =>
             {
-                let certain = f.remote_effect == orbit_te::RemoteEffect::None;
+                let certain = f.remote_effect == orbite::RemoteEffect::None;
                 let code = match &f.error {
                     Error::Io(_) | Error::Protocol(_) if !certain => UNKNOWN,
                     Error::Io(io)

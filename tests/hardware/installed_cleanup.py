@@ -5,8 +5,8 @@ from installed_restart import records
 def verify(case, evidence, logs):
     if (case['fault_role'], case['generations'], case['parents']) != ('requester', 2, 1):
         raise ValueError('cleanup proof escaped the frozen single-QP profile')
-    proofs = records(evidence['requester'], 'ORBITTE_INSTALLED_CLEANUP ')
-    if len(proofs) != 1 or records(evidence['source'], 'ORBITTE_INSTALLED_CLEANUP '):
+    proofs = records(evidence['requester'], 'ORBITE_INSTALLED_CLEANUP ')
+    if len(proofs) != 1 or records(evidence['source'], 'ORBITE_INSTALLED_CLEANUP '):
         raise ValueError('cleanup proof missing, duplicated or in the wrong peer')
     rows = logs[0]
     select = lambda kind: [r for r in rows if r['kind'] == kind]
@@ -16,7 +16,7 @@ def verify(case, evidence, logs):
         raise ValueError('missing native cleanup call or unexpected retry')
     post, arm, error, destroy = posts[0], arms[0], errors[0], destroys[0]
     proof = proofs[0]
-    pending = records(evidence['requester'], 'ORBITTE_INSTALLED_CQE_PENDING ')[0]
+    pending = records(evidence['requester'], 'ORBITE_INSTALLED_CQE_PENDING ')[0]
     if (not pending['sequence'] < arm['seq'] < destroy['seq'] < error['seq'] < queries[0]['seq'] < queries[1]['seq']
             or proof['sequence'] != queries[1]['seq']
             or any(r['phase'] != 0 or r['pid'] != pending['pid'] or r['qpn'] != post['qpn']

@@ -1,12 +1,12 @@
 //! Packaged public-API comparison with OrbitKV's native_kernel_copy custom-fragments case.
 use cudarc::driver::CudaContext;
-use orbit_te::cuda::{
+use orbite::cuda::{
     CudaMemory, allocate_pinned_host,
     local_copy::{
         CopyDirection, LocalCopyBackend, LocalCopyConfig, LocalCopyDesc, LocalCopyEngine,
     },
 };
-use orbit_te::{EngineConfig, Permission, TransferEngine};
+use orbite::{EngineConfig, Permission, TransferEngine};
 use serde_json::json;
 use std::error::Error;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ fn trial(
         return Err("wrong executing backend".into());
     }
     // Match CPU wall time from submit entry to a physical receipt. The baseline
-    // synchronizes its stream. OrbitTE observes the private event on that stream.
+    // synchronizes its stream. OrbiTE observes the private event on that stream.
     let deadline = start + Duration::from_secs(30);
     while !flight.poll()? {
         if Instant::now() >= deadline {
@@ -39,7 +39,7 @@ fn trial(
 fn main() -> GateResult<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args == ["--protocol"] {
-        println!("orbitte-installed-local-copy");
+        println!("orbite-installed-local-copy");
         return Ok(());
     }
     let [blocks, width, samples] = args.as_slice() else {

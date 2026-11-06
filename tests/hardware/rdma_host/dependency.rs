@@ -41,7 +41,7 @@ impl DependencyFault {
             _ => return Err("invalid native dependency or completion mode".into()),
         };
         // SAFETY: the supervisor pins the observer exporting this versioned ABI.
-        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbitte_dependency_fault".as_ptr()) };
+        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbite_dependency_fault".as_ptr()) };
         if symbol.is_null() {
             return Err("missing native dependency control".into());
         }

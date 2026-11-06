@@ -71,9 +71,9 @@ impl Kernel {
             let mut function = std::ptr::null_mut();
             // SAFETY: the live module owns this named entry and is held through all launches.
             let status =
-                unsafe { (api.function)(&mut function, module, c"orbitte_batch_copy".as_ptr()) };
+                unsafe { (api.function)(&mut function, module, c"orbite_batch_copy".as_ptr()) };
             if status == driver::Status::CUDA_ERROR_NOT_FOUND {
-                return Err(Error::Unavailable("orbitte_batch_copy kernel"));
+                return Err(Error::Unavailable("orbite_batch_copy kernel"));
             }
             check("cuModuleGetFunction local copy", status)?;
             if function.is_null() {

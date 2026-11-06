@@ -16,8 +16,8 @@ hp_tcp.buffer	src/transport/hp_tcp/hp_tcp_protocol.cpp	wire.hp	Decode the regist
 fabric.peer	src/transport/fabric/fabric_attrs.cpp	wire.fabric	JSON includes version, provider, virt_addr and NIC entries with hex-encoded address, name and NUMA. Decode NUL and non-ASCII address bytes losslessly.
 fabric.buffer	src/transport/fabric/fabric_attrs.cpp	wire.fabric	Decode contiguous chunks with off, len, nics and parallel 64-bit keys. Reject holes, bad indices and incomplete coverage.
 mpcomm	src/transport/mpcomm/mpcomm_peer_registry.cpp	wire.mpcomm	Publish version-prefixed host:port from the segment host and the actual MPComm port; decode the accepted unprefixed form and reject a malformed prefix or port.
-shm	src/transport/shm/shm_transport.cpp	metadata.segment	shm_path names the shared file. The frozen SHM registration omits shm_offset from BufferDesc; OrbitTE's offset-bearing Describe is a separate codec.
-nvlink	src/transport/nvlink/nvlink_transport.cpp	metadata.segment	Legacy GPU IPC exports serialized handle bytes in shm_path. Keep the raw OrbitTE IPC handle descriptor separate.
+shm	src/transport/shm/shm_transport.cpp	metadata.segment	shm_path names the shared file. The frozen SHM registration omits shm_offset from BufferDesc; OrbiTE's offset-bearing Describe is a separate codec.
+nvlink	src/transport/nvlink/nvlink_transport.cpp	metadata.segment	Legacy GPU IPC exports serialized handle bytes in shm_path. Keep the raw OrbiTE IPC handle descriptor separate.
 mnnvl	src/transport/mnnvl/mnnvl_transport.cpp	metadata.segment	Fabric allocation publishes serialized handle bytes in mnnvl_handle. A peer import cannot infer fabric reachability from the segment address.
 ub	src/runtime/control_plane.cpp	wire.excluded	Keep the dedicated bootstrap envelope and separate generation fields. Recognize the reserved RPC without implementing UB.
 exportLocalSegment/importRemoteSegment	src/runtime/transfer_engine_impl.cpp	metadata.registry	Native declarations are stubs returning NotImplemented. No fabricated export token or successful import.

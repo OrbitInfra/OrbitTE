@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbit_te::{
+use orbite::{
     EngineConfig, Error, HostMemory, Notification, NotificationEffect, NotificationStatus,
     Permission, RemoteEffect, RemoteSegment, SourceEpoch, TransferEngine, TransferOp,
     TransferRequest,
@@ -16,21 +16,21 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 mod common;
 
 fn request(
-    local: &orbit_te::RegisteredMemory,
-    remote: orbit_te::RemoteRegion,
+    local: &orbite::RegisteredMemory,
+    remote: orbite::RemoteRegion,
     local_offset: usize,
     remote_offset: usize,
     length: usize,
 ) -> TransferRequest {
     TransferRequest::new(
-        orbit_te::Transport::Tcp,
+        orbite::Transport::Tcp,
         local.base_address() + local_offset as u64,
         remote.base_address() + remote_offset as u64,
         length,
     )
 }
 
-fn region(peer: &RemoteSegment, id: u64) -> orbit_te::RemoteRegion {
+fn region(peer: &RemoteSegment, id: u64) -> orbite::RemoteRegion {
     *peer
         .regions()
         .iter()
@@ -40,7 +40,7 @@ fn region(peer: &RemoteSegment, id: u64) -> orbit_te::RemoteRegion {
 
 #[test]
 fn request_options_preserve_the_selected_transport_and_ranges() {
-    use orbit_te::{Priority, Transport};
+    use orbite::{Priority, Transport};
 
     let request = TransferRequest::new(Transport::Rdma, 3, 17, 8);
     assert_eq!(request.priority, Priority::High);
@@ -93,8 +93,8 @@ fn batched_read_write_range_guards_and_retired_descriptors() {
         .unwrap();
     let remote = region(&peer, export.id());
     let requests = [
-        request(&destination, remote, 8, 16, 32).with_priority(orbit_te::Priority::Low),
-        request(&destination, remote, 64, 0, 48).with_priority(orbit_te::Priority::Medium),
+        request(&destination, remote, 8, 16, 32).with_priority(orbite::Priority::Low),
+        request(&destination, remote, 64, 0, 48).with_priority(orbite::Priority::Medium),
         request(&destination, region(&peer, exports[1].id()), 120, 0, 8),
     ];
     let report = requester
@@ -181,9 +181,9 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
         ));
         assert_eq!(requester.stats().unwrap().inflight_batches, 0);
     };
-    rejects_staging(orbit_te::Transport::Nvlink);
+    rejects_staging(orbite::Transport::Nvlink);
     #[cfg(not(feature = "cuda"))]
-    rejects_staging(orbit_te::Transport::Tcp);
+    rejects_staging(orbite::Transport::Tcp);
     for (label, local_address, remote_address, length, overflowing) in [
         ("local overflow", u64::MAX, valid.remote_address, 8, true),
         ("remote overflow", valid.local_address, u64::MAX, 8, true),
@@ -206,7 +206,7 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
         ),
     ] {
         let invalid = TransferRequest::new(
-            orbit_te::Transport::Tcp,
+            orbite::Transport::Tcp,
             local_address,
             remote_address,
             length,
@@ -322,7 +322,7 @@ fn execution_failure_preserves_completed_prefix_and_skips_later_requests() {
 #[test]
 #[ignore = "subprocess fixture for two_process_restart_fences_old_authority"]
 fn peer_process_fixture() {
-    let Ok(bind) = std::env::var("ORBITTE_TEST_PEER_BIND") else {
+    let Ok(bind) = std::env::var("ORBITE_TEST_PEER_BIND") else {
         return;
     };
     let source = TransferEngine::new(EngineConfig {
@@ -338,7 +338,7 @@ fn peer_process_fixture() {
         .register_host_memory(fixture.memory, 0, data.len(), Permission::RemoteReadWrite)
         .unwrap();
     println!(
-        "ORBITTE_PEER {} {} {} {}",
+        "ORBITE_PEER {} {} {} {}",
         source.endpoint(),
         source.source_epoch(),
         memory.id(),
@@ -399,7 +399,7 @@ impl PeerProcess {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env("ORBITTE_TEST_PEER_BIND", bind.to_string())
+            .env("ORBITE_TEST_PEER_BIND", bind.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -464,7 +464,7 @@ fn wait_marker(receiver: &Receiver<String>) -> String {
         let line = receiver
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("source process readiness");
-        if let Some((_, fields)) = line.split_once("ORBITTE_PEER ") {
+        if let Some((_, fields)) = line.split_once("ORBITE_PEER ") {
             return fields.to_owned();
         }
     }
@@ -485,13 +485,13 @@ fn two_process_restart_fences_old_authority() {
     assert_eq!(remote.base_address(), process.address);
     let requests = [
         TransferRequest::new(
-            orbit_te::Transport::Tcp,
+            orbite::Transport::Tcp,
             local.base_address(),
             process.address + 8192,
             512,
         ),
         TransferRequest::new(
-            orbit_te::Transport::Tcp,
+            orbite::Transport::Tcp,
             local.base_address() + 512,
             process.address + 16384,
             512,
@@ -532,7 +532,7 @@ fn two_process_restart_fences_old_authority() {
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest::new(
-                    orbit_te::Transport::Tcp,
+                    orbite::Transport::Tcp,
                     local.base_address(),
                     process.address + 128,
                     256
@@ -591,7 +591,7 @@ fn two_process_restart_fences_old_authority() {
                 TransferOp::Read,
                 &refreshed,
                 &[TransferRequest::new(
-                    orbit_te::Transport::Tcp,
+                    orbite::Transport::Tcp,
                     local.base_address(),
                     replacement.address,
                     256

@@ -75,7 +75,7 @@ unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
     assert_eq!(unsafe { (*h).mr } as usize, trace.mr);
     println!(
-        "ORBITTE_COMMAND_ERROR {{\"kind\":\"mr\",\"code\":{},\"attempts\":{},\"mr\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
+        "ORBITE_COMMAND_ERROR {{\"kind\":\"mr\",\"code\":{},\"attempts\":{},\"mr\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
         trace.error, trace.attempts, trace.mr, trace.pd
     );
     trace.error
@@ -118,7 +118,7 @@ unsafe extern "C" fn dealloc_window(h: *mut sys::MemoryHandles) -> c_int {
     // SAFETY: The grant owns this window handle slot even during an injected teardown failure.
     assert_eq!(unsafe { (*h).mw } as usize, trace.mw);
     println!(
-        "ORBITTE_COMMAND_ERROR {{\"kind\":\"mw\",\"code\":{},\"attempts\":{},\"mr\":{},\"mw\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
+        "ORBITE_COMMAND_ERROR {{\"kind\":\"mw\",\"code\":{},\"attempts\":{},\"mr\":{},\"mw\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
         trace.error, trace.attempts, trace.mr, trace.mw, trace.pd
     );
     trace.error
@@ -200,10 +200,10 @@ fn engine(rails: &[String], bind: SocketAddr) -> TransferEngine {
         rdma_whitelist: rails.to_vec(),
         num_lanes: worker_pool::count(),
         port: Some(1),
-        gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
+        gid_index: Some(env::var("ORBITE_SHARED_GID").unwrap().parse().unwrap()),
         host_memory: RdmaHostMemory::Direct,
         device_mask: 3,
-        progress_mode: if env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1") {
+        progress_mode: if env::var("ORBITE_RDMA_EVENTS").as_deref() == Ok("1") {
             RdmaProgressMode::EventDriven
         } else {
             RdmaProgressMode::Polling
@@ -361,7 +361,7 @@ fn round(
         }
         assert!(report.locally_drained, "{report:?}");
         println!(
-            "ORBITTE_LIVE_REPORT {{\"sequence\":{sequence},\"complete\":{},\"drained\":{},\"effect\":\"{:?}\"}}",
+            "ORBITE_LIVE_REPORT {{\"sequence\":{sequence},\"complete\":{},\"drained\":{},\"effect\":\"{:?}\"}}",
             report.is_complete(),
             report.locally_drained,
             report.failure.as_ref().map(|failure| failure.remote_effect)
@@ -435,7 +435,7 @@ fn retain(
             "quarantined MW grant returned its slice load"
         );
         println!(
-            "ORBITTE_RETAINED_WORKER_LOAD {{\"grants\":{},\"loads\":{loads:?}}}",
+            "ORBITE_RETAINED_WORKER_LOAD {{\"grants\":{},\"loads\":{loads:?}}}",
             before.active_grants
         );
         let mut blocked = 0;
@@ -498,14 +498,14 @@ fn retain(
         (1, 1, libc::EIO)
     );
     println!(
-        "ORBITTE_MEMORY_RETENTION {{\"mode\":\"{mode}\",\"attempts\":1,\"code\":5,\"backing_retained\":true,\"observer_owners\":0,\"post_drop\":true,\"retained_owner_recovered\":false,\"progress_recoveries\":{recoveries}}}"
+        "ORBITE_MEMORY_RETENTION {{\"mode\":\"{mode}\",\"attempts\":1,\"code\":5,\"backing_retained\":true,\"observer_owners\":0,\"post_drop\":true,\"retained_owner_recovered\":false,\"progress_recoveries\":{recoveries}}}"
     );
     weak
 }
 
 pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
-    let fault_rail: usize = env::var("ORBITTE_RAIL_FAULT").unwrap().parse().unwrap();
-    let role = env::var("ORBITTE_RAIL_FAULT_ROLE").unwrap();
+    let fault_rail: usize = env::var("ORBITE_RAIL_FAULT").unwrap().parse().unwrap();
+    let role = env::var("ORBITE_RAIL_FAULT_ROLE").unwrap();
     let target = source == (role == "source");
     *TRACE.get_or_init(Default::default).lock().unwrap() = Trace {
         mode: mode.into(),
@@ -513,12 +513,12 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         rail: rails[fault_rail].clone(),
         ..Default::default()
     };
-    let operation = if env::var("ORBITTE_RAIL_OPERATION").as_deref() == Ok("read") {
+    let operation = if env::var("ORBITE_RAIL_OPERATION").as_deref() == Ok("read") {
         TransferOp::Read
     } else {
         TransferOp::Write
     };
-    let bind = env::var("ORBITTE_SHARED_BIND").unwrap().parse().unwrap();
+    let bind = env::var("ORBITE_SHARED_BIND").unwrap().parse().unwrap();
     let mut engine = engine(rails, bind);
     let mut backing = Arc::new(HostMemory::new(vec![0xa5; LENGTH].into_boxed_slice()).unwrap());
     let mut memory = engine
@@ -596,7 +596,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     .collect::<Vec<_>>()
                     .join(",");
                 println!(
-                    "ORBITTE_LIVE_CONNECTIONS {{\"sequence\":{sequence},\"source\":{source},\"connections\":[{json}]}}"
+                    "ORBITE_LIVE_CONNECTIONS {{\"sequence\":{sequence},\"source\":{source},\"connections\":[{json}]}}"
                 );
                 assert!(!rows.is_empty());
                 if matches!(sequence, 3 | 6) {
@@ -624,7 +624,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             assert!(stats.progress_recoveries >= 2);
         }
         println!(
-            "ORBITTE_LIVE_RECOVERY {{\"source\":{source},\"pid\":{},\"endpoint\":\"{endpoint}\",\"epoch\":\"{epoch}\",\"progress_failures\":{},\"progress_recoveries\":{},\"same_pd\":true,\"same_registration\":true,\"fault_cycles\":2,\"healthy_rounds\":5}}",
+            "ORBITE_LIVE_RECOVERY {{\"source\":{source},\"pid\":{},\"endpoint\":\"{endpoint}\",\"epoch\":\"{epoch}\",\"progress_failures\":{},\"progress_recoveries\":{},\"same_pd\":true,\"same_registration\":true,\"fault_cycles\":2,\"healthy_rounds\":5}}",
             std::process::id(),
             stats.progress_failures,
             stats.progress_recoveries
@@ -761,7 +761,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             }
         }
         println!(
-            "ORBITTE_ENGINE_REPLACEMENT {{\"source\":{source},\"pid\":{},\"same_rpc\":true,\"same_registration_id\":true,\"new_epoch\":true,\"new_pd\":true,\"old_backing_retained\":{},\"stale_epoch_before_qp\":true,\"healthy_reuse_rounds\":2}}",
+            "ORBITE_ENGINE_REPLACEMENT {{\"source\":{source},\"pid\":{},\"same_rpc\":true,\"same_registration_id\":true,\"new_epoch\":true,\"new_pd\":true,\"old_backing_retained\":{},\"stale_epoch_before_qp\":true,\"healthy_reuse_rounds\":2}}",
             std::process::id(),
             retained.is_some()
         );
@@ -773,7 +773,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     clean(&engine.stats().unwrap().rdma.unwrap());
     worker_pool::closed(&engine.stats().unwrap().rdma.unwrap());
     std::fs::write(
-        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        env::var("ORBITE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
     )
     .unwrap();
@@ -782,6 +782,6 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     drop(engine);
     assert!(weak.upgrade().is_none());
     println!(
-        "ORBITTE_LIFECYCLE_RESULT {{\"mode\":\"{mode}\",\"source\":{source},\"target\":{target},\"same_process\":true,\"fresh_engine_drained\":true,\"performance_measurement\":false}}"
+        "ORBITE_LIFECYCLE_RESULT {{\"mode\":\"{mode}\",\"source\":{source},\"target\":{target},\"same_process\":true,\"fresh_engine_drained\":true,\"performance_measurement\":false}}"
     );
 }

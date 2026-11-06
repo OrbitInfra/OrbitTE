@@ -2,13 +2,13 @@
 
 import os
 
-project = "OrbitTE"
+project = "OrbiTE"
 author = "OrbitInfra"
 copyright = "2026, OrbitInfra"
 html_title = project
-html_baseurl = "https://orbitinfra.github.io/OrbitTE/"
+html_baseurl = "https://orbitinfra.github.io/OrbiTE/"
 html_theme = "sphinx_book_theme"
-html_logo = "_static/orbitte-logo.svg"
+html_logo = "_static/orbite-logo.svg"
 html_favicon = "_static/orbit-icon.svg"
 html_static_path = ["_static"]
 html_extra_path = ["_extra"]
@@ -32,8 +32,8 @@ copybutton_prompt_text = r"\$ "
 copybutton_prompt_is_regexp = True
 
 html_theme_options = {
-    "repository_url": "https://github.com/OrbitInfra/OrbitTE",
-    "repository_branch": os.environ.get("ORBITTE_SOURCE_REF", "main"),
+    "repository_url": "https://github.com/OrbitInfra/OrbiTE",
+    "repository_branch": os.environ.get("ORBITE_SOURCE_REF", "main"),
     "path_to_docs": "docs",
     "use_repository_button": True,
     "use_edit_page_button": True,
@@ -41,7 +41,7 @@ html_theme_options = {
     "show_navbar_depth": 2,
     "show_toc_level": 2,
     "logo": {
-        "image_light": "_static/orbitte-logo.svg",
-        "image_dark": "_static/orbitte-logo-dark.svg",
+        "image_light": "_static/orbite-logo.svg",
+        "image_dark": "_static/orbite-logo-dark.svg",
     },
 }

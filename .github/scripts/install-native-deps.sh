@@ -4,8 +4,8 @@ set -euo pipefail
 # Use one signed Ubuntu 24.04 source set for update and install. The hosted
 # runner's Azure HTTP mirror can keep a slow package download alive past the
 # workflow deadline despite Acquire timeouts.
-sources="${RUNNER_TEMP:?RUNNER_TEMP must name the CI scratch directory}/orbitte-ubuntu.sources"
-sourceparts="$RUNNER_TEMP/orbitte-apt-sourceparts"
+sources="${RUNNER_TEMP:?RUNNER_TEMP must name the CI scratch directory}/orbite-ubuntu.sources"
+sourceparts="$RUNNER_TEMP/orbite-apt-sourceparts"
 mkdir -p "$sourceparts"
 cat > "$sources" <<'SOURCES'
 Types: deb

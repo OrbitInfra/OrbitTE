@@ -142,7 +142,7 @@ sharing a NIC and priority are ordered by
 `(posted_bytes + unposted_grant_bytes) / transmit_bandwidth / remaining_deadline`.
 As in TENT, the first 64 picks are greedy and the tail uses a fixed backlog with
 FIFO ties; unknown bandwidth keeps FIFO. This orders work; it is not a rate cap
-or a deadline guarantee. OrbitTE groups by local NIC across peers because its
+or a deadline guarantee. OrbiTE groups by local NIC across peers because its
 workers share one CQ budget, whereas TENT also groups by remote segment. Sorting
 buffers are reused, with no per-dispatch allocation. See
 [qualification](qualification.md#rdma-request-priority).
@@ -171,11 +171,11 @@ Cooperating processes on one host can share priority slots:
 
 ```rust
 use std::time::Duration;
-use orbit_te::RdmaConfig;
+use orbite::RdmaConfig;
 
 let config = RdmaConfig {
     priority_promotion_per_entry: true,
-    shared_quota_shm_path: Some("/orbitte-rdma-slots".into()),
+    shared_quota_shm_path: Some("/orbite-rdma-slots".into()),
     slot_rotation_interval: Duration::from_millis(2),
     ..Default::default()
 };
@@ -189,7 +189,7 @@ An empty or absent path leaves scheduling local. With a name configured, one
 publisher per RDMA worker pool updates the mapped slot from the monotonic
 clock every millisecond. A nonblocking kernel lock releases when its owner
 exits. Readers also check the clock boundary so a stalled publisher cannot
-extend a Low slot. The fixed OrbitTE header validates the interval, clock
+extend a Low slot. The fixed OrbiTE header validates the interval, clock
 domain and format before mapping. A foreign or damaged object fails closed.
 
 NIC bytes live in each process's selector. Smart selection charges the exact
@@ -206,7 +206,7 @@ another process's charge. Stop **all** participants before removing
 `[preferred NIC names, available NIC names]` (rank 0, rank 1):
 
 ```rust
-let rdma = orbit_te::transport::rdma::RdmaConfig {
+let rdma = orbite::transport::rdma::RdmaConfig {
     priority_matrix: Some(r#"{
         "cpu:0": [["mlx5_0"], ["mlx5_1"]],
         "cuda:0": [["mlx5_1"], ["mlx5_0"]]
@@ -282,7 +282,7 @@ RQ receives the exact 141-byte binding and invalidated key, then cleans the MW
 and grant, sends ACK and publishes READY. `RdmaQp` tracks exact outstanding WR
 identities, so old or duplicate completions cannot repay current debt. Only an
 explicit pre-authority cache miss permits a reconnect; ambiguous writes are never
-replayed. This protocol is OrbitTE's own, not TENT wire compatibility.
+replayed. This protocol is OrbiTE's own, not TENT wire compatibility.
 
 ## Workers, CQ lanes and budgets
 
@@ -378,12 +378,12 @@ configuration (`gid_index: None`) reranks valid GIDs on the same device and port
 
 The focused native gate runs on one authorized mlx5 RoCE RNIC with real
 PD/MR/QP/CQ operations and an overridden port state; it changes no physical port
-and is not a two-host or physical-loss test. Choose an `ORBITTE_INITIAL_GID`
+and is not a two-host or physical-loss test. Choose an `ORBITE_INITIAL_GID`
 different from the automatically preferred index:
 
 ```sh
-ORBITTE_RDMA_LOCK=/path/to/authorized-rnic.lock \
-ORBITTE_SHARED_DEVICE=mlx5_0 ORBITTE_SHARED_PORT=1 ORBITTE_INITIAL_GID=0 \
+ORBITE_RDMA_LOCK=/path/to/authorized-rnic.lock \
+ORBITE_SHARED_DEVICE=mlx5_0 ORBITE_SHARED_PORT=1 ORBITE_INITIAL_GID=0 \
 CC=gcc CXX=g++ cargo +stable test --locked --features rdma \
   transport::rdma::context::tests::native_context_recovery::native_context_recovery_preserves_pd_mrs_and_strict_gid_selection \
   -- --exact --ignored --nocapture --test-threads=1 \
@@ -423,7 +423,7 @@ waits for the recorded generation once, with `cuEventSynchronize`. That wait
 blocks the CPU and cannot be interrupted by a request deadline; it is not a
 device-side stream dependency. An unproven record, wait or context restore fences
 the allocation and keeps its producer inputs. TENT's `CallerSyncEventPool` /
-`syncWithCallerStream` waits on `cudaStreamPerThread`; OrbitTE accepts the
+`syncWithCallerStream` waits on `cudaStreamPerThread`; OrbiTE accepts the
 caller's explicit stream and carries the generation across threads and
 transports. Consumers start after the engine's completion receipt; consumer
 stream chaining is not exposed. See
@@ -445,7 +445,7 @@ without a producer create no event. See
 Each `CudaMemory` lazily owns one nonblocking stream and completion event.
 Staging copies are asynchronous, record the event after the copy and wait for it
 before exposing host bytes or releasing staging. If submission or recording
-fails, OrbitTE drains that stream; if drain is unproven, it returns `Unquiesced`
+fails, OrbiTE drains that stream; if drain is unproven, it returns `Unquiesced`
 and keeps the allocation, staging and handles. Destroying an event or stream is
 cleanup, not completion evidence.
 
@@ -469,7 +469,7 @@ small READ results with the CPU, which is incompatible with device pointers
 ([provider guidance](https://github.com/linux-rdma/perftest#readme)). There is no
 automatic fallback to staging.
 
-Before registration, OrbitTE sets `CU_POINTER_ATTRIBUTE_SYNC_MEMOPS` and checks
+Before registration, OrbiTE sets `CU_POINTER_ATTRIBUTE_SYNC_MEMOPS` and checks
 GPUDirect write-ordering support. `LocalBufferManager` publishes one local-only
 GPU MR per context under the owning CUDA context, and requester slices borrow
 these persistent MRs. Allocation-wide `DmaLease` ranges reject overlapping copies
@@ -479,7 +479,7 @@ A GPU source can reuse a connected QP and its local-only GPU MR when every
 advertised rail can create a hardware-revocable key over that MR.
 Set `RdmaConfig::gpu_source_reuse` to `true` to opt in. The default uses the
 private grant path qualified on H20. Changing that default requires the
-[installed reuse gate](qualification.md#verification-queue) to pass. On mlx5, OrbitTE probes the
+[installed reuse gate](qualification.md#verification-queue) to pass. On mlx5, OrbiTE probes the
 actual parent using DevX, indirect KLM translation and named key indices. Each
 grant binds a fresh key to its QPN, exact byte range and READ or WRITE right.
 The source verifies the device's key context and KLM before publishing it.
@@ -495,8 +495,8 @@ Both paths avoid binding ordinary memory windows to GPU MRs.
 [Provider memory window limits](https://docs.nvidia.com/networking/display/mlnxofedv23102131201lts/optimized%2Bmemory%2Baccess),
 [mlx5 programming reference](https://network.nvidia.com/files/doc-2020/ethernet-adapters-programming-manual.pdf).
 
-The `hardware_peer` gate accepts `ORBITTE_RDMA_CUDA_MEMORY=direct` and optional
-`ORBITTE_RDMA_SLICE_BYTES` (1, 17, 32 or 64). Its passive observer records MR
+The `hardware_peer` gate accepts `ORBITE_RDMA_CUDA_MEMORY=direct` and optional
+`ORBITE_RDMA_SLICE_BYTES` (1, 17, 32 or 64). Its passive observer records MR
 flags, QP PDs and payload WR addresses, which `gdr.py` checks against the
 declared allocations and full buffers:
 
@@ -504,9 +504,9 @@ declared allocations and full buffers:
 CC=gcc CXX=g++ python3 tests/hardware/build_installed.py --consumer gpu \
   --toolchain stable --output /external/installed-gpu-stable
 python3 -B tests/hardware/run.py --profile /external/gpu-profile.json \
-  --binary /external/installed-gpu-stable/installed/bin/orbitte-hardware-peer \
+  --binary /external/installed-gpu-stable/installed/bin/orbite-hardware-peer \
   --installation /external/installed-gpu-stable/manifest.json \
-  --gdr-observer /external/installed-gpu-stable/liborbitte_cq_fault.so \
+  --gdr-observer /external/installed-gpu-stable/liborbite_cq_fault.so \
   --output /external/runs/gpu-direct-001
 ```
 
@@ -542,7 +542,7 @@ need two physical `rails` and a `nic_locks` map; see the
 [native cleanup recipe](native-cleanup.md).
 
 The controller checks host identity and binary hashes, deploys to a unique
-`/var/tmp/orbitte-runs` directory and records provider mappings. Supervisors hold
+`/var/tmp/orbite-runs` directory and records provider mappings. Supervisors hold
 resource locks until `waitpid` confirms their children exited; a missed reap or
 missing receipt fails cleanup. The runner never changes NIC configuration. Keep
 runs and failed controls outside the checkout.
@@ -551,7 +551,7 @@ runs and failed controls outside the checkout.
 
 The frozen TENT reference is `e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`; see the
 [owner mapping](architecture.md#rdma-resource-owners). Exact-range MW
-authorization, source receipts and failed-cleanup retention are OrbitTE
+authorization, source receipts and failed-cleanup retention are OrbiTE
 contracts. The
-[pre-cleanup guide](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/rdma-cuda.md)
+[pre-cleanup guide](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/rdma-cuda.md)
 keeps the earlier stage-specific recipes and evidence locations.

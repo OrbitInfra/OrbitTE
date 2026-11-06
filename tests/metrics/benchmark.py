@@ -36,4 +36,4 @@ summary = {}
 for mode, rows in results.items():
     summary[mode] = {key: {"median": statistics.median(vals), "min": min(vals), "max": max(vals)}
                      for key in rows[0] if (vals := [r[key] for r in rows])}
-print("ORBITTE_METRICS_BENCH " + json.dumps(summary), flush=True)
+print("ORBITE_METRICS_BENCH " + json.dumps(summary), flush=True)

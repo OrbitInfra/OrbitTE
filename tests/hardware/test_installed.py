@@ -17,13 +17,13 @@ class InstalledHostEvidence(unittest.TestCase):
     def evidence(self):
         result = {}
         for role in ('source', 'requester'):
-            rows = [('ORBITTE_INSTALLED_NIC ', dict(name=name, pci=str(index)))
+            rows = [('ORBITE_INSTALLED_NIC ', dict(name=name, pci=str(index)))
                     for index, name in enumerate(self.profile['rails'])]
-            rows += [('ORBITTE_INSTALLED_ROUND ', dict(phase=0, round=index, opened_qps=6, closed_qps=0,
+            rows += [('ORBITE_INSTALLED_ROUND ', dict(phase=0, round=index, opened_qps=6, closed_qps=0,
                      reused_qps=index * 96, completed_grants=(index + 1) * 96,
                      opened_mrs=4, read_bytes=(index + 1) * self.case['parents'] * self.case['payload']
                      if role == 'requester' else 0, write_bytes=0)) for index in range(3)]
-            rows += [('ORBITTE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL,
+            rows += [('ORBITE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL,
                      status='passed', role=role, operation='read', parents=self.case['parents'],
                      payload=self.case['payload'], rounds=3,
                      full_bytes_and_guards=True, locally_drained=True))]
@@ -43,7 +43,7 @@ class InstalledHostEvidence(unittest.TestCase):
                 row.update(blocked_posts=0, probes=1, recoveries=1, fault_rail_bytes=64, spare_rail_bytes=32)
                 state = json.loads(record['result.json'])
                 record['result.json'] = json.dumps(dict(state, data_link_restored=True))
-            record['stdout.log'] += '\nORBITTE_RAIL_HEALTH ' + json.dumps(row) + '\nORBITTE_RAIL_DRAINED ' + role
+            record['stdout.log'] += '\nORBITE_RAIL_HEALTH ' + json.dumps(row) + '\nORBITE_RAIL_DRAINED ' + role
         installed.verify(self.profile, self.case, evidence)
         for old, new in [('rail_bytes": 32', 'rail_bytes": 0'), ('"probes": 1', '"probes": 2'), ('DRAINED requester', 'DRAINED source')]:
             invalid = copy.deepcopy(evidence)
@@ -59,7 +59,7 @@ class InstalledHostEvidence(unittest.TestCase):
         good = self.evidence()
         installed.verify(self.profile, self.case, good)
         for name, change in [
-            ('missing-result', lambda r: r.update({'stdout.log': r['stdout.log'].split('ORBITTE_INSTALLED_RESULT')[0]})),
+            ('missing-result', lambda r: r.update({'stdout.log': r['stdout.log'].split('ORBITE_INSTALLED_RESULT')[0]})),
             ('wrong-bytes', lambda r: r.update({'stdout.log': r['stdout.log'].replace('"read_bytes": 0', '"read_bytes": 1')})),
             ('unbounded-qp', lambda r: r.update({'stdout.log': r['stdout.log'].replace('"opened_qps": 6', '"opened_qps": 7')})),
             ('missing-round', lambda r: r.update({'stdout.log': '\n'.join(line for line in r['stdout.log'].splitlines() if '"round": 1' not in line)})),
@@ -83,8 +83,8 @@ class InstalledHostEvidence(unittest.TestCase):
                 row = dict(round=r, wrs=8*n, cqes=3*n, atomics=False, init_limit=0, resp_limit=32, init=1, resp=32)
                 mapped = dict(round=r, nic=self.profile['rails'][1], allocated=(r + 1) * self.case['payload'],
                               alternate_allocated=0, peer_rank=int(role == 'source'))
-                result['stdout.log'] += '\nORBITTE_MAPPED_RAIL ' + json.dumps(mapped)
-                result['stdout.log'] += '\nORBITTE_SELECTIVE ' + json.dumps(row)
+                result['stdout.log'] += '\nORBITE_MAPPED_RAIL ' + json.dumps(mapped)
+                result['stdout.log'] += '\nORBITE_SELECTIVE ' + json.dumps(row)
         installed.verify(self.profile, self.case, evidence)
         for old, new in [('"cqes": 3', '"cqes": 8'), ('"wrs": 8', '"wrs": 3'), ('"atomics": false', '"atomics": true'),
                          ('"alternate_allocated": 0', '"alternate_allocated": 8'), ('"peer_rank": 0', '"peer_rank": 1'),
@@ -103,7 +103,7 @@ class InstalledHostEvidence(unittest.TestCase):
                 for i, name in enumerate(self.profile['rails']):
                     count = (r + 1) * self.case['payload'] if role == 'requester' and i == 0 else 0
                     row = dict(round=r, nic=name, indices=1, bytes=count)
-                    result['stdout.log'] += '\nORBITTE_SELECTOR ' + json.dumps(row)
+                    result['stdout.log'] += '\nORBITE_SELECTOR ' + json.dumps(row)
         installed.verify(self.profile, self.case, evidence)
         for key, value in [('indices', 2), ('bytes', 1)]:
             bad = copy.deepcopy(evidence)
