@@ -295,6 +295,10 @@ impl ProgressState {
         if !request.close_requested || matches!(request.phase, Phase::Closed | Phase::Retained) {
             return Ok(false);
         }
+        let receive_pending = request
+            .resources
+            .as_ref()
+            .is_some_and(|r| r.connection.retiring().receive_queue.outstanding() != 0);
         if request
             .resources
             .as_ref()
@@ -303,18 +307,17 @@ impl ProgressState {
                 .work
                 .as_ref()
                 .is_some_and(|work| work.queue.pending())
-            || request
-                .resources
-                .as_ref()
-                .is_some_and(|r| r.connection.retiring().receive_queue.outstanding() != 0)
+            || receive_pending
         {
             drop(request);
-            // A disconnect or cancellation can leave posted work. Retire the
-            // shared lane before releasing it; constructors already past the
-            // admission check must see the same unavailable path as new ones.
-            self.fail(Fault::Unavailable(
-                "RDMA lane retiring with outstanding work",
-            ));
+            // A peer disconnect can leave a source receive posted. Constructors
+            // already past admission must see the same unavailable path as new
+            // ones while this lane drains. Keep SQ-only retirement fail-stop.
+            self.fail(if receive_pending {
+                Fault::Unavailable("RDMA lane retiring with a posted receive")
+            } else {
+                Fault::Internal("RDMA close with unresolved work")
+            });
             return Ok(false);
         }
         let resources = request
