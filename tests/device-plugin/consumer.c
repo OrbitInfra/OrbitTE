@@ -51,7 +51,7 @@ int main(int argc,char **argv) {
     int loaded=orbite_load_device_plugins(a,plugin);
     if(mode==101){assert(loaded==-200);tent_destroy_engine(a);return 0;}
     if(mode==102){assert(loaded==-2);tent_destroy_engine(a);return 0;}
-    if(mode==18){assert(loaded==-135);assert(orbite_close_device_plugins(a)==-135);assert(orbite_close_device_plugins(a)==-135);still_loaded();tent_destroy_engine(a);return 0;}
+    if(mode==18){assert(loaded==-135);assert(orbite_close_device_plugins(a)==-135);assert(orbite_close_device_plugins(a)==-135);still_loaded();tent_destroy_engine(a);still_loaded();return 0;}
     if(mode==1||mode==2||mode==3||mode==4||mode==5||mode==6||mode==7||mode==14||mode==15||mode==16||mode==19||mode==29||mode==30||mode==31||(mode>=20&&mode<=28)){
         assert(loaded==-200);if(mode==16){void *excluded=NULL;assert(tent_allocate_memory(a,&excluded,N,"rocm:0")==-200);assert(tent_allocate_memory(a,&excluded,N,"hip:0")==-200);assert(!excluded);}
         tent_destroy_engine(a);return 0;
@@ -59,17 +59,17 @@ int main(int argc,char **argv) {
     assert(!loaded);
     assert(orbite_load_device_plugins(NULL,plugin)==-1);assert(orbite_load_device_plugins(a,NULL)==-1);assert(orbite_load_device_plugins(a,plugin)==-1);
     if(mode==103){held(a);return 0;}
-    if(mode==9){assert(orbite_close_device_plugins(a)==-135);assert(orbite_close_device_plugins(a)==-135);still_loaded();tent_destroy_engine(a);return 0;}
+    if(mode==9){assert(orbite_close_device_plugins(a)==-135);assert(orbite_close_device_plugins(a)==-135);still_loaded();tent_destroy_engine(a);still_loaded();return 0;}
     void *p=NULL,*q=NULL;
     int allocated=tent_allocate_memory(a,&p,N,"cpu:0");
-    if(mode==11){assert(allocated==-135);assert(orbite_close_device_plugins(a)==-135);tent_destroy_engine(a);return 0;}
+    if(mode==11){assert(allocated==-135);assert(orbite_close_device_plugins(a)==-135);tent_destroy_engine(a);still_loaded();return 0;}
     if(mode==12){assert(allocated==-200);assert(!orbite_close_device_plugins(a));tent_destroy_engine(a);return 0;}
     assert(!allocated);assert(p);
-    if(mode==8){assert(tent_free_memory(a,p)==-135);assert(tent_free_memory(a,p)==-135);assert(orbite_close_device_plugins(a)==-135);still_loaded();tent_destroy_engine(a);return 0;}
+    if(mode==8){assert(tent_free_memory(a,p)==-135);assert(tent_free_memory(a,p)==-135);assert(orbite_close_device_plugins(a)==-135);still_loaded();tent_destroy_engine(a);still_loaded();return 0;}
     assert(!tent_allocate_memory(a,&q,N,"cpu:0"));
     memset(p,0x69,N);memset(q,0x72,N);
     int copied=orbite_plugin_memcpy_sync(a,(char*)q+1,(char*)p+1,64);
-    if(mode==10){assert(copied==-135);for(int i=0;i<N;i++)assert(((unsigned char*)q)[i]==0x72);assert(tent_free_memory(a,p)==-135);assert(tent_free_memory(a,q)==-135);still_loaded();tent_destroy_engine(a);return 0;}
+    if(mode==10){assert(copied==-135);for(int i=0;i<N;i++)assert(((unsigned char*)q)[i]==0x72);assert(tent_free_memory(a,p)==-135);assert(tent_free_memory(a,q)==-135);still_loaded();tent_destroy_engine(a);still_loaded();return 0;}
     assert(!copied);assert(((unsigned char*)q)[0]==0x72 && ((unsigned char*)q)[65]==0x72);assert(!memcmp((char*)p+1,(char*)q+1,64));
     assert(orbite_plugin_memcpy_sync(a,p,(char*)p+1,64)==-1);
     assert(orbite_close_device_plugins(a)==-2);
