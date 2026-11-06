@@ -232,6 +232,45 @@ impl ProxyManager {
         self.changed.notify_all();
     }
 
+    /// Claim each idle slot at most once. Active borrowers are never disturbed.
+    pub(crate) fn trim_idle(self: &Arc<Self>) -> Result<()> {
+        let count = self
+            .buffers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .slots
+            .len();
+        let mut first = None;
+        for index in 0..count {
+            let buffer = {
+                let mut state = self.buffers.lock().unwrap_or_else(|p| p.into_inner());
+                if !matches!(state.slots[index], StageBuffer::Idle(_)) {
+                    continue;
+                }
+                match std::mem::replace(&mut state.slots[index], StageBuffer::Closing) {
+                    StageBuffer::Idle(buffer) => buffer,
+                    _ => return Err(Error::Internal("staging idle slot changed")),
+                }
+            };
+            let result = buffer.close();
+            self.finish_slot(
+                index,
+                if result.is_ok() {
+                    StageBuffer::Vacant
+                } else {
+                    StageBuffer::Retained
+                },
+            );
+            if let Err(error) = result {
+                // Failed native cleanup keeps the pool charge as well as the
+                // buffer/context retained by PinnedAllocation. Never retry it.
+                std::mem::forget(Arc::clone(self));
+                first.get_or_insert(error);
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+
     pub(crate) fn stats(&self) -> Result<StagingStats> {
         let state = self
             .buffers

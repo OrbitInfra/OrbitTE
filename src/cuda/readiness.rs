@@ -228,6 +228,32 @@ impl DeviceAllocation {
 }
 
 impl CudaMemory {
+    /// Capture an interchange export's producer stream in the allocation's
+    /// driver-validated context, restoring the caller's exact binding afterwards.
+    /// Legacy/per-thread default streams refer to this allocation's device.
+    ///
+    /// # Safety
+    /// The exporter retains this noncapturing stream and all producer inputs.
+    /// Its stream handoff covers all prior work; no external access or engine
+    /// loan may race this call. The owner must not form a cycle with this memory.
+    pub unsafe fn record_exported_producer_stream(
+        &self,
+        stream: *mut c_void,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Result<()> {
+        let context = self
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?
+            .context
+            .clone();
+        context.current(|| {
+            // SAFETY: the exporter supplies the stream's lifetime and this exact
+            // allocation context is current on the original producer thread.
+            unsafe { self.record_producer_stream(stream, owner) }
+        })
+    }
+
     /// Capture already-enqueued producer work on the calling thread. The first
     /// local copy, staging loan, RDMA loan or IPC access waits for this marker.
     /// Aliases share one event; a new handoff first consumes the previous marker.

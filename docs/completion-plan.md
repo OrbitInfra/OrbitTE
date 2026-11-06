@@ -100,7 +100,9 @@ cluster membership and KV indexes belong to the consumer; S18 is out of scope
 by design. Per-peer admission fencing, drain and selective transport retirement
 are implemented; native cleanup is shim-tested and awaits the installed gate.
 S21 implements the [Python surface](python.md), installed-wheel byte and lifetime
-controls, and CPython 3.10–3.14 packaging. S22–S26 retain their order.
+controls, and CPython 3.10–3.14 packaging. S21b adds driver-validated retained
+CUDA Array Interface/DLPack owners; its installed GPU profile is unqualified.
+S22–S26 retain their order.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -400,7 +402,8 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
 - [x] F21 Python classes, properties, overloads, enums, defaults and context
   managers; typed errors, GIL release and exporter lifetime through physical drain.
   Installed-wheel controls map all three S16 Python binding rows and 128 detailed
-  surface rows. Native profiles remain unqualified.
+  surface rows. S21b adds retained CAI/DLPack CUDA owners with driver-validated
+  bounds, producer readiness and sticky cleanup. Native profiles remain unqualified.
 - [x] F06 P2P-only configuration boundary; S18 external stores and cluster discovery are out of scope by design.
 - [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. Identity charges follow live handles/operations; safe unreferenced entries reclaim, while uncertain cleanup remains charged. C/C++ segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
 - [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).

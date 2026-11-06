@@ -1,13 +1,12 @@
 //! Python entry points use the existing ABI owners, not a second coordinator.
 use crate::{abi, batch, boundary::*, cpp_v1, engine, memory::Opt, segments::Target};
 use orbite::{EngineConfig, IntentType};
-use pyo3::{
-    buffer::PyBuffer, create_exception, exceptions::PyException, prelude::*, types::PyMemoryView,
-};
+use pyo3::{create_exception, exceptions::PyException, prelude::*};
+mod export;
 use std::{
     ffi::c_void,
     sync::{
-        Arc, Mutex,
+        Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -86,22 +85,6 @@ fn notification(
     })
     .transpose()
 }
-type Exporter = Arc<dyn Send + Sync>;
-fn export(v: &Bound<'_, PyAny>) -> PyResult<(usize, usize, Exporter)> {
-    // A memoryview pins the exporter and disallows resize until its last native
-    // backing disappears. Keeping Py<...> avoids acquiring the GIL in Drop.
-    let view = PyMemoryView::from(v)?.call_method1("cast", ("B",))?;
-    let buffer = PyBuffer::<u8>::get(&view)?;
-    if buffer.readonly() || !buffer.is_c_contiguous() || buffer.len_bytes() == 0 {
-        return Err(InvalidArgumentError::new_err(
-            "registration needs writable, contiguous, nonempty storage",
-        ));
-    }
-    let address = buffer.buf_ptr() as usize;
-    let length = buffer.len_bytes();
-    Ok((address, length, Arc::new(view.unbind())))
-}
-
 #[pyclass(name = "_Engine", module = "orbite._native")]
 struct PythonEngine {
     handle: usize,
@@ -286,7 +269,7 @@ impl PythonEngine {
                 if owner.is_none() {
                     None
                 } else {
-                    let (base, size, owner) = export(&owner)?;
+                    let (base, size, owner) = export::get(&owner)?;
                     if address < base
                         || address
                             .checked_add(length)
@@ -314,7 +297,7 @@ impl PythonEngine {
         value: &Bound<'_, PyAny>,
         opts: &Bound<'_, PyAny>,
     ) -> PyResult<usize> {
-        let (address, length, owner) = export(value)?;
+        let (address, length, owner) = export::get(value)?;
         let opt = options(opts)?;
         self.with(py, "register_buffer", |e| {
             lock(&e.memory)?.register_owned(
