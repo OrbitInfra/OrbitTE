@@ -72,8 +72,8 @@ flowchart LR
 The graph shows dependencies, not one PR per stage. Provider work whose
 prerequisites exist can proceed independently, but never inherits another
 provider's hardware qualification. Fault testing belongs to each stage; P10
-closes the complete matrix. An interim release needs P10 acceptance of its
-selected profiles while other rows stay open.
+closes the complete matrix. The [release ladder](#release-ladder) defines the
+required profiles and evidence for each milestone.
 
 ## Current focus
 
@@ -194,8 +194,8 @@ Done (each Implemented):
   [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304) adds an opt-in
   `orbite-tcp` provider; the limited source/H20 evidence was independently
   accepted.
-- **S0b — frozen pre-release wire.** The OrbiTE-only control protocol stays at
-  version 1 until the first release; see the
+- **S0b — frozen pre-release wire.** The OrbiTE-only control protocol stays
+  frozen throughout pre-release development; see the
   [wire policy](tent-parity.md#wire-and-consumer-boundaries).
 
 Open:
@@ -407,7 +407,8 @@ against installed artifacts, with explicit provider/feature matrices.
 
 ## P10 — Fault, physical lifetime and interoperability acceptance
 
-Runs throughout P2–P9 and closes before a full-parity release.
+Runs throughout P2–P9. The [release ladder](#release-ladder) requires acceptance
+for each release's supported profiles; full parity closes the complete matrix.
 
 - [ ] Separate known-unsubmitted rejection and cancel from partial post, running
   work, logical error, physical quiescence and completed cleanup.
@@ -440,7 +441,55 @@ Requirements: F22 and the applicable accepted backend and compatibility profiles
   checkout, with provider discovery, runtime paths and provenance.
 - [ ] Installed manifests prove no C++ Mooncake engine/common/Store dependency.
 
-CPU/TCP or NVIDIA/RDMA releases may ship earlier with explicit scoped support.
+### Release ladder
+
+The maintainer publishes releases when their gates are met. Agents do not
+publish packages.
+
+| Version | Release gate |
+| --- | --- |
+| `0.1.0-alpha.N` | Maintainer-published milestones during early development; APIs remain unstable. The current release is `0.1.0-alpha.1`, published from main [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490). |
+| `0.1.0-beta.1` | S21–S26 and per-peer retirement are complete. The Rust API, C ABI and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration, C/C++ ABI, Python and TENT TCP interoperability must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
+| `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-physical-lifetime-and-interoperability-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
+
+Beta evidence uses the existing [source and mixed-peer checks](qualification.md#reproduce-and-review),
+[C ABI](qualification.md#installed-c-abi-on-linux),
+[C++ adapters](qualification.md#c-source-adapters),
+[HP-TCP](qualification.md#hp-tcp-rail-verification),
+[SHM](qualification.md#shared-memory-and-cxl-verification) and
+[io_uring](qualification.md#local-file-segments) profiles. S21 and S23 must add
+their Python and directional TENT TCP evidence before beta. A source implementation
+or shim does not satisfy an installed hardware gate.
+
+The [verification queue](qualification.md#verification-queue) owns the commands
+and artifact requirements for the stable release; they are not duplicated here.
+
+| Required `0.1.0` profile | Existing verification-queue entries |
+| --- | --- |
+| RDMA host | {ref}`Installed host artifact and terminal QP/MR teardown <queue-rdma-host>` |
+| RDMA GPU Direct and staged | {ref}`GPU Direct host-wide context non-growth <queue-gpudirect>`, {ref}`remote CUDA staging <queue-remote-staging>`, {ref}`mixed direct/staged batches and producer readiness <queue-mixed-gpu>` |
+| S15b local CUDA copy | {ref}`Caller-stream local CUDA copy <queue-local-cuda-copy>` |
+| S3 GPU↔file staging | {ref}`CUDA↔file through DRAM staging <queue-cuda-file>` |
+| S4 native GDS | {ref}`Native GDS with nvidia-fs route evidence <queue-native-gds>` |
+| NVLink | {ref}`Legacy single-copy path and context restoration <queue-nvlink-sync>`, {ref}`grouped completion and cache reclamation <queue-nvlink-grouped>` |
+| P10 faults and P11 matched performance | {ref}`Release verification entry <queue-release>` |
+
+`0.1.0` may also ship [MNNVL/EGM](qualification.md#multi-node-nvlink-fabric),
+[EFA and MPComm](qualification.md#verification-queue),
+{ref}`CXL <queue-shm-cxl>` and
+physical multi-rail ({ref}`RDMA <queue-rdma-rails>` and
+{ref}`HP-TCP <queue-physical-rails>`) as **experimental
+and unqualified**, listed by name in the release's support matrix. Their open
+gates do not waive verification of the OrbitKV-critical profiles above.
+A CPU-only `0.1.0` is not planned; it requires an explicit maintainer decision
+if hardware remains unavailable.
+
+The explicit compatibility policy begins at `0.1.0`: peers of the same
+`0.1.x` series interoperate, and the control-plane wire version stays frozen
+across that series. A breaking wire or Rust API change requires a minor-version
+bump under 0.x semver. Until `0.1.0`, deploy the same build on both peers under
+the [pre-release wire policy](tent-parity.md#wire-and-consumer-boundaries).
+
 **Complete NVIDIA-scope TENT parity** requires every in-scope capability to be
 accepted; it never claims the excluded accelerators or UB. A slower or
 unqualified feature is recorded as such.
