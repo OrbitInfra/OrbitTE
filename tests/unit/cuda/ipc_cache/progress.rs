@@ -28,7 +28,7 @@ fn ipc_shared_poller_completes_independent_groups_while_one_event_is_pending() {
     let mut batch = requester
         .submit_async(
             TransferOp::Read,
-            &relay.peer(&source, &exported_a),
+            &relay.peer(&requester, &source, &exported_a),
             &[req],
             None,
             TIMEOUT,
@@ -44,7 +44,7 @@ fn ipc_shared_poller_completes_independent_groups_while_one_event_is_pending() {
     // Conflicting NVLink preparation waits for the real owner, within its deadline.
     let conflict = requester.submit_and_wait(
         TransferOp::Read,
-        &relay.peer(&source, &exported_b),
+        &relay.peer(&requester, &source, &exported_b),
         &[request(&registered, &exported_b)],
         Duration::from_millis(5),
     );
@@ -53,7 +53,7 @@ fn ipc_shared_poller_completes_independent_groups_while_one_event_is_pending() {
     let mut second_batch = requester
         .submit_async(
             TransferOp::Read,
-            &relay.peer(&source, &exported_b),
+            &relay.peer(&requester, &source, &exported_b),
             &[request(&host_registered, &exported_b)],
             None,
             TIMEOUT,
@@ -136,7 +136,7 @@ fn ipc_pending_deadline_and_query_restore_failure_retain_actual_owners() {
         let result = requester
             .submit_and_wait(
                 TransferOp::Read,
-                &relay.peer(&source, &exported),
+                &relay.peer(&requester, &source, &exported),
                 &[request(&registered, &exported)],
                 Duration::from_millis(100),
             )

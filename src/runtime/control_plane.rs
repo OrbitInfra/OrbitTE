@@ -394,6 +394,7 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
         shm.validate(&regions)?;
     }
     Ok(RemoteSegment {
+        identity: None,
         endpoint,
         epoch,
         regions,

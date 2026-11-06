@@ -180,13 +180,26 @@ You may wait again while admitted work drains. Once native cleanup starts,
 its result is sticky: an uncertain destroy is never repeated. The timeout
 bounds waits, not a native call that cannot be preempted. Automatic receiver
 windows close with a receiver receipt; unresolved credit charges remain held.
-`EngineConfig::max_peer_segments` bounds all contacted endpoint/epoch identities,
-including permanent tombstones (default 1024, maximum 4096). Exhaustion returns
-`ResourceExhausted`; closing a peer does not reclaim its tombstone slot.
+`EngineConfig::max_peer_segments` bounds simultaneously retained endpoint/epoch
+identities (default 1024, maximum 4096), not cumulative peer incarnations.
+Every `RemoteSegment` clone, admitted operation, alias, retry, notification and
+cleanup keeps its identity charged. Once the last reference is gone, the next
+table lookup or stats snapshot reclaims an open entry, or a retired entry whose
+cleanup succeeded. A timed-out drain still owes cleanup; failed native cleanup
+never becomes reclaimable. Capacity pressure returns `ResourceExhausted`.
 
-`EngineStats::{peer_segments, retired_peer_segments, active_peer_operations}`
-exposes the charged identities and outstanding permits. These counters are
-observations, not release receipts. Dropping a descriptor or calling the
+After a retired identity is reclaimed, the consumer may explicitly call
+`open_segment` with the same epoch from its authoritative owner. Describe still
+rejects a wrong epoch. A descriptor belongs to the requester that opened it;
+using it with another engine returns `InvalidConfig`. Open it on that engine
+instead. This prevents a borrowed snapshot from recreating admission implicitly.
+
+`EngineStats::peer_segments` counts all charged identities; `live_peer_segments`
+and `retired_peer_segments` partition that count by admission state.
+`unquiesced_peer_segments` counts the retired subset with a timed-out drain or
+failed cleanup. `reclaimed_peer_segments` is the cumulative reclaimed-entry
+count, and `active_peer_operations` counts outstanding admission permits. These
+counters are observations, not release receipts. Dropping a descriptor or calling the
 frozen C/C++ `closeSegment` still only closes a handle: TENT permits reopening
 the same live source. The stronger Rust operation deliberately remains separate.
 

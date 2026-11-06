@@ -5,7 +5,9 @@ use std::sync::{atomic::Ordering, mpsc};
 fn peer_retirement_tcp_reply_drain_keeps_backing_and_allows_another_peer() {
     let wait = common::EVENTUAL_PROGRESS;
     let e = Arc::new(TransferEngine::new(EngineConfig::default()).unwrap());
-    let (listener, peer) = fault_peer();
+    let (listener, mut peer) = fault_peer();
+    e.bind_test_peer(&mut peer).unwrap();
+
     let fixture = common::external_memory(&[0xcd; 10]);
     let memory = fixture.memory.clone();
     let local = e

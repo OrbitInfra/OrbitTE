@@ -8,6 +8,7 @@ const TIMEOUT: Duration = Duration::from_secs(3);
 
 fn peer() -> RemoteSegment {
     RemoteSegment {
+        identity: None,
         metadata: Default::default(),
         endpoint: "127.0.0.1:1234".parse().unwrap(),
         epoch: SourceEpoch([1; 16]),

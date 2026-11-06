@@ -263,7 +263,8 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
     ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let epoch = SourceEpoch([7; 16]);
-        let peer = RemoteSegment {
+        let mut peer = RemoteSegment {
+            identity: None,
             metadata: crate::segment::SegmentMetadata {
                 rdma: true,
                 rdma_direct_gpu: false,
@@ -396,6 +397,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
             drop(payload);
         });
         let requester = rdma_fixture("copy");
+        requester.bind_test_peer(&mut peer).unwrap();
         let local = requester
             .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
             .unwrap();

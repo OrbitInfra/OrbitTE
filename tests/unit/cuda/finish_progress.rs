@@ -80,6 +80,7 @@ fn pending_native_finish(send_pending: bool) {
             });
             if let Some(gate) = &gate {
                 peer.endpoint = gate.endpoint;
+                requester.bind_test_peer(&mut peer).unwrap();
             }
             let mut batch = requester
                 .submit_async(
@@ -258,6 +259,7 @@ fn fragmented_native_receipts_resume_once_and_validate_the_binding() {
                 ),
             );
             peer.endpoint = gate.endpoint;
+            requester.bind_test_peer(&mut peer).unwrap();
             let mut batch = requester
                 .submit_async(
                     operation,

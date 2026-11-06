@@ -52,9 +52,22 @@ Each prepared memory submission retains a peer permit in its existing batch
 admission owner, through queued work, retries, aliases and quarantine. Notification
 hooks retain every target until their final attempt. Closing a peer fences the
 entry before waiting; native cleanup runs outside table and peer locks. A fresh
-epoch gets a different entry. Retired entries remain charged tombstones so a
-caller-held descriptor cannot resurrect them. There is no engine descriptor
-cache to erase: snapshots lose admission authority immediately.
+epoch gets a different entry. Each requester-owned `RemoteSegment` and clone
+holds an identity token; permits and cleanup hold the same entry. Under the table
+lock, a sweep reclaims only entries with no outside references, either still open
+or successfully cleaned up. Admission requires that token and never inserts by
+key. An explicit `open_segment` can recreate a reclaimed identity only after
+checking the authoritative epoch through Describe. Another requester must open
+its own descriptor. This closes the borrowed-snapshot resurrection hole without
+charging historical peer incarnations. There is no engine descriptor cache to
+erase: snapshots lose admission authority immediately.
+
+Timed-out drain entries still owe cleanup, and failed native cleanup entries
+remain charged even after every handle disappears. Live/retired/unquiesced and
+cumulative reclaimed-entry counters expose this distinction. The churn control
+moves guarded TCP bytes through ten times the table capacity; pressure, last-clone,
+foreign-requester, cleanup-held and concurrent reclaim/open/admit/close controls
+check that only an explicit authoritative open can recreate admission.
 
 After drain, each transport removes only matching requester resources. TCP
 sockets live in the drained call. HP-TCP caches now key lanes by control endpoint
@@ -69,7 +82,7 @@ retirement does not weaken that safety boundary.
 
 Frozen `segment_manager.cpp::closeRemote`, `segment_tracker.cpp` and
 `transfer_engine_impl.cpp::closeSegment` invalidate handles/descriptors without
-this permanent membership fence or cross-transport drain. Rust retirement is a
+this reference-retained membership fence or cross-transport drain. Rust retirement is a
 stronger extension. The C/C++ adapters preserve reversible TENT handle close,
 including scatter's private handles. `peer_retirement_*` controls distinguish
 retirement from timeout, exercise submit/close races, keep a held TCP reply and

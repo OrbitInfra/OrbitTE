@@ -141,7 +141,16 @@ fn peer_retirement_rdma_failed_destroy_keeps_native_charge_without_retry() {
             .count(),
         1
     );
-    let stats = dst.stats().unwrap().rdma.unwrap();
+    let peer_stats = dst.stats().unwrap();
+    assert_eq!(
+        (
+            peer_stats.peer_segments,
+            peer_stats.retired_peer_segments,
+            peer_stats.unquiesced_peer_segments
+        ),
+        (1, 1, 1)
+    );
+    let stats = peer_stats.rdma.unwrap();
     assert_eq!(stats.retained_endpoints, 1);
     assert_eq!(stats.active_endpoints, 1);
     let mut want = vec![0xcd; 18];

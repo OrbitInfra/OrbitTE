@@ -60,9 +60,15 @@ impl Relay {
             close_gate,
         }
     }
-    fn peer(&self, engine: &TransferEngine, memory: &crate::RegisteredMemory) -> RemoteSegment {
+    fn peer(
+        &self,
+        requester: &TransferEngine,
+        engine: &TransferEngine,
+        memory: &crate::RegisteredMemory,
+    ) -> RemoteSegment {
         let epoch = engine.source_epoch();
-        RemoteSegment {
+        let mut peer = RemoteSegment {
+            identity: None,
             metadata: crate::segment::SegmentMetadata {
                 nvlink: Some(crate::segment::ProcessIdentity {
                     process: crate::SourceEpoch([0x77; 16]),
@@ -84,7 +90,9 @@ impl Relay {
                 length: memory.len(),
                 permission: Permission::RemoteReadWrite,
             }],
-        }
+        };
+        requester.bind_test_peer(&mut peer).unwrap();
+        peer
     }
 }
 impl Drop for Relay {
@@ -230,7 +238,7 @@ fn cached_ipc_reuses_import_but_releases_completed_local_owners() {
     let requester = engine();
     let exported = register(&source, &remote);
     let relay = Relay::new(source.endpoint());
-    let peer = relay.peer(&source, &exported);
+    let peer = relay.peer(&requester, &source, &exported);
     let context = local.allocation.lock().unwrap().context.clone();
     for index in 0..8 {
         let host = Arc::new(HostMemory::from_cuda_pinned(Arc::new(
@@ -346,7 +354,7 @@ fn cached_ipc_rechecks_source_admission_registration_and_permission() {
             .remove(0);
         let registered = register(&requester, &local);
         let relay = Relay::new(source.endpoint());
-        let peer = relay.peer(&source, &exported);
+        let peer = relay.peer(&requester, &source, &exported);
         let req = request(&registered, &exported);
         assert!(
             requester
@@ -394,7 +402,7 @@ fn cached_ipc_cold_open_is_single_flight_and_waiter_deadline_does_not_evict() {
     let exported = register(&source, &remote);
     let registered = register(&requester, &local);
     let relay = Relay::new(source.endpoint());
-    let peer = relay.peer(&source, &exported);
+    let peer = relay.peer(&requester, &source, &exported);
     let req = request(&registered, &exported);
     dst.query_hold.store(true, Ordering::Release);
     let context = local.allocation.lock().unwrap().context.clone();
@@ -432,7 +440,7 @@ fn cached_ipc_cold_open_is_single_flight_and_waiter_deadline_does_not_evict() {
     let rejected = requester
         .submit_and_wait(
             TransferOp::Read,
-            &relay.peer(&source, &other),
+            &relay.peer(&requester, &source, &other),
             &[request(&waiting_local, &other)],
             TIMEOUT,
         )
@@ -485,7 +493,7 @@ fn cached_ipc_completion_loss_and_close_ack_loss_preserve_one_shot_native_close(
         let exported = register(&source, &remote);
         let registered = register(&requester, &local);
         let relay = Relay::new(source.endpoint());
-        let peer = relay.peer(&source, &exported);
+        let peer = relay.peer(&requester, &source, &exported);
         relay.fault.store(fault, Ordering::Release);
         let report = requester
             .submit_and_wait(
@@ -538,7 +546,7 @@ fn mutually_cached_engines_close_outgoing_imports_before_incoming_exports() {
     assert!(
         a.submit_and_wait(
             TransferOp::Read,
-            &rb.peer(&b, &br),
+            &rb.peer(&a, &b, &br),
             &[request(&al, &br)],
             TIMEOUT
         )
@@ -548,7 +556,7 @@ fn mutually_cached_engines_close_outgoing_imports_before_incoming_exports() {
     assert!(
         b.submit_and_wait(
             TransferOp::Read,
-            &ra.peer(&a, &ar),
+            &ra.peer(&b, &a, &ar),
             &[request(&bl, &ar)],
             TIMEOUT
         )
@@ -592,7 +600,7 @@ fn cached_ipc_source_limit_rejects_before_export_and_native_close_is_not_retried
             let result = requester
                 .submit_and_wait(
                     TransferOp::Read,
-                    &relay.peer(&source, region),
+                    &relay.peer(&requester, &source, region),
                     &[request(&registered, region)],
                     TIMEOUT,
                 )
@@ -658,7 +666,7 @@ fn cached_ipc_uncertain_second_submission_retains_only_its_actual_local_owner() 
     let registered = register(&requester, &local);
     let context = local.allocation.lock().unwrap().context.clone();
     let relay = Relay::new(source.endpoint());
-    let peer = relay.peer(&source, &exported);
+    let peer = relay.peer(&requester, &source, &exported);
     assert!(
         requester
             .submit_and_wait(
@@ -802,7 +810,7 @@ fn unexposed_cache_rejections_leave_no_requester_close_obligation() {
         let exported = register(&source, &remote);
         let registered = register(&requester, &local);
         let relay = Relay::new(source.endpoint());
-        let mut peer = relay.peer(&source, &exported);
+        let mut peer = relay.peer(&requester, &source, &exported);
         if case == "epoch" {
             peer.epoch = crate::SourceEpoch([0x55; 16]);
             peer.regions[0].epoch = peer.epoch;
@@ -812,6 +820,7 @@ fn unexposed_cache_rejections_leave_no_requester_close_obligation() {
             peer.endpoint = unavailable.local_addr().unwrap();
             drop(unavailable);
         }
+        requester.bind_test_peer(&mut peer).unwrap();
         let report = requester
             .submit_and_wait(
                 TransferOp::Read,
@@ -848,7 +857,7 @@ fn cached_export_keeps_actual_registration_and_allocation_until_close_receipt() 
         let exported = register(&source, &remote);
         let registered = register(&requester, &local);
         let relay = Relay::new(source.endpoint());
-        let peer = relay.peer(&source, &exported);
+        let peer = relay.peer(&requester, &source, &exported);
         assert!(
             requester
                 .submit_and_wait(
@@ -942,7 +951,7 @@ fn r1c_legacy_sync_copy_requires_one_task_strictly_below_threshold() -> Result<(
         let remote_gpu = owned(&src, true);
         let remote = register(&source, &remote_gpu);
         let relay = Relay::new(source.endpoint());
-        let peer = relay.peer(&source, &remote);
+        let peer = relay.peer(&requester, &source, &remote);
         let mut reqs = vec![TransferRequest::new(
             Transport::Nvlink,
             local.base_address() + 2,
@@ -1004,7 +1013,7 @@ fn r1c_uncertain_default_stream_cannot_release_or_replay_a_sync_write() -> Resul
     let remote = register(&src, &owned(&a, true));
     let local = register(&dst, &owned(&b, false));
     let relay = Relay::new(src.endpoint());
-    let peer = relay.peer(&src, &remote);
+    let peer = relay.peer(&dst, &src, &remote);
     b.sync_error.store(700, Ordering::Release);
     let r = dst.submit_and_wait(
         TransferOp::Write,

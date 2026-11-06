@@ -232,7 +232,8 @@ pub(super) fn stale(
                 engine.open_segment(endpoint, epoch, TIMEOUT),
                 Err(Error::EpochMismatch)
             ));
-            let stale = crate::RemoteSegment {
+            let mut stale = crate::RemoteSegment {
+                identity: None,
                 metadata: crate::segment::SegmentMetadata {
                     rdma: true,
                     rdma_direct_gpu: false,
@@ -253,6 +254,7 @@ pub(super) fn stale(
                     permission: Permission::RemoteReadWrite,
                 }],
             };
+            engine.bind_test_peer(&mut stale).unwrap();
             let report = transfer(
                 shape,
                 engine,

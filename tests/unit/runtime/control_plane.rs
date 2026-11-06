@@ -283,6 +283,7 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let epoch = SourceEpoch::generate().unwrap();
     let peer = RemoteSegment {
+        identity: None,
         metadata: Default::default(),
         endpoint: listener.local_addr().unwrap(),
         epoch,
@@ -317,7 +318,7 @@ fn fault_request(engine: &TransferEngine, peer: &RemoteSegment) -> TransferReque
 #[test]
 fn partial_read_preserves_destination_and_lost_write_ack_is_ambiguous() {
     for operation in [TransferOp::Read, TransferOp::Write] {
-        let (listener, peer) = fault_peer();
+        let (listener, mut peer) = fault_peer();
         let epoch = peer.epoch;
         let handler = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -359,6 +360,8 @@ fn partial_read_preserves_destination_and_lost_write_ack_is_ambiguous() {
             listener
         });
         let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+
+        engine.bind_test_peer(&mut peer).unwrap();
         let request = fault_request(&engine, &peer);
         let report = engine
             .submit_and_wait(
@@ -399,7 +402,7 @@ fn partial_read_preserves_destination_and_lost_write_ack_is_ambiguous() {
 
 #[test]
 fn a_trickling_response_cannot_extend_the_absolute_deadline() {
-    let (listener, peer) = fault_peer();
+    let (listener, mut peer) = fault_peer();
     let epoch = peer.epoch;
     let handler = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
@@ -428,6 +431,8 @@ fn a_trickling_response_cannot_extend_the_absolute_deadline() {
         }
     });
     let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+
+    engine.bind_test_peer(&mut peer).unwrap();
     let request = fault_request(&engine, &peer);
     let report = engine
         .submit_and_wait(
@@ -675,7 +680,7 @@ fn malformed_and_incomplete_notifications_never_enter_the_inbox() {
 #[test]
 fn lost_notification_receipt_never_replays_or_erases_completed_data() {
     for attached in [false, true] {
-        let (listener, peer) = fault_peer();
+        let (listener, mut peer) = fault_peer();
         let epoch = peer.epoch;
         let handler = thread::spawn(move || {
             if attached {
@@ -730,6 +735,8 @@ fn lost_notification_receipt_never_replays_or_erases_completed_data() {
             listener
         });
         let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+
+        engine.bind_test_peer(&mut peer).unwrap();
         let notification = Notification {
             name: String::new(),
             message: String::new(),
@@ -783,7 +790,7 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
 
-    let (listener, peer) = fault_peer();
+    let (listener, mut peer) = fault_peer();
     let epoch = peer.epoch;
     let (admitted_tx, admitted_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
@@ -811,6 +818,8 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
         channel.write_all(&[0xa7; 8]).unwrap();
     });
     let engine = Arc::new(TransferEngine::new(EngineConfig::default()).unwrap());
+
+    engine.bind_test_peer(&mut peer).unwrap();
     let fixture = common::external_memory(&[0; 8]);
     let local = engine
         .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
@@ -869,7 +878,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
     use std::sync::mpsc;
 
     for queued_cancel in [true, false] {
-        let (listener, peer) = fault_peer();
+        let (listener, mut peer) = fault_peer();
         let epoch = peer.epoch;
         let (admitted_tx, admitted_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -904,6 +913,8 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
             })
             .unwrap(),
         );
+
+        engine.bind_test_peer(&mut peer).unwrap();
         let fixture = common::external_memory(&[0; 8]);
         let local = engine
             .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
@@ -1015,7 +1026,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
 
-    let (listener, peer) = fault_peer();
+    let (listener, mut peer) = fault_peer();
     let epoch = peer.epoch;
     let (admitted_tx, admitted_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
@@ -1053,6 +1064,8 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
         })
         .unwrap(),
     );
+
+    engine.bind_test_peer(&mut peer).unwrap();
     let weak_engine = Arc::downgrade(&engine);
     let fixture = common::external_memory(&[0; 8]);
     let local = engine
@@ -1172,7 +1185,9 @@ fn deferred_free_races_progress_and_allocation_until_real_tcp_drain() {
         })
         .unwrap(),
     );
-    let (listener, peer) = fault_peer();
+    let (listener, mut peer) = fault_peer();
+    engine.bind_test_peer(&mut peer).unwrap();
+
     let epoch = peer.epoch;
     let fi = common::external_memory(&[0; 8]);
     let local = engine
@@ -1279,7 +1294,9 @@ fn background_progress_publishes_a_lost_write_receipt_without_replay() {
         })
         .unwrap(),
     );
-    let (listener, peer) = fault_peer();
+    let (listener, mut peer) = fault_peer();
+    engine.bind_test_peer(&mut peer).unwrap();
+
     engine.activate_receiver_credit(&peer, 1, 0).unwrap();
     engine
         .apply_receiver_credit(
@@ -1405,7 +1422,9 @@ fn free_fences_hook_retries_without_joining_a_peer_that_has_not_replied() {
     let own = engine
         .open_segment(engine.endpoint(), engine.source_epoch(), timeout)
         .unwrap();
-    let (listener, peer) = fault_peer();
+    let (listener, mut peer) = fault_peer();
+    engine.bind_test_peer(&mut peer).unwrap();
+
     let req = [TransferRequest::new(
         Transport::Tcp,
         local.base_address(),
@@ -1503,6 +1522,7 @@ fn one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit() {
         })
         .unwrap(),
     );
+    engine.bind_test_peer(&mut peer).unwrap();
     let local = engine
         .register_memory(vec![0x91, 1, 2, 3, 4, 0x92].into(), Permission::LocalOnly)
         .unwrap();
@@ -1652,6 +1672,7 @@ fn shuffled_owners_keep_the_public_failure_prefix_and_do_not_replay_a_write() {
         let (listener, mut peer) = fault_peer();
         peer.metadata.max_transfer_bytes = 8;
         let engine = Arc::new(TransferEngine::new(Default::default()).unwrap());
+        engine.bind_test_peer(&mut peer).unwrap();
         let local = engine
             .register_memory(vec![1, 2, 3, 4, 5, 6, 7, 8].into(), Permission::LocalOnly)
             .unwrap();

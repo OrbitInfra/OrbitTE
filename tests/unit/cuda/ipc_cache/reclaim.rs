@@ -31,7 +31,7 @@ fn cached_ipc_rotating_working_set_reclaims_lru_and_flush_keeps_admission_open()
             let report = requester
                 .submit_and_wait(
                     operation,
-                    &relay.peer(&source, region),
+                    &relay.peer(&requester, &source, region),
                     &[request(&registered, region)],
                     TIMEOUT,
                 )
@@ -73,7 +73,7 @@ fn cached_ipc_rotating_working_set_reclaims_lru_and_flush_keeps_admission_open()
             requester
                 .submit_and_wait(
                     operation,
-                    &relay.peer(&source, region),
+                    &relay.peer(&requester, &source, region),
                     &[request(&registered, region)],
                     TIMEOUT,
                 )
@@ -107,7 +107,7 @@ fn cached_ipc_replacement_reserves_target_until_receipt_without_blocking_hot_key
             requester
                 .submit_and_wait(
                     TransferOp::Read,
-                    &relay.peer(&source, region),
+                    &relay.peer(&requester, &source, region),
                     &[request(&registered, region)],
                     TIMEOUT,
                 )
@@ -118,7 +118,7 @@ fn cached_ipc_replacement_reserves_target_until_receipt_without_blocking_hot_key
     let (entered, reached) = mpsc::sync_channel(1);
     let (resume, released) = mpsc::channel();
     *relay.close_gate.lock().unwrap() = Some((entered, released));
-    let peer = relay.peer(&source, &remotes[2].2);
+    let peer = relay.peer(&requester, &source, &remotes[2].2);
     let cold = request(&registered, &remotes[2].2);
     let replacing = {
         let (engine, peer, request) = (requester.clone(), peer.clone(), cold.clone());
@@ -157,7 +157,7 @@ fn cached_ipc_replacement_reserves_target_until_receipt_without_blocking_hot_key
         requester
             .submit_and_wait(
                 TransferOp::Read,
-                &relay.peer(&source, &remotes[1].2),
+                &relay.peer(&requester, &source, &remotes[1].2),
                 &[request(&waiting, &remotes[1].2)],
                 TIMEOUT,
             )
@@ -201,7 +201,7 @@ fn cached_ipc_reclaim_failure_retains_capacity_and_only_retries_close_receipts()
             requester
                 .submit_and_wait(
                     TransferOp::Read,
-                    &relay.peer(&source, region),
+                    &relay.peer(&requester, &source, region),
                     &[request(&registered, region)],
                     TIMEOUT,
                 )

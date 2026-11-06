@@ -18,8 +18,8 @@ fn peer_retirement_nvlink_waits_for_event_and_preserves_other_imports() {
         let l = register(&requester, &local);
         let relay = Relay::new(source.endpoint());
         let second = Relay::new(other.endpoint());
-        let p = relay.peer(&source, &r);
-        let pp = second.peer(&other, &rr);
+        let p = relay.peer(&requester, &source, &r);
+        let pp = second.peer(&requester, &other, &rr);
         let q = request(&l, &r);
         dst.query_hold.store(true, Ordering::Release);
         let active = requester

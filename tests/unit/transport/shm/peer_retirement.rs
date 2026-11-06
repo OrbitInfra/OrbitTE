@@ -115,6 +115,18 @@ fn peer_retirement_failed_shm_unmap_is_sticky_and_does_not_fence_other_peers() -
             })
         ));
     }
+    drop(p);
+    let stats = dst.stats()?;
+    assert_eq!(
+        (
+            stats.peer_segments,
+            stats.live_peer_segments,
+            stats.retired_peer_segments,
+            stats.unquiesced_peer_segments,
+            stats.reclaimed_peer_segments
+        ),
+        (2, 1, 1, 1, 0)
+    );
     assert_eq!(CALLS.load(Ordering::SeqCst), 1);
     assert!(
         fs::read_to_string("/proc/self/maps")?

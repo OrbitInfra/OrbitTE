@@ -28,6 +28,7 @@ fn missing_descriptor_refreshes_once_in_the_original_epoch_before_admission() ->
     assert_eq!(bytes, [0xee, 1, 2, 3, 4, 0xee]);
     let mut stale = empty.clone();
     stale.epoch = SourceEpoch::generate()?;
+    requester.bind_test_peer(&mut stale)?;
     assert!(matches!(
         requester.submit_and_wait(TransferOp::Write, &stale, &[r], WAIT),
         Err(Error::EpochMismatch)
@@ -312,10 +313,11 @@ mod native {
         for lost in [false, true] {
             let p = Pair::new("direct:copy", 3, true, false)?;
             let listener = TcpListener::bind("127.0.0.1:0")?;
-            let peer = RemoteSegment {
+            let mut peer = RemoteSegment {
                 endpoint: listener.local_addr()?,
                 ..p.peer.clone()
             };
+            p.engine.bind_test_peer(&mut peer)?;
             let epoch = peer.source_epoch();
             let server = std::thread::spawn(move || {
                 let mut image = [0x2a; 12];
@@ -550,6 +552,7 @@ fn r1c_poll_and_wake_cannot_publish_a_task_before_its_submission() -> Result<()>
     pending.regions.clear();
     let barrier = std::net::TcpListener::bind("127.0.0.1:0")?;
     pending.endpoint = barrier.local_addr()?;
+    e.bind_test_peer(&mut pending)?;
     let mut batch = e.allocate_batch(1)?;
     let id = batch.id()?;
     std::thread::scope(|s| -> Result<()> {

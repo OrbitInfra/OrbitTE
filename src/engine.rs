@@ -363,9 +363,16 @@ pub struct EngineStats {
     pub active_source_operations: usize,
     /// Whole-submission dispatch reservations; None when the queue is disabled.
     pub runtime_queue: Option<RuntimeQueueStats>,
-    /// Charged endpoint/epoch identities, including permanent tombstones.
+    /// Charged endpoint/epoch identities (live plus retired).
     pub peer_segments: usize,
+    /// Identities currently open for admission.
+    pub live_peer_segments: usize,
+    /// Fenced identities still referenced or awaiting physical cleanup.
     pub retired_peer_segments: usize,
+    /// Retired identities with a timed-out drain or sticky cleanup failure.
+    pub unquiesced_peer_segments: usize,
+    /// Identities reclaimed after their last reference and any required cleanup.
+    pub reclaimed_peer_segments: u64,
     /// Submission, Describe and notification owners that have not drained.
     pub active_peer_operations: usize,
     pub inflight_batches: usize,
@@ -720,7 +727,7 @@ impl TransferEngine {
         epoch: u64,
         qos_class: u32,
     ) -> Result<()> {
-        let _peer = self.admit_peer(peer.into())?;
+        let _peer = self.admit_peer(peer)?;
         self.receiver_credits
             .as_ref()
             .ok_or(Error::Unavailable("receiver credits are disabled"))?
@@ -767,7 +774,7 @@ impl TransferEngine {
         timeout: Duration,
     ) -> Result<()> {
         let deadline = deadline(timeout)?;
-        let _peer = self.admit_peer(peer.into())?;
+        let _peer = self.admit_peer(peer)?;
         let ledger = self
             .receiver_credits
             .as_ref()
@@ -875,7 +882,7 @@ impl TransferEngine {
             .map_err(|_| Error::Internal("source lock poisoned"))?
             .active;
         let allocated = self.allocations.usage()?;
-        let (peer_segments, retired_peer_segments, active_peer_operations) = self.peers.stats();
+        let peers = self.peers.stats();
         // Quarantine cleanup drops admission permits. Sample it before locking usage.
         #[cfg(feature = "gds")]
         let gds = self
@@ -917,9 +924,12 @@ impl TransferEngine {
             retained_bytes,
             active_source_operations,
             runtime_queue: self.runtime_queue.as_ref().map(|queue| queue.stats()),
-            peer_segments,
-            retired_peer_segments,
-            active_peer_operations,
+            peer_segments: peers.identities,
+            live_peer_segments: peers.live,
+            retired_peer_segments: peers.retired,
+            unquiesced_peer_segments: peers.unquiesced,
+            reclaimed_peer_segments: peers.reclaimed,
+            active_peer_operations: peers.active,
             inflight_batches: batches.count,
             inflight_bytes: batches.bytes,
             queued_notifications,
@@ -1260,12 +1270,15 @@ impl TransferEngine {
         }
         let _permit = self.admit_batch(0)?;
         let epoch = control_plane::discover_epoch(endpoint, deadline(timeout)?)?;
-        let _peer = self.admit_peer(PeerKey { endpoint, epoch })?;
+        let (_handle, _peer) = self.peers.open(PeerKey { endpoint, epoch })?;
         Ok(epoch)
     }
 
     /// Open/refresh using an epoch supplied by the authoritative source owner.
     /// Discovery and a newly responding process cannot silently replace it.
+    /// The returned descriptor and its clones belong to this requester. A retired
+    /// identity can reopen only after all old references are gone and cleanup has
+    /// succeeded; this explicit open still validates the supplied epoch remotely.
     pub fn open_segment(
         &self,
         endpoint: SocketAddr,
@@ -1274,7 +1287,7 @@ impl TransferEngine {
     ) -> Result<RemoteSegment> {
         let deadline = deadline(timeout)?;
         let _admission = self.admit_batch(0)?;
-        let _peer = self.admit_peer(PeerKey {
+        let (handle, _peer) = self.peers.open(PeerKey {
             endpoint,
             epoch: expected_epoch,
         })?;
@@ -1282,13 +1295,16 @@ impl TransferEngine {
             let _permit = self.source.admit()?;
             let (metadata, regions) = self.source.describe()?;
             return Ok(RemoteSegment {
+                identity: Some(handle),
                 endpoint,
                 epoch: expected_epoch,
                 regions,
                 metadata,
             });
         }
-        control_plane::open_segment(endpoint, expected_epoch, deadline)
+        let mut peer = control_plane::open_segment(endpoint, expected_epoch, deadline)?;
+        peer.identity = Some(handle);
+        Ok(peer)
     }
 
     /// Opens a local `file://` name with fixed access. Descriptor lookup is lazy.
@@ -1395,7 +1411,7 @@ impl TransferEngine {
             .and_then(crate::metrics::Metrics::timestamp);
         let target = peer.into();
         let peer_permit = match target {
-            TransferTarget::Memory(peer) => Some(self.admit_peer(peer.into())?),
+            TransferTarget::Memory(peer) => Some(self.admit_peer(peer)?),
             TransferTarget::File(_) => None,
         };
         let scatter = requests.first().is_some_and(|r| r.require_cancellation);
@@ -1447,7 +1463,10 @@ impl TransferEngine {
                     )
                 });
                 let peer = if missing {
-                    control_plane::open_segment(peer.endpoint, peer.epoch, deadline)?
+                    let mut refreshed =
+                        control_plane::open_segment(peer.endpoint, peer.epoch, deadline)?;
+                    refreshed.identity = peer.identity.clone();
+                    refreshed
                 } else {
                     peer.clone()
                 };
@@ -2207,7 +2226,7 @@ impl TransferEngine {
         let deadline = deadline(timeout)?;
         let bytes = self.validate_notification(notification)?;
         let _admission = self.admit_batch(bytes)?;
-        let _peer = self.admit_peer(peer.into())?;
+        let _peer = self.admit_peer(peer)?;
         self.notify(peer, notification, deadline)
     }
 

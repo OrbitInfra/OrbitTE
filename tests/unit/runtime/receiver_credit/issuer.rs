@@ -306,6 +306,7 @@ impl Relay {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let peer = RemoteSegment {
+            identity: None,
             metadata: Default::default(),
             endpoint: listener.local_addr().unwrap(),
             epoch: source.source_epoch(),
@@ -410,6 +411,7 @@ fn lost_open_and_close_replies_preserve_identity_and_sync_cancel_is_retryable() 
     assert!(connect().is_err());
     assert_eq!(ledger.stats(&relay.peer).unwrap().epoch, 0);
     let alias = RemoteSegment {
+        identity: None,
         metadata: Default::default(),
         endpoint: source.endpoint(),
         ..relay.peer.clone()
@@ -519,18 +521,20 @@ fn lost_open_and_close_replies_preserve_identity_and_sync_cancel_is_retryable() 
         ..EngineConfig::default()
     })
     .unwrap();
+    let mut requester_peer = relay.peer.clone();
+    requester.bind_test_peer(&mut requester_peer).unwrap();
     relay.lose.store(true, Ordering::Release);
     assert!(
         requester
-            .connect_receiver_credit(&relay.peer, 7, TIMEOUT)
+            .connect_receiver_credit(&requester_peer, 7, TIMEOUT)
             .is_err()
     );
     requester.close_requester(TIMEOUT).unwrap();
     requester
-        .connect_receiver_credit(&relay.peer, 7, TIMEOUT)
+        .connect_receiver_credit(&requester_peer, 7, TIMEOUT)
         .unwrap();
     requester
-        .disconnect_receiver_credit(&relay.peer, TIMEOUT)
+        .disconnect_receiver_credit(&requester_peer, TIMEOUT)
         .unwrap();
     assert_eq!(
         source

@@ -1,6 +1,15 @@
 use super::*;
 use crate::test_support::EVENTUAL_PROGRESS as WAIT;
 
+// Fault relays deliberately skip Describe. Bind their synthetic snapshots to
+// the requester just as a successful public open would, without payload I/O.
+impl TransferEngine {
+    pub(crate) fn bind_test_peer(&self, peer: &mut RemoteSegment) -> Result<()> {
+        peer.identity = Some(self.peers.open((&*peer).into())?.0);
+        Ok(())
+    }
+}
+
 fn bytes(m: &RegisteredMemory) -> Vec<u8> {
     let mut b = vec![0; m.len()];
     m.read(0, &mut b).unwrap();
@@ -62,7 +71,7 @@ fn peer_retirement_fences_old_snapshots_and_preserves_other_endpoints_and_epochs
     ));
     assert!(matches!(
         dst.open_segment(other.endpoint(), fake_old, WAIT),
-        Err(Error::PeerClosed)
+        Err(Error::EpochMismatch)
     ));
     Ok(())
 }
@@ -211,12 +220,25 @@ fn peer_retirement_includes_admitted_notification_retries() -> Result<()> {
     ));
     let blocked = dst.send_notification(&peer, &note, WAIT).unwrap_err();
     assert!(matches!(blocked.error, Error::PeerClosed));
+    let key = (peer.endpoint, peer.epoch);
+    drop(peer);
+    let stats = dst.stats()?;
+    assert_eq!(
+        (
+            stats.peer_segments,
+            stats.retired_peer_segments,
+            stats.unquiesced_peer_segments,
+            stats.active_peer_operations
+        ),
+        (1, 1, 1, 1)
+    );
     assert!(matches!(
         *hook.attempt(&dst, &note, Instant::now() + WAIT),
         NotificationStatus::Delivered
     ));
     drop(hook);
-    dst.close_segment(peer.endpoint, peer.epoch, WAIT)?;
+    dst.close_segment(key.0, key.1, WAIT)?;
+    assert_eq!(dst.stats()?.peer_segments, 0);
     let got = src.receive_notifications()?;
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].message, "payload");
@@ -253,5 +275,138 @@ fn peer_retirement_returns_an_automatic_window_only_with_its_receipt() -> Result
         dst.activate_receiver_credit(&peer, 1, 7),
         Err(Error::PeerClosed)
     ));
+    Ok(())
+}
+
+#[test]
+fn peer_retirement_churn_ten_times_capacity_with_guarded_tcp_and_handle_reclamation() -> Result<()>
+{
+    let capacity = 2;
+    let dst = TransferEngine::new(EngineConfig {
+        max_peer_segments: capacity,
+        ..Default::default()
+    })?;
+    let local = dst.register_memory(vec![0xcd; 18].into(), Permission::LocalOnly)?;
+    for i in 0..capacity * 10 {
+        let src = TransferEngine::new(EngineConfig::default())?;
+        let value = (i + 1) as u8;
+        let remote = src.register_memory(vec![value; 18].into(), Permission::RemoteRead)?;
+        let peer = dst.open_segment(src.endpoint(), src.source_epoch(), WAIT)?;
+        let copy = peer.clone();
+        let q = TransferRequest::new(
+            Transport::Tcp,
+            local.base_address() + 1,
+            remote.base_address() + 1,
+            16,
+        );
+        assert!(
+            dst.submit_and_wait(TransferOp::Read, &copy, &[q], WAIT)?
+                .is_complete()
+        );
+        let stats = dst.stats()?;
+        assert_eq!(
+            (
+                stats.peer_segments,
+                stats.live_peer_segments,
+                stats.active_peer_operations
+            ),
+            (1, 1, 0)
+        );
+        dst.close_segment(peer.endpoint(), peer.source_epoch(), WAIT)?;
+        drop(peer);
+        assert_eq!(
+            dst.stats()?.retired_peer_segments,
+            1,
+            "a clone retains the fence"
+        );
+        drop(copy);
+        let stats = dst.stats()?;
+        assert_eq!(
+            (
+                stats.peer_segments,
+                stats.live_peer_segments,
+                stats.retired_peer_segments,
+                stats.unquiesced_peer_segments
+            ),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(stats.reclaimed_peer_segments, (i + 1) as u64);
+        let mut want = vec![0xcd; 18];
+        want[1..17].fill(value);
+        assert_eq!(bytes(&local), want);
+        assert_eq!(bytes(&remote), vec![value; 18]);
+    }
+    Ok(())
+}
+
+#[test]
+fn peer_retirement_stale_clone_fences_at_capacity_then_authoritative_reopen_validates_epoch()
+-> Result<()> {
+    let src = TransferEngine::new(EngineConfig::default())?;
+    let other = TransferEngine::new(EngineConfig::default())?;
+    let dst = TransferEngine::new(EngineConfig {
+        max_peer_segments: 1,
+        ..Default::default()
+    })?;
+    let peer = dst.open_segment(src.endpoint(), src.source_epoch(), WAIT)?;
+    let stale = peer.clone();
+    dst.close_segment(peer.endpoint(), peer.source_epoch(), WAIT)?;
+    drop(peer);
+    for _ in 0..10 {
+        assert!(matches!(
+            dst.open_segment(other.endpoint(), other.source_epoch(), WAIT),
+            Err(Error::ResourceExhausted)
+        ));
+        assert!(matches!(dst.admit_peer(&stale), Err(Error::PeerClosed)));
+        assert!(matches!(
+            dst.open_segment(stale.endpoint(), stale.source_epoch(), WAIT),
+            Err(Error::PeerClosed)
+        ));
+        assert_eq!(dst.stats()?.retired_peer_segments, 1);
+    }
+    let epoch = stale.source_epoch();
+    drop(stale);
+    let peer = dst.open_segment(src.endpoint(), epoch, WAIT)?;
+    assert_eq!(peer.source_epoch(), epoch);
+    assert_eq!(dst.stats()?.reclaimed_peer_segments, 1);
+    drop(peer);
+    assert!(matches!(
+        dst.open_segment(src.endpoint(), SourceEpoch::generate()?, WAIT),
+        Err(Error::EpochMismatch)
+    ));
+    assert_eq!(dst.stats()?.peer_segments, 0);
+    Ok(())
+}
+
+#[test]
+fn peer_retirement_descriptor_cannot_implicitly_create_an_identity_on_another_requester()
+-> Result<()> {
+    let src = TransferEngine::new(EngineConfig::default())?;
+    let dst = TransferEngine::new(EngineConfig::default())?;
+    let other = TransferEngine::new(EngineConfig::default())?;
+    let remote = src.register_memory(vec![0x31; 18].into(), Permission::RemoteRead)?;
+    let local = dst.register_memory(vec![0xcd; 18].into(), Permission::LocalOnly)?;
+    let foreign = other.open_segment(src.endpoint(), src.source_epoch(), WAIT)?;
+    dst.close_segment(src.endpoint(), src.source_epoch(), WAIT)?;
+    assert_eq!(dst.stats()?.peer_segments, 0);
+    let q = TransferRequest::new(
+        Transport::Tcp,
+        local.base_address() + 1,
+        remote.base_address() + 1,
+        16,
+    );
+    assert!(matches!(
+        dst.submit_and_wait(TransferOp::Read, &foreign, std::slice::from_ref(&q), WAIT),
+        Err(Error::InvalidConfig(_))
+    ));
+    assert_eq!(bytes(&local), vec![0xcd; 18]);
+    let own = dst.open_segment(src.endpoint(), src.source_epoch(), WAIT)?;
+    assert!(
+        dst.submit_and_wait(TransferOp::Read, &own, &[q], WAIT)?
+            .is_complete()
+    );
+    let mut want = vec![0xcd; 18];
+    want[1..17].fill(0x31);
+    assert_eq!(bytes(&local), want);
     Ok(())
 }

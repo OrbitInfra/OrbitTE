@@ -70,6 +70,7 @@ fn partial_native_setup_keeps_other_cross_errors_observable() {
                     ),
                 );
                 peer.endpoint = gate.endpoint;
+                requester.bind_test_peer(&mut peer).unwrap();
                 let mut batch = requester
                     .submit_async(
                         operation,
@@ -212,6 +213,7 @@ fn fragmented_native_setup_validates_all_grants_before_payload() {
                 },
             );
             peer.endpoint = gate.endpoint;
+            requester.bind_test_peer(&mut peer).unwrap();
             let mut batch = requester
                 .submit_async(
                     operation,

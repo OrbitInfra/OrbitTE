@@ -1,14 +1,30 @@
 use super::*;
 
 impl TransferEngine {
-    pub(crate) fn admit_peer(&self, peer: PeerKey) -> Result<Arc<PeerPermit>> {
-        self.peers.admit(peer)
+    pub(crate) fn admit_peer(&self, peer: &RemoteSegment) -> Result<Arc<PeerPermit>> {
+        self.peers.admit(
+            peer.identity.as_ref().ok_or(Error::InvalidConfig(
+                "open_segment on this requester before admission",
+            ))?,
+            peer.into(),
+        )
     }
 
-    /// Permanently closes requester admission to one endpoint/source epoch.
+    pub(crate) fn admit_peer_handle(
+        &self,
+        handle: &crate::runtime::segment_manager::PeerHandle,
+        key: PeerKey,
+    ) -> Result<Arc<PeerPermit>> {
+        self.peers.admit(handle, key)
+    }
+
+    /// Closes requester admission to one endpoint/source epoch.
     /// Existing work drains before its cached transport resources are retired.
     /// Old `RemoteSegment` snapshots cannot submit or refresh after this fence;
-    /// a different authoritative epoch can be opened normally.
+    /// a different authoritative epoch can be opened normally. After successful
+    /// cleanup and the last descriptor/operation reference is dropped, the fence
+    /// can be reclaimed. Only an explicit `open_segment` can then reopen the same
+    /// authoritative epoch; Describe still checks it against the source.
     ///
     /// A timeout returns `Unquiesced` and keeps owners. Waiting again is allowed
     /// while admitted work drains. Once native cleanup has started, its result

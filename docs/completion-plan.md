@@ -399,7 +399,7 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
 - [ ] Python classes, properties, overloads, context managers, error
   translation, GIL release and buffer lifetime.
 - [x] F06 P2P-only configuration boundary; S18 external stores and cluster discovery are out of scope by design.
-- [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. C/C++ segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
+- [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. Identity charges follow live handles/operations; safe unreferenced entries reclaim, while uncertain cleanup remains charged. C/C++ segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
 - [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
 - [ ] Device plugin ABI registration and real CUDA plugin loading.
 

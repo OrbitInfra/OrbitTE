@@ -154,8 +154,8 @@ pub struct EngineConfig {
     pub max_registered_bytes: usize,
     /// Open or draining local file segments. Zero disables file segment opens.
     pub max_file_segments: usize,
-    /// Endpoint/epoch identities, including permanent retirement tombstones.
-    /// Entries remain charged for this engine's lifetime; at most 4096.
+    /// Live endpoint/epoch identities, including referenced retirement fences
+    /// and failed native cleanup. Unreferenced safe entries are reclaimed; at most 4096.
     pub max_peer_segments: usize,
     /// Maximum descriptors in one transfer or host-registration batch.
     pub max_batch_requests: usize,

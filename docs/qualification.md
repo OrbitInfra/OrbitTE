@@ -44,8 +44,11 @@ C setters and native/classic C++ constructors. The installed consumers check
 guards and migration guidance. No external store or discovery service is
 part of this profile. Rust per-peer retirement is implemented with real TCP,
 HP-TCP and SHM controls on Linux, and CUDA/verbs table controls. The
-`peer_retirement_*` tests check held ownership, submit/close races, permanent
-stale-epoch rejection, selective cleanup and one-shot native failures. RNIC,
+`peer_retirement_*` tests check held ownership, submit/close/reclaim races, retained
+stale-epoch rejection, selective cleanup and one-shot native failures. Guarded TCP
+churn covers ten times the identity capacity; stale clones and failed native
+cleanup remain charged under pressure. Reopening a reclaimed identity requires
+an explicit authoritative open. RNIC,
 NVLink and MNNVL retirement remain **Implemented; installed profile unqualified**.
 The C/C++ same-epoch reopen controls preserve frozen segment-handle close;
 it is not a drain receipt.

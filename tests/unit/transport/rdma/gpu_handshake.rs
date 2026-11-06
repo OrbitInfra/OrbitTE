@@ -123,7 +123,8 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let epoch = SourceEpoch([7; 16]);
-        let peer = RemoteSegment {
+        let mut peer = RemoteSegment {
+            identity: None,
             metadata: crate::segment::SegmentMetadata {
                 rdma: true,
                 rdma_direct_gpu: false,
@@ -195,6 +196,7 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
             }
         });
         let engine = rdma_fixture("direct:copy");
+        engine.bind_test_peer(&mut peer).unwrap();
         let memory = engine
             .register_memory(vec![0; 8].into_boxed_slice(), Permission::LocalOnly)
             .unwrap();

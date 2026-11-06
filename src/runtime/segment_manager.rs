@@ -1,4 +1,4 @@
-//! Requester-side peer admission and permanent epoch tombstones.
+//! Requester-side peer admission and reference-retained epoch fences.
 //!
 //! Unlike TENT's reversible handle invalidation, retirement is a membership
 //! fence. A borrowed descriptor cannot reopen admission to a retired identity.
@@ -35,18 +35,67 @@ struct State {
     open: bool,
     active: usize,
     cleanup: Cleanup,
+    drain_uncertain: bool,
 }
 struct Entry {
+    owner: Arc<()>,
+    key: PeerKey,
     state: Mutex<State>,
     changed: Condvar,
 }
 
 pub(crate) struct SegmentManager {
-    entries: Mutex<HashMap<PeerKey, Arc<Entry>>>,
+    table: Mutex<Table>,
+    owner: Arc<()>,
     capacity: usize,
     // Serializes native teardown only. Credit reconciliation remains callable
     // after global requester close; payload admission has its own fence.
     closing: AtomicBool,
+}
+
+#[derive(Default)]
+struct Table {
+    entries: HashMap<PeerKey, Arc<Entry>>,
+    reclaimed: u64,
+}
+impl Table {
+    fn reclaim(&mut self) {
+        self.entries.retain(|_, entry| {
+            // The table lock excludes open/close lookup. Admission can clone an
+            // entry only through an already-live handle, which makes this count
+            // greater than one. There is no Weak upgrade or key-only admission.
+            if Arc::strong_count(entry) != 1 {
+                return true;
+            }
+            let state = entry.state.lock().unwrap_or_else(|p| p.into_inner());
+            // A timed-out drain still owes native cleanup. Failed cleanup is
+            // sticky even after every public handle and permit has disappeared.
+            let reclaim =
+                state.active == 0 && (state.open || matches!(state.cleanup, Cleanup::Complete));
+            if reclaim {
+                self.reclaimed = self.reclaimed.saturating_add(1);
+            }
+            !reclaim
+        });
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PeerHandle(Arc<Entry>);
+impl std::fmt::Debug for PeerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PeerHandle").field(&self.0.key).finish()
+    }
+}
+
+#[derive(Default, Debug, Eq, PartialEq)]
+pub(crate) struct PeerStats {
+    pub(crate) identities: usize,
+    pub(crate) live: usize,
+    pub(crate) retired: usize,
+    pub(crate) unquiesced: usize,
+    pub(crate) active: usize,
+    pub(crate) reclaimed: u64,
 }
 
 /// Shared with notification retries; one charge lasts until the last owner drops.
@@ -63,39 +112,56 @@ impl Drop for PeerPermit {
 impl SegmentManager {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
-            entries: Mutex::default(),
+            table: Mutex::default(),
+            owner: Arc::new(()),
             capacity,
             closing: AtomicBool::new(false),
         }
     }
 
     fn entry(&self, key: PeerKey) -> Result<Arc<Entry>> {
-        let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(entry) = entries.get(&key) {
+        let mut table = self.table.lock().unwrap_or_else(|p| p.into_inner());
+        table.reclaim();
+        if let Some(entry) = table.entries.get(&key) {
             return Ok(entry.clone());
         }
-        // Tombstones are charged for the engine's lifetime. Eviction would
-        // silently make a stale descriptor usable again.
-        if entries.len() >= self.capacity {
+        if table.entries.len() >= self.capacity {
             return Err(Error::ResourceExhausted);
         }
-        entries
+        table
+            .entries
             .try_reserve(1)
             .map_err(|_| Error::ResourceExhausted)?;
         let entry = Arc::new(Entry {
+            owner: self.owner.clone(),
+            key,
             state: Mutex::new(State {
                 open: true,
                 active: 0,
                 cleanup: Cleanup::NotStarted,
+                drain_uncertain: false,
             }),
             changed: Condvar::new(),
         });
-        entries.insert(key, entry.clone());
+        table.entries.insert(key, entry.clone());
         Ok(entry)
     }
 
-    pub(crate) fn admit(&self, key: PeerKey) -> Result<Arc<PeerPermit>> {
-        let entry = self.entry(key)?;
+    /// Only an authoritative open creates an admissible descriptor. Keeping
+    /// this token (including through a clone) prevents tombstone reclamation.
+    pub(crate) fn open(&self, key: PeerKey) -> Result<(PeerHandle, Arc<PeerPermit>)> {
+        let handle = PeerHandle(self.entry(key)?);
+        let permit = self.admit(&handle, key)?;
+        Ok((handle, permit))
+    }
+
+    pub(crate) fn admit(&self, handle: &PeerHandle, key: PeerKey) -> Result<Arc<PeerPermit>> {
+        let entry = &handle.0;
+        if !Arc::ptr_eq(&self.owner, &entry.owner) || entry.key != key {
+            return Err(Error::InvalidConfig(
+                "open_segment on this requester with the authoritative endpoint and epoch",
+            ));
+        }
         {
             let mut state = entry.state.lock().unwrap_or_else(|p| p.into_inner());
             if !state.open {
@@ -106,7 +172,7 @@ impl SegmentManager {
                 .checked_add(1)
                 .ok_or(Error::ResourceExhausted)?;
         }
-        Ok(Arc::new(PeerPermit(entry)))
+        Ok(Arc::new(PeerPermit(entry.clone())))
     }
 
     pub(crate) fn close(
@@ -126,9 +192,10 @@ impl SegmentManager {
                 Cleanup::NotStarted if state.active == 0 => break,
                 _ => {}
             }
-            let wait = deadline
-                .checked_duration_since(Instant::now())
-                .ok_or_else(drain_timeout)?;
+            let Some(wait) = deadline.checked_duration_since(Instant::now()) else {
+                state.drain_uncertain = true;
+                return Err(drain_timeout());
+            };
             state = entry
                 .changed
                 .wait_timeout(state, wait)
@@ -163,9 +230,10 @@ impl SegmentManager {
         // Prevent a new selective cleanup from racing global transport teardown.
         self.closing.store(true, Ordering::Release);
         let entries: Vec<_> = self
-            .entries
+            .table
             .lock()
             .unwrap_or_else(|p| p.into_inner())
+            .entries
             .values()
             .cloned()
             .collect();
@@ -189,15 +257,23 @@ impl SegmentManager {
         failure.map_or(Ok(()), Err)
     }
 
-    pub(crate) fn stats(&self) -> (usize, usize, usize) {
-        let entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
-        let (mut retired, mut active) = (0, 0);
-        for entry in entries.values() {
+    pub(crate) fn stats(&self) -> PeerStats {
+        let mut table = self.table.lock().unwrap_or_else(|p| p.into_inner());
+        table.reclaim();
+        let mut stats = PeerStats {
+            identities: table.entries.len(),
+            reclaimed: table.reclaimed,
+            ..Default::default()
+        };
+        for entry in table.entries.values() {
             let state = entry.state.lock().unwrap_or_else(|p| p.into_inner());
-            retired += usize::from(!state.open);
-            active += state.active;
+            stats.live += usize::from(state.open);
+            stats.retired += usize::from(!state.open);
+            stats.unquiesced +=
+                usize::from(state.drain_uncertain || matches!(state.cleanup, Cleanup::Failed(_)));
+            stats.active += state.active;
         }
-        (entries.len(), retired, active)
+        stats
     }
 }
 
@@ -223,6 +299,9 @@ impl Drop for CleanupCompletion {
                 code: libc::EIO,
             }),
         };
+        if matches!(state.cleanup, Cleanup::Complete) {
+            state.drain_uncertain = false;
+        }
         self.entry.changed.notify_all();
     }
 }

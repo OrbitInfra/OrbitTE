@@ -334,7 +334,7 @@ impl Batch {
                     TransferTarget::File(_) => {
                         return Err(Error::Unavailable("file notifications"));
                     }
-                    TransferTarget::Memory(s) => targets.push(crate::notification::Target::from(s)),
+                    TransferTarget::Memory(s) => targets.push(s),
                 }
             }
             Some(engine.notification_routes.hook_targets(

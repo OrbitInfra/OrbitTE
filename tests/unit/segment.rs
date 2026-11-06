@@ -53,6 +53,7 @@ fn address_resolution_uses_tent_containment_order_and_rejects_cross_region_range
         permission: Permission::RemoteRead,
     };
     let peer = RemoteSegment {
+        identity: None,
         metadata: Default::default(),
         endpoint: "127.0.0.1:1".parse().unwrap(),
         epoch,
