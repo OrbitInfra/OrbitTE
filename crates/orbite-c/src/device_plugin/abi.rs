@@ -10,7 +10,7 @@ pub struct Location {
     pub location: [c_char; 32],
 }
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct Table {
     pub class_name: *const c_char,
     pub create_plugin: Option<unsafe extern "C" fn() -> *mut c_void>,
@@ -26,6 +26,22 @@ pub struct Table {
     pub get_device_count: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     pub get_device_pci_bus_id:
         Option<unsafe extern "C" fn(*mut c_void, c_int, *mut c_char, usize) -> c_int>,
+}
+impl Default for Table {
+    fn default() -> Self {
+        // Keep the null pointer initialization explicit for the Rust MSRV.
+        Self {
+            class_name: std::ptr::null(),
+            create_plugin: None,
+            destroy_plugin: None,
+            alloc: None,
+            free: None,
+            memcpy_sync: None,
+            query_location: None,
+            get_device_count: None,
+            get_device_pci_bus_id: None,
+        }
+    }
 }
 impl Table {
     pub fn complete(&self) -> bool {
