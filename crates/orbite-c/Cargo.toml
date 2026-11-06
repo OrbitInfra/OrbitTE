@@ -18,6 +18,8 @@ crate-type = ["cdylib", "staticlib"]
 default = []
 # Optional Python packaging reuses these Rust ABI owners; no Python in libtent builds.
 python = ["dep:pyo3"]
+# Native plugin loading is explicit, Linux-only and absent from default builds.
+device-plugin = ["orbite/device-plugin", "dep:libloading"]
 rdma = ["orbite/rdma"]
 cuda = ["orbite/cuda"]
 io-uring = ["orbite/io-uring"]
@@ -32,6 +34,9 @@ orbite = { version = "0.1.0-alpha.1", path = "../.." }
 libc = "0.2.191"
 log = "0.4.34"
 serde_json = "1.0.151"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = { version = "0.8.9", optional = true }
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"

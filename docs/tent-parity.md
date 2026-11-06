@@ -91,7 +91,7 @@ the behavior. Hardware qualification stays with the artifact that ran.
 | [`db4f146e`](https://github.com/OrbitInfra/Mooncake/commit/db4f146ecb5ae3bc432c0262c1cb6650a0a39ba4) | [TENT] Add intra-node PCIe P2P copies between Intel XPUs (#4379) | **N/A** | Intel XPU PCIe peer copies, Level Zero IPC imports and XPU-specific selector capabilities require SYCL. |
 | [`a7496800`](https://github.com/OrbitInfra/Mooncake/commit/a7496800527b93105ac5c4177ce7cdabc5667dbf) | [TENT] Add asynchronous MLU host-device copies (#4720) | **Port** | R1c implemented. Shared controls cover submit publication before wake, scoped polling, staging-child drain and retained registration rollback. MLU and its runtime remain excluded. |
 | [`dae22d47`](https://github.com/OrbitInfra/Mooncake/commit/dae22d472e31f6aac92ee1dfe938dc1441b58850) | [TENT] Do not advance the notify send slot on a failed post (#4434) | **N/A** | The corrected send slot belongs to the RDMA notification QP. OrbiTE notifications use local, TCP and control-RPC delivery. |
-| [`b2c7d0a7`](https://github.com/OrbitInfra/Mooncake/commit/b2c7d0a7b5cec0b04563138f40d4c40937dd63fe) | [Bugfix][TENT] Restore caller CUDA context after plugin copies (#4839) | **Port** | R1c implemented. The CUDA owner restores the exact binding. A handled copy or cleanup error is terminal and cannot enter host memcpy. The external plugin ABI stays at S22. |
+| [`b2c7d0a7`](https://github.com/OrbitInfra/Mooncake/commit/b2c7d0a7b5cec0b04563138f40d4c40937dd63fe) | [Bugfix][TENT] Restore caller CUDA context after plugin copies (#4839) | **Port** | R1c implemented. The CUDA owner restores the exact binding. A handled copy or cleanup error is terminal and cannot enter host memcpy. S22 provides the checked external plugin ABI. |
 | [`042ab8a1`](https://github.com/OrbitInfra/Mooncake/commit/042ab8a18b0e6ccfe87782261a5556a3dd4446e4) | [TENT] Add Intel XPU GPUDirect dma-buf RDMA to the Transfer Engine (#4378) | **N/A** | The dma-buf exporter and accelerator-specific range checks serve Intel XPU. OrbiTE's NVIDIA RDMA path uses its CUDA registration owner. |
 | [`3b08b771`](https://github.com/OrbitInfra/Mooncake/commit/3b08b77168870d265e32b6cfeab661f037426b9c) | [TE/TENT] Add adaptive RDMA congestion control core (#4197) | **Port** | R1b implemented. The opt-in `rdma-adaptive` shared core provides off/observe/enforce windows, generation-scoped evidence and completion classification. As in the TENT build, workers do not call it. |
 | [`7540f582`](https://github.com/OrbitInfra/Mooncake/commit/7540f5826ed32cb755b1db027a2c609adb53f024) | [TENT] Add diagnostic core and version CLI (#4154) | **Port** | R1d implemented. The packaged offline `tent diagnostics version [--json]` binary, Rust diagnostics module and C/C++ header share the renderer and build identity. CI installs the binary and links both native clients. |
@@ -215,6 +215,13 @@ The other six platforms and ROCm plugin are excluded by project scope, rather
 than classified as missing hardware qualification. In-scope provider stubs
 qualify unavailable/error handling and state-machine controls only; they cannot
 qualify real transfers.
+
+S22 preserves the frozen plugin header and layout. The native loader has no
+production config/env selector in the frozen tree; OrbiTE adds explicit C
+load/close calls. A required separate layout descriptor rejects incompatible
+libraries before registration. Failed free/destroy retains owners instead of
+unloading, and handled copy failures never authorize a host fallback. The
+[plugin guide](device-plugins.md) records these safety differences and controls.
 
 Frozen TENT builds `BufIoTransport` as a static target. It caches buffered fds,
 runs synchronous `pread`/`pwrite` at the request's file offset and stages CUDA

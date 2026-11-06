@@ -3,9 +3,14 @@
 #[cfg(not(panic = "unwind"))]
 compile_error!("libtent requires panic unwinding for its C entry-point barriers");
 mod abi;
+#[cfg(all(feature = "device-plugin", not(target_os = "linux")))]
+compile_error!("OrbiTE device-plugin features require a Linux target");
 mod batch;
 #[allow(unsafe_code)]
 mod boundary;
+#[cfg(all(feature = "device-plugin", target_os = "linux"))]
+#[allow(unsafe_code)]
+mod device_plugin;
 mod engine;
 #[allow(unsafe_code)]
 mod memory;

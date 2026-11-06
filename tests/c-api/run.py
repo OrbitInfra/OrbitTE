@@ -304,18 +304,20 @@ def main():
         nm = subprocess.check_output(
             ["nm", "-D", "--defined-only", lib / "libtent.so"], text=True
         )
+        native_symbols = set(symbols)
+        if "device-plugin" in args.features.split(",") and {"cuda", "gds"}.intersection(args.features.split(",")):
+            native_symbols.add("tent_register_device_plugin")
         assert {
             s.split()[-1] for s in nm.splitlines() if s.split()[-1].startswith("tent_")
-        } == symbols
+        } == native_symbols
         subprocess.run(
-            [*flags, "-DORBITE_C_API_ONLY", INVENTORY / "abi.c", "-o", tmp / "layout"],
+            [*flags, INVENTORY / "abi.c", "-o", tmp / "layout"],
             check=True,
         )
         observed = subprocess.check_output([tmp / "layout"], text=True).splitlines()
         expected = [
             s
             for s in (INVENTORY / "abi.lp64").read_text().splitlines()
-            if s.split("\t")[0] not in {"location_t", "device_plugin_t", "plugin"}
         ]
         assert observed == expected, (observed, expected)
         env = dict(os.environ)

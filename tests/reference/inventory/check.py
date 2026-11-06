@@ -70,6 +70,8 @@ def check_links(tent):
 
 
 def check_c_api(tent):
+    if (REPO / "crates/orbite-c/include/tent/device_plugin.h").read_bytes() != (tent / "include/tent/device_plugin.h").read_bytes():
+        raise ValueError("installed device plugin header differs from frozen TENT")
     api = (tent / "include/tent/transfer_engine.h").read_text()
     c_header, cpp = api.split("#ifdef __cplusplus\n#include <array>", 1)
     installed = REPO / "crates/orbite-c/include/tent/transfer_engine.h"

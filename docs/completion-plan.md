@@ -102,7 +102,9 @@ are implemented; native cleanup is shim-tested and awaits the installed gate.
 S21 implements the [Python surface](python.md), installed-wheel byte and lifetime
 controls, and CPython 3.10–3.14 packaging. S21b adds driver-validated retained
 CUDA Array Interface/DLPack owners; its installed GPU profile is unqualified.
-S22–S26 retain their order.
+S22 implements the checked [device plugin ABI](device-plugins.md), CPU shared-library
+controls and a CUDA provider using the fallible driver table. Its installed GPU
+profile remains unqualified. S23–S26 retain their order.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -407,7 +409,9 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
 - [x] F06 P2P-only configuration boundary; S18 external stores and cluster discovery are out of scope by design.
 - [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. Identity charges follow live handles/operations; safe unreferenced entries reclaim, while uncertain cleanup remains charged. C/C++ segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
 - [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
-- [ ] Device plugin ABI registration and real CUDA plugin loading.
+- [x] F03 device plugin ABI registration, checked runtime loading and a CUDA
+  provider. CPU libraries exercise the installed C boundary and drain; CUDA
+  shim controls pass, with the installed GPU gate queued.
 
 Exit: independent Rust, C, C++ and Python consumers run the parity cases
 against installed artifacts, with explicit provider/feature matrices.

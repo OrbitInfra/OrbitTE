@@ -98,3 +98,9 @@ WRITE, checks both guards and rejects crossing the registered range. Only the
 fixture's address field is relocated to that process's live allocation. Stage
 addresses, GPU handles, RDMA QPNs and optional provider tokens are inert test
 values. Mixed Rust/TENT peer execution belongs to S23.
+
+S22 implements both `binding.plugin` rows with the unchanged plugin header and
+installed C layout checks. Frozen `MemoryProber::loadPlugins` has no production
+caller or config/environment selector. The explicit OrbiTE loader and required
+ABI descriptor are safety extensions, tested in `tests/device-plugin/`; they do
+not add invented frozen configuration rows.

@@ -22,6 +22,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
+        "device-plugin": (["cuda", "device-plugin"], "orbite-device-plugin", "libtent-device-plugin", "tests/hardware/device_plugin.c"),
         "python-cuda": (["cuda"], "orbite-python-cuda", "orbite-installed-python-cuda", "tests/hardware/python_cuda.py"),
         "cpp-abi": (["rdma", "cuda"], "orbite-cpp-hardware", "libtent-cpp", "tests/hardware/cpp_abi.cpp"),
         "c-abi": (["rdma", "cuda"], "orbite-c-hardware", "libtent", "tests/hardware/c_abi.c"),
@@ -126,7 +127,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
                             ffi_package_sha256=digest(ffi_archive), wheel=str(wheel),
                             wheel_sha256=digest(wheel), fixture_files_sha256=fixtures)
             return
-        if consumer_kind in ('c-abi', 'cpp-abi'):
+        if consumer_kind in ('c-abi', 'cpp-abi', 'device-plugin'):
             cpp = consumer_kind == 'cpp-abi'
             patch = 'patch.crates-io.orbite.path=' + json.dumps(str(root))
             run('ffi-package', [*package, '-p', 'orbite-c', '--config', patch])
@@ -142,7 +143,9 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             exe.parent.mkdir()
             run('build-c', [*( [environment.get('CXX', 'c++'), '-std=c++20'] if cpp else [environment.get('CC', 'cc'), '-std=c11']), '-Wall', '-Wextra', '-Werror',
                             '-I' + str(prefix / 'include'), str(fixture), '-L' + str(prefix / 'lib'),
-                            '-Wl,-rpath,$ORIGIN/../lib', *(['-ltent_cpp', '-pthread'] if cpp else []), '-ltent', '-o', str(exe)])
+                            '-Wl,-rpath,$ORIGIN/../lib', *(['-ltent_cpp', '-pthread'] if cpp else []), '-ltent', *(['-ldl'] if consumer_kind == 'device-plugin' else []), '-o', str(exe)])
+            if consumer_kind == 'device-plugin':
+                shutil.copy2(library / 'tests/hardware/device_plugin_run.py', output / 'device_plugin_run.py')
             manifest.update(status='built', package_sha256=digest(archive),
                             ffi_package_sha256=digest(ffi_archive), binary_sha256=digest(exe),
                             fixture_sha256=digest(fixture))
@@ -285,6 +288,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
+    parser.add_argument('--consumer', choices=('device-plugin', 'python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

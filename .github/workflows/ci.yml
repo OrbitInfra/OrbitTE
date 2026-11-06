@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive', device-plugin, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITE_FEATURES: ${{ matrix.features }}
@@ -51,7 +51,7 @@ jobs:
           target=aarch64-apple-darwin
           rustup target add "$target"
           cargo check --locked --target "$target" --no-default-features
-          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive; do
+          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive device-plugin; do
             log="$RUNNER_TEMP/non-linux-$features.log"
             if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
               echo "unexpected success for $target with $features"
@@ -272,6 +272,19 @@ jobs:
         run: cargo publish --dry-run --locked --features "$ORBITE_FEATURES"
       - name: Install both C libraries and run the independent C consumer
         run: bash .github/scripts/check-installed-c-api.sh "$RUNNER_TEMP/orbite-c"
+      - name: Check native device plugin ABI and lifetime
+        if: contains(matrix.features, 'device-plugin')
+        run: |
+          repeat=1
+          if [[ "$RUSTUP_TOOLCHAIN" == stable ]]; then repeat=50; fi
+          for i in $(seq 1 "$repeat"); do
+            cargo test -p orbite-c --locked --features "$ORBITE_FEATURES" synchronous_copy_excludes_concurrent_alias_publication
+          done
+          python3 tests/device-plugin/run.py --prefix "$RUNNER_TEMP/orbite-c" --repeat "$repeat"
+          if [[ ",$ORBITE_FEATURES," == *,cuda,* ]]; then
+            python3 tests/device-plugin/cuda.py --prefix "$RUNNER_TEMP/orbite-c" --repeat "$repeat"
+            python3 tests/hardware/build_installed.py --consumer device-plugin --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/device-plugin-installed"
+          fi
       - name: Install public host consumer from packaged crate
         if: matrix.features == 'rdma'
         run: python3 tests/hardware/build_installed.py --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbite-installed-host-$RUSTUP_TOOLCHAIN"

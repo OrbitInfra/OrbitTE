@@ -13,6 +13,7 @@ use cudarc::driver::sys;
 use crate::memory::checked_range;
 use crate::{Error, HostMemory, Result};
 
+pub mod device_plugin;
 mod driver;
 pub(crate) mod fabric;
 pub(crate) mod ipc;

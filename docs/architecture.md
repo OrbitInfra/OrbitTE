@@ -45,6 +45,42 @@ rejected RDMA owner never falls back to TCP. An opt-in process watcher invokes
 Rust close outside the signal handler. It holds at most one weak reference per
 engine and joins on normal exit.
 
+## Native device plugin boundary
+
+`orbite-c::device_plugin` owns each checked table, dynamic library and context.
+The optional `device-plugin` feature uses the existing semver-compatible
+`libloading` dependency. The CUDA table is exported from `libtent.so` with
+`cuda,device-plugin`; it reuses the core Driver API and context guard. Neither
+feature starts a plugin automatically. The frozen loader has no production
+caller or config/env selector, so the explicit per-engine load/close functions
+are extensions rather than configuration aliases.
+
+The frozen record has no layout negotiation. A separate descriptor is required
+before registration, leaving the original header unchanged. Missing descriptors,
+invalid layouts or any incomplete slot reject before allocation (`fake.c` cases
+1–7 and 20–28). Excluded classes and duplicate providers also reject. Unlike
+TENT, CPU plugins may supply the explicitly configured C allocation path, and
+load failure is reported rather than skipped. Serialized per-plugin calls,
+eight-library limits and the existing C allocation budgets bound resources.
+
+TENT ignores failed destroy and retries provider frees by dispatch. OrbiTE
+fences uncertain allocation/copy/free/destroy outcomes and retains the library,
+backing and charge. `fake.c` cases 8–11 and 18 prove sticky cleanup, and the
+paused TCP control proves that cancel/unregister cannot release a running
+allocation. Cross-engine aliases retain the same backing. Synchronous plugin
+copies hold the span-table lock through completion; the
+`synchronous_copy_excludes_concurrent_alias_publication` control proves that
+another engine cannot publish an alias after the exclusivity check.
+Unlike frozen `cudaMemcpy` dispatch, the CUDA provider drains the legacy stream
+before reporting success: [CUDA's synchronous API](https://docs.nvidia.com/cuda/cuda-driver-api/api-sync-behavior.html)
+can return before device-to-device or pageable-host-to-device DMA completes.
+CUDA shim modes 23 and 2 defer bytes until that drain and retain owners when it fails.
+The CUDA table refuses copies of foreign device allocations without a provider
+owner, returning the handled error before posting (`cuda.py` case 21). Its
+metadata query still checks foreign CUDA ranges through the native probe. The
+loader is a native-code trust boundary; no ABI check can validate arbitrary
+callback code.
+
 ## Python boundary
 
 The optional PyO3 feature of `orbite-c` builds `orbite._native`; it reuses the
@@ -630,8 +666,9 @@ a null binding. Copy and final pinned-buffer cleanup errors reach the caller.
 An uncertain restore poisons the owner even if the visible binding can be
 repaired. The same-device custom-context and no-context controls inject failures
 at save, switch, copy and restore. Host and CUDA allocations dispatch by owner,
-so a handled CUDA failure cannot fall through to host memcpy. The external
-plugin ABI is deferred to S22.
+so a handled CUDA failure cannot fall through to host memcpy. The [device plugin ABI](device-plugins.md) shares these CUDA owners and the
+C memory registry. A plugin allocation holds its library until physical drain;
+failed free/destroy callbacks fence and retain it without retry.
 
 Each asynchronous copy holds its staging until the recorded event completes. A failed enqueue
 or record requires a proven stream drain; otherwise the allocation, staging,
