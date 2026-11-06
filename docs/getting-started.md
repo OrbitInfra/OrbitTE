@@ -1,9 +1,9 @@
 # Quick Start
 
 Build the current source on Linux with Rust 1.85 or later. The default CPU/TCP
-path needs no CUDA toolkit, RNIC or native provider library. The published
-`orbit-te` alpha is the historical package reservation; build `orbite` from this checkout for
-the examples below.
+path needs no CUDA toolkit, RNIC or native provider library. `orbite 0.1.0-alpha.1`
+is published on crates.io for early development; its API is unstable. Build
+from this checkout to run the examples below.
 
 ## Get the source
 

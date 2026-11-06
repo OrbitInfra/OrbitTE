@@ -104,8 +104,8 @@ OrbiTE is in alpha. The bounded host RDMA, GPUDirect RDMA, CUDA IPC and
 staging profiles above passed installed tests on H20/RoCE hosts and
 independent review; newer source has CPU controls and awaits its hardware pass.
 [Qualification](docs/qualification.md) records the evidence, and the
-[completion plan](docs/completion-plan.md) is the work queue. The historical
-`orbit-te` crate on crates.io only reserved the old name; build `orbite` from source.
+[completion plan](docs/completion-plan.md) is the work queue. `orbite 0.1.0-alpha.1`
+is published on crates.io for early development; its API is unstable.
 
 ## Documentation
 
