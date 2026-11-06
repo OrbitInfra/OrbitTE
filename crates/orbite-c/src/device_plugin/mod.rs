@@ -42,9 +42,9 @@ impl Plugin {
         // SAFETY: explicitly configured, trusted native library. Loading is never
         // driven by peer metadata; the library owns any initializer it executes.
         let library = unsafe { Library::new(path) }.map_err(|_| unavailable())?;
-        // SAFETY: the separate fixed descriptor is checked before calling a
-        // potentially incompatible registration function that writes the table.
         let descriptor =
+            // SAFETY: the fixed descriptor is checked before invoking a
+            // potentially incompatible function that writes the table.
             unsafe { library.get::<*const Descriptor>(b"orbite_device_plugin_abi_v1\0") }
                 .map_err(|_| unavailable())?;
         if descriptor.is_null() {
