@@ -380,7 +380,7 @@ fn native_socket_stop_drains_accepted_cross_and_preserves_cleanup_uncertainty() 
                     // including the earlier CROSS's unresolved native work.
                     matches!(
                         failure.error,
-                        Error::Internal("RDMA close with unresolved work")
+                        Error::Unavailable("RDMA lane retiring with outstanding work")
                     )
                 } else {
                     matches!(failure.error, Error::Cancelled)

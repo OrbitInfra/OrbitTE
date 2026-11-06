@@ -309,7 +309,12 @@ impl ProgressState {
                 .is_some_and(|r| r.connection.retiring().receive_queue.outstanding() != 0)
         {
             drop(request);
-            self.fail(Fault::Internal("RDMA close with unresolved work"));
+            // A disconnect or cancellation can leave posted work. Retire the
+            // shared lane before releasing it; constructors already past the
+            // admission check must see the same unavailable path as new ones.
+            self.fail(Fault::Unavailable(
+                "RDMA lane retiring with outstanding work",
+            ));
             return Ok(false);
         }
         let resources = request

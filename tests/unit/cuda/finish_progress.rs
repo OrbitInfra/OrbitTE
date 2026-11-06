@@ -150,7 +150,8 @@ fn pending_native_finish(send_pending: bool) {
                 } else if send_pending {
                     matches!(
                         failure.error,
-                        Error::Cancelled | Error::Internal("RDMA close with unresolved work")
+                        Error::Cancelled
+                            | Error::Unavailable("RDMA lane retiring with outstanding work")
                     )
                 } else {
                     matches!(failure.error, Error::Backend { .. } | Error::Unavailable(_))

@@ -8,6 +8,56 @@ impl Drop for NativeHold {
 }
 
 #[test]
+fn receive_debt_retirement_rejects_new_grants_until_the_native_receipt() {
+    let runtime = configured("copy_qp_pause", 3);
+    let mut grant = runtime.staging_endpoint(8, 2).unwrap();
+    let hold = NativeHold(pause(&runtime));
+    grant.connect(&grant.descriptor()).unwrap();
+    grant.bind_window().unwrap();
+    post_receive(&mut grant, &[0x42; COMPLETION_MESSAGE_SIZE]).unwrap();
+    let lane = Arc::clone(&grant.progress);
+    wait_until(|| {
+        assert!(!grant.poll_close().unwrap());
+        hold.0.0.lock().unwrap().0
+    });
+    // A disconnected peer can leave its receive posted. This is a normal
+    // retirement barrier, not an invariant violation for a concurrent opener.
+    let rejected = lane.handle(false);
+    let before = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            before.active_endpoints,
+            before.active_grants,
+            before.staging_bytes,
+            before.receive_work_requests,
+            before.closed_connections
+        ),
+        (1, 1, 8, 1, 0)
+    );
+    drop(hold);
+    wait_until(|| lane.recoverable().unwrap());
+    let closed = grant.close();
+    drop(grant);
+    runtime.close(deadline()).unwrap();
+    let after = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            after.active_endpoints,
+            after.active_grants,
+            after.staging_bytes,
+            after.receive_work_requests,
+            after.closed_connections
+        ),
+        (0, 0, 0, 0, 1)
+    );
+    assert!(
+        matches!(rejected, Err(Error::Unavailable(_))),
+        "new grant: {rejected:?}; retiring grant: {closed:?}"
+    );
+    assert!(matches!(closed, Err(Error::Unavailable(_))));
+}
+
+#[test]
 fn poll_retirement_keeps_native_owners_until_close_or_retention_receipt() {
     for failure in [false, true] {
         let runtime = configured(

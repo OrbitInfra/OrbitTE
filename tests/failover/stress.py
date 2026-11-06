@@ -9,7 +9,11 @@ import subprocess
 import sys
 import time
 
-CONTROL = "engine::failover::tests::native::submit_rejection_walks_the_pinned_policy_once_per_physical_owner"
+CONTROLS = [
+    "engine::failover::tests::native::submit_rejection_walks_the_pinned_policy_once_per_physical_owner",
+    "engine::failover::tests::native::source_receive_retirement_keeps_owners_and_allows_unposted_policy_fallback",
+    "transport::rdma::cq_lane::tests::retirement::receive_debt_retirement_rejects_new_grants_until_the_native_receipt",
+]
 
 
 def bounded(low, high):
@@ -34,8 +38,8 @@ def main():
         parser.error("the stress control requires Linux")
     binary = str(args.binary.resolve())
     listed = subprocess.check_output([binary, "--list"], text=True, timeout=30)
-    if listed.splitlines().count(CONTROL + ": test") != 1:
-        parser.error("binary must contain exactly one submit-rejection control")
+    if any(listed.splitlines().count(control + ": test") != 1 for control in CONTROLS):
+        parser.error("binary must contain each submit-rejection and retirement control once")
     args.output.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     loads, failures = [], []
@@ -44,10 +48,10 @@ def main():
     def run(index):
         try:
             result = subprocess.run(
-                [binary, "--exact", CONTROL, f"--test-threads={args.test_threads}", "--nocapture"],
+                [binary, "--exact", *CONTROLS, f"--test-threads={args.test_threads}", "--nocapture"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90,
             )
-            passed = result.returncode == 0 and b"test result: ok. 1 passed; 0 failed;" in result.stdout
+            passed = result.returncode == 0 and f"test result: ok. {len(CONTROLS)} passed; 0 failed;".encode() in result.stdout
             output = result.stdout
         except subprocess.TimeoutExpired as error:
             passed, output = False, (error.stdout or b"") + b"\nstress process timeout\n"
@@ -83,7 +87,7 @@ def main():
         for process in loads:
             process.wait(timeout=10)
         report = dict(
-            binary=binary, control=CONTROL, requested=args.iterations, completed=completed,
+            binary=binary, controls=CONTROLS, requested=args.iterations, completed=completed,
             failures=failures, jobs=args.jobs, cpu_load=args.cpu_load,
             test_threads=args.test_threads, host_cpus=os.cpu_count(),
             elapsed_seconds=round(time.monotonic() - started, 3),

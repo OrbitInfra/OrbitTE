@@ -191,6 +191,107 @@ mod native {
     }
 
     #[test]
+    fn source_receive_retirement_keeps_owners_and_allows_unposted_policy_fallback() -> Result<()> {
+        struct Hold(Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>);
+        impl Drop for Hold {
+            fn drop(&mut self) {
+                self.0.0.lock().unwrap().1 = true;
+                self.0.1.notify_all();
+            }
+        }
+        let runtime = verbs::runtime_with_config(crate::transport::rdma::RdmaConfig {
+            max_endpoints: 2,
+            max_staging_bytes: 16,
+            host_memory: crate::transport::rdma::RdmaHostMemory::Staged,
+            ..crate::transport::rdma::RdmaConfig::new("copy_qp_pause")
+        });
+        let pause = verbs::pause(&runtime);
+        let source = rdma_fixture_with_config(runtime, Default::default());
+        let requester = Arc::new(rdma_fixture_with_config(
+            verbs::runtime("direct:connect"),
+            EngineConfig {
+                max_failover_attempts: 1,
+                ..Default::default()
+            },
+        ));
+        let local = requester.register_memory(vec![0xee; 12].into(), Permission::LocalOnly)?;
+        let remote = source.register_memory(
+            (0..12u8).collect::<Vec<_>>().into(),
+            Permission::RemoteReadWrite,
+        )?;
+        let peer = requester.open_segment(source.endpoint(), source.source_epoch(), WAIT)?;
+        let request = |offset, length| {
+            TransferRequest::new(
+                Transport::Rdma,
+                local.base_address() + offset,
+                remote.base_address() + offset,
+                length,
+            )
+        };
+        let hold = Hold(pause);
+        // The first connect rejects before any payload post. Its source RQ
+        // must retire; pause native destruction while TCP completes the read.
+        let first =
+            requester.submit_async(TransferOp::Read, &peer, &[request(2, 4)], None, WAIT)?;
+        assert_eq!(first.wait(WAIT)?.completed_tasks, 1);
+        {
+            let (state, timed) = hold
+                .0
+                .1
+                .wait_timeout_while(hold.0.0.lock().unwrap(), WAIT, |s| !s.0)
+                .unwrap();
+            assert!(!timed.timed_out() && state.0);
+        }
+        let before = source.stats()?.rdma.unwrap();
+        assert_eq!(
+            (
+                before.active_grants,
+                before.staging_bytes,
+                before.receive_work_requests,
+                before.closed_connections
+            ),
+            (1, 4, 1, 0)
+        );
+        // A new physical owner, with two public aliases, encounters that lane
+        // before its close receipt. It must walk the pinned policy once.
+        let next = requester.submit_async(
+            TransferOp::Read,
+            &peer,
+            &[request(6, 4), request(2, 4)],
+            None,
+            WAIT,
+        )?;
+        let completed = next.wait(WAIT)?;
+        let tasks = next.task_statuses()?;
+        let pending = source.stats()?.rdma.unwrap();
+        drop(hold);
+        source.close_source(WAIT)?;
+        assert_eq!(completed.completed_tasks, 2, "{tasks:?}");
+        for task in tasks {
+            assert_eq!(
+                (task.physical_owner, task.transport, task.failover_count),
+                (0, Transport::Tcp, 1)
+            );
+        }
+        assert_eq!(
+            (
+                pending.active_grants,
+                pending.staging_bytes,
+                pending.receive_work_requests,
+                pending.closed_connections
+            ),
+            (1, 4, 1, 0)
+        );
+        let mut bytes = [0; 12];
+        local.read(0, &mut bytes)?;
+        assert_eq!(bytes, [0xee, 0xee, 2, 3, 4, 5, 6, 7, 8, 9, 0xee, 0xee]);
+        remote.read(0, &mut bytes)?;
+        assert_eq!(bytes, std::array::from_fn(|i| i as u8));
+        assert_eq!(requester.stats()?.rdma.unwrap().post_calls, 0);
+        Ok(())
+    }
+
+    #[test]
     fn polling_progress_wait_and_alias_cancel_decide_one_drained_attempt() -> Result<()> {
         for decision in [
             "scalar", "vector", "overall", "progress", "wait", "auto", "cancel",
