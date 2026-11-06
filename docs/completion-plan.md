@@ -29,8 +29,8 @@ Every substage and every claimed hardware profile has one state:
 | Accepted | An independent reviewer inspected the diff, reran relevant gates and accepted the evidence and remaining limits |
 | Unqualified / Failed | Required hardware or evidence is unavailable, or a gate ran and failed; neither counts as passed |
 
-The historical `orbit-te 0.1.0-alpha.1` on crates.io only reserved the old name;
-the current `orbite` implementation has not been published. [Capabilities](capabilities.md)
+`orbite 0.1.0-alpha.1` is published on crates.io for early development; its API
+is unstable. [Capabilities](capabilities.md)
 summarizes current paths and [qualification](qualification.md) records the exact
 artifacts and hardware profiles.
 

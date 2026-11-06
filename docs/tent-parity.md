@@ -4,8 +4,8 @@ This document defines what OrbiTE must reproduce. Delivery is tracked only in
 [the completion plan](completion-plan.md). A first owned-memory/CPU TCP substage
 is implemented in the source tree; its scope and remaining parity gaps are
 listed in the [CPU contract](cpu-tcp.md). No complete requirement row below is
-qualified or accepted yet. The historical `orbit-te 0.1.0-alpha.1` publication
-reserved the old package identity and provides no transfer API. The current package is `orbite`.
+qualified or accepted yet. `orbite 0.1.0-alpha.1` is published on crates.io for
+early development; its API is unstable.
 
 The selected purpose is a transfer engine for CPU DRAM, NVIDIA GPUs and local
 file/SSD storage that carries every end-to-end OrbitKV cache path, including
