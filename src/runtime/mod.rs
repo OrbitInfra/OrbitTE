@@ -8,7 +8,7 @@ pub(crate) mod receiver_credit;
 pub(crate) mod request_merge;
 pub(crate) mod transport_selector;
 
-#[cfg(feature = "rdma")]
+#[cfg(target_os = "linux")]
 pub(crate) mod topology;
 
 #[cfg(feature = "cuda")]

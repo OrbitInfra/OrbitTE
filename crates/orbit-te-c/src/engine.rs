@@ -40,20 +40,27 @@ pub(crate) fn set_field(k: String, v: String) -> Result<()> {
 }
 pub(crate) struct Engine {
     pub core: Arc<TransferEngine>,
+    pub defaults: [orbit_te::PolicyName; 2],
     pub memory: Mutex<Memory>,
     pub segments: Mutex<Segments>,
     pub batches: Mutex<HashMap<u64, Arc<Mutex<Batch>>>>,
 }
 impl Engine {
-    fn new() -> Result<Self> {
-        let cfg = SETTINGS.with_borrow(|s| {
+    fn settings() -> Result<EngineConfig> {
+        Ok(SETTINGS.with_borrow(|s| {
             EngineConfig::from_tent_settings(
                 &s.document,
                 s.fields.iter().map(|(k, v)| (k.as_str(), v.as_str())),
             )
-        })?;
+        })?)
+    }
+    fn new(cfg: EngineConfig) -> Result<Self> {
         Ok(Self {
             core: Arc::new(TransferEngine::new(cfg)?),
+            defaults: [
+                orbit_te::PolicyName::new("memory_default")?,
+                orbit_te::PolicyName::new("file_default")?,
+            ],
             memory: Mutex::default(),
             segments: Mutex::default(),
             batches: Mutex::default(),
@@ -89,6 +96,9 @@ pub(crate) fn id() -> Result<usize> {
     }
 }
 pub(crate) fn create() -> Result<Handle> {
+    create_using(Engine::settings)
+}
+pub(crate) fn create_using(config: impl FnOnce() -> Result<EngineConfig>) -> Result<Handle> {
     // Charge the slot before binding sockets or starting workers.
     let key = id()?;
     let slot = Arc::new(Slot {
@@ -102,7 +112,7 @@ pub(crate) fn create() -> Result<Handle> {
         }
         table.insert(key, slot.clone());
     }
-    let Some(result) = guard(None, || Some(Engine::new())) else {
+    let Some(result) = guard(None, || Some(config().and_then(Engine::new))) else {
         lock(slots())?.remove(&key);
         return Err(INTERNAL);
     };

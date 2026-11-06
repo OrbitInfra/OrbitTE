@@ -16,9 +16,10 @@ patch=$(python3 -c 'import json,sys; print("patch.crates-io.orbit-te.path="+json
 cargo publish --dry-run --locked -p orbit-te-c --features "$ORBITTE_FEATURES" --config "$patch"
 cargo package --locked --no-verify -p orbit-te-c --features "$ORBITTE_FEATURES" --config "$patch"
 tar -xzf "$target/package/orbit-te-c-$version.crate" -C "$work"
-python3 scripts/install-c-api.py --debug --toolchain "$RUSTUP_TOOLCHAIN" --features "$ORBITTE_FEATURES" \
+python3 scripts/install-c-api.py --debug --cpp --toolchain "$RUSTUP_TOOLCHAIN" --features "$ORBITTE_FEATURES" \
   --manifest-path "$ffi/Cargo.toml" --engine-source "$core" --prefix "$prefix"
 python3 tests/c-api/run.py --prefix "$prefix" --features "$ORBITTE_FEATURES"
+python3 tests/cpp-api/run.py --prefix "$prefix"
 if [[ ",$ORBITTE_FEATURES," == *,rdma,* && ",$ORBITTE_FEATURES," == *,cuda,* ]]; then
   cc -std=c11 -Wall -Wextra -Werror -I"$prefix/include" tests/hardware/c_abi.c \
     -L"$prefix/lib" -ltent -o "$work/c-abi-native"

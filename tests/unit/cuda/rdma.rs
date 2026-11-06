@@ -364,3 +364,52 @@ fn private_gpu_source_rendezvous_keeps_route_and_cache_ownership_separate() {
     gpu_handshake::check_source(source_runtime(&engine), engine.source_epoch(), &registered);
     engine.close(Duration::from_secs(2)).unwrap();
 }
+
+#[test]
+fn classic_scatter_requires_the_sources_registered_gpu_direct_mode() {
+    use crate::engine::tests::rdma_fixture_with_runtime;
+    use crate::transport::rdma::tests::{gpu_runtime, runtime};
+    let wait = crate::test_support::EVENTUAL_PROGRESS;
+    for direct in [false, true] {
+        let source = rdma_fixture_with_runtime(if direct {
+            gpu_runtime("copy")
+        } else {
+            runtime("copy")
+        });
+        let requester = rdma_fixture_with_runtime(runtime("direct:copy"));
+        let pattern: Vec<u8> = (0..16).collect();
+        let owner = allocation(&pattern);
+        let remote = source
+            .register_cuda_memory_batch(&[(memory(&owner), 0, 16)], Permission::RemoteRead)
+            .unwrap()
+            .remove(0);
+        let local = requester
+            .register_memory(vec![0xee; 12].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let peer = requester
+            .open_segment(source.endpoint(), source.source_epoch(), wait)
+            .unwrap();
+        assert_eq!(peer.metadata.rdma_direct_gpu, direct);
+        let request = TransferRequest::new(
+            Transport::Rdma,
+            local.base_address() + 2,
+            remote.base_address() + 4,
+            8,
+        )
+        .requiring_post_submit_cancellation();
+        let result = requester.submit_and_wait(TransferOp::Read, &peer, &[request], wait);
+        let mut expected = [0xee; 12];
+        if direct {
+            assert!(result.unwrap().is_complete());
+            expected[2..10].copy_from_slice(&pattern[4..12]);
+        } else {
+            assert!(matches!(result, Err(Error::Unavailable(_))));
+        }
+        let mut got = [0; 12];
+        local.read(0, &mut got).unwrap();
+        assert_eq!(got, expected);
+        let mut original = [0; 16];
+        remote.read(0, &mut original).unwrap();
+        assert_eq!(original.as_slice(), pattern);
+    }
+}

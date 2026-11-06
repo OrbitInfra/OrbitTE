@@ -31,7 +31,7 @@ pub(crate) fn numa_node(sys: &Path, pci: &str) -> Option<u32> {
         .ok()
 }
 
-#[cfg(all(feature = "rdma", feature = "cuda"))]
+#[cfg(feature = "cuda")]
 pub(crate) fn distance(sys: &Path, left: &str, right: &str) -> Option<usize> {
     let root = sys.join("bus/pci/devices");
     let left = root.join(bus_id(left)?).canonicalize().ok()?;

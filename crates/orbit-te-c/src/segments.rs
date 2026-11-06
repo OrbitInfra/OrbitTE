@@ -19,7 +19,7 @@ enum Entry {
 }
 #[derive(Default)]
 pub(crate) struct Segments {
-    entries: HashMap<u64, (String, Arc<Entry>)>,
+    entries: HashMap<u64, (Option<String>, Arc<Entry>)>,
 }
 #[derive(Clone)]
 pub(crate) enum Target {
@@ -40,34 +40,53 @@ impl Engine {
         self.core.endpoint().to_string()
     }
     pub fn open(&self, name: String) -> Result<u64> {
+        self.open_scoped(name, false)
+    }
+    pub fn open_scoped(&self, name: String, private: bool) -> Result<u64> {
         if name.is_empty() || name == self.name() {
             return Ok(0);
         }
         let mut table = lock(&self.segments)?;
-        if let Some((&id, _)) = table.entries.iter().find(|(_, v)| v.0 == name) {
-            return Ok(id);
+        if private && name.starts_with("file://") {
+            return Err(UNSUPPORTED);
+        }
+        let shared = table
+            .entries
+            .iter()
+            .find(|(_, v)| v.0.as_deref() == Some(name.as_str()))
+            .map(|(&id, v)| (id, v.1.clone()));
+        if !private {
+            if let Some((id, _)) = &shared {
+                return Ok(*id);
+            }
         }
         if table.entries.len() >= self.core.config().max_registered_regions {
             return Err(FULL);
         }
-        let entry = if name.starts_with("file://") {
-            Entry::File(
-                self.core
-                    .open_file_segment(&name, Permission::RemoteReadWrite)?,
-            )
+        let entry = if let Some((_, entry)) = shared {
+            entry
         } else {
-            let addr = name
-                .to_socket_addrs()
-                .map_err(|_| INVALID)?
-                .next()
-                .ok_or(INVALID)?;
-            Entry::Peer {
-                addr,
-                epoch: Mutex::new(None),
-            }
+            Arc::new(if name.starts_with("file://") {
+                Entry::File(
+                    self.core
+                        .open_file_segment(&name, Permission::RemoteReadWrite)?,
+                )
+            } else {
+                let addr = name
+                    .to_socket_addrs()
+                    .map_err(|_| INVALID)?
+                    .next()
+                    .ok_or(INVALID)?;
+                Entry::Peer {
+                    addr,
+                    epoch: Mutex::new(None),
+                }
+            })
         };
         let id = engine::id()? as u64;
-        table.entries.insert(id, (name, Arc::new(entry)));
+        table
+            .entries
+            .insert(id, ((!private).then_some(name), entry));
         Ok(id)
     }
     pub fn close_segment(&self, id: u64) -> Result<()> {

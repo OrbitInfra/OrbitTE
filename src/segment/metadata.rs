@@ -77,6 +77,7 @@ pub(crate) struct SegmentMetadata {
     pub(crate) max_transfer_bytes: u64,
     pub(crate) boot: Option<SourceEpoch>,
     pub(crate) rdma: bool,
+    pub(crate) rdma_direct_gpu: bool,
     pub(crate) remote_staging: bool,
     pub(crate) nvlink: Option<ProcessIdentity>,
 }
@@ -94,7 +95,8 @@ impl SegmentMetadata {
     pub(crate) fn encode(&self, bytes: &mut [u8]) {
         bytes.fill(0);
         bytes[36..44].copy_from_slice(&self.max_transfer_bytes.to_be_bytes());
-        bytes[0] = (u8::from(self.mnnvl.is_some()) << 6)
+        bytes[0] = (u8::from(self.rdma_direct_gpu) << 7)
+            | (u8::from(self.mnnvl.is_some()) << 6)
             | (u8::from(self.shm.is_some()) << 5)
             | (u8::from(self.tcp_disabled) << 4)
             | u8::from(self.rdma)
@@ -110,7 +112,7 @@ impl SegmentMetadata {
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != Self::WIRE_SIZE
-            || bytes[0] & !127 != 0
+            || (bytes[0] & 128 != 0 && bytes[0] & 1 == 0)
             || (bytes[0] & 64 != 0 && bytes[0] & 12 != 8)
             || bytes[0] & 12 == 12
             || bytes[1..4].iter().any(|b| *b != 0)
@@ -132,6 +134,7 @@ impl SegmentMetadata {
             shm: (bytes[0] & 32 != 0).then(Default::default),
             boot: (bytes[0] & 12 != 0).then_some(identity.machine),
             rdma: bytes[0] & 1 != 0,
+            rdma_direct_gpu: bytes[0] & 128 != 0,
             remote_staging: bytes[0] & 2 != 0,
             nvlink: (bytes[0] & 4 != 0).then_some(identity),
         })

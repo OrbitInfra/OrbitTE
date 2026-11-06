@@ -128,7 +128,5 @@ impl Driver {
     }
 }
 
-#[cfg(feature = "rdma")]
 mod topology;
-#[cfg(feature = "rdma")]
 pub(crate) use topology::discover;

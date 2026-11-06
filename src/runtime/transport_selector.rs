@@ -137,6 +137,7 @@ pub(crate) struct SelectionResult {
     // past the end contain Unspec. Engine failover alone advances this cursor.
     ranked: [Transport; 6],
     pub(crate) initial_attempts: usize,
+    pub(crate) cancellable_only: bool,
     pub(crate) device_mask: u64,
     pub(crate) qp_pool: Option<QpRange>,
     // Policy SL/TC are diagnostic only. Native QPs take SL/TC from their pool.
@@ -154,6 +155,7 @@ impl SelectionResult {
             transport,
             ranked: [Transport::Unspec; 6],
             initial_attempts: 0,
+            cancellable_only: false,
             device_mask: u64::MAX,
             qp_pool: None,
             service_level: None,
@@ -171,6 +173,12 @@ impl SelectionResult {
             transport,
             ..self.clone()
         })
+    }
+
+    pub(crate) fn pin_cancellable(&mut self) {
+        self.ranked = [Transport::Unspec; 6];
+        self.ranked[0] = self.transport;
+        self.cancellable_only = true;
     }
 
     pub(crate) fn has_fallback(&self) -> bool {
@@ -256,6 +264,14 @@ impl SelectionContext<'_> {
 }
 
 impl TransportSelector {
+    pub(crate) fn interned_name(&self, name: &str) -> Option<PolicyName> {
+        self.policies
+            .iter()
+            .find(|p| p.rule.name == name)?
+            .result
+            .policy
+            .clone()
+    }
     pub(crate) fn compile(
         config: &TransportSelectorConfig,
         devices: Option<&[String]>,

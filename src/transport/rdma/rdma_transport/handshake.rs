@@ -105,6 +105,11 @@ impl RdmaTransport {
         }
     }
 
+    pub(crate) fn direct_gpu_ranges(&self) -> bool {
+        cfg!(feature = "cuda")
+            && self.config.cuda_memory == crate::transport::rdma::RdmaCudaMemory::Direct
+    }
+
     pub(crate) fn direct(&self, memory: &RegisteredMemory) -> bool {
         if memory.is_cuda() {
             self.config.cuda_memory == crate::transport::rdma::RdmaCudaMemory::Direct

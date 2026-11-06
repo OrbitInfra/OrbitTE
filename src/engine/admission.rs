@@ -22,6 +22,10 @@ impl TransferEngine {
         notification_bytes: usize,
     ) -> Result<Vec<OwnerAdmission>> {
         let mut owners = Vec::with_capacity(mapping.owners.len());
+        let queue = self
+            .runtime_queue
+            .as_ref()
+            .filter(|_| !requests.first().is_some_and(|r| r.require_cancellation));
         let mut inputs = Vec::new();
         let mut qos_permits = match &self.qos {
             Some(resolver) => resolver.admit(
@@ -60,7 +64,7 @@ impl TransferEngine {
                 #[cfg(any(feature = "io-uring", feature = "gds"))]
                 PreparedTarget::File { .. } => None,
             };
-            if self.runtime_queue.is_some() {
+            if queue.is_some() {
                 let (kind, rate) = match payload {
                     PreparedTarget::Memory { requests: ts, .. }
                         if requests[first].remote_staging =>
@@ -134,7 +138,7 @@ impl TransferEngine {
                 })),
             });
         }
-        if let Some(queue) = &self.runtime_queue {
+        if let Some(queue) = queue {
             for (owner, permit) in owners.iter_mut().zip(queue.admit(inputs, batch)?) {
                 if let Some(p) = owner.permits.get_mut().unwrap_or_else(|e| e.into_inner()) {
                     p.queue = Some(permit);

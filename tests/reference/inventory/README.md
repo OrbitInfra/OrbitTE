@@ -16,6 +16,10 @@ The installed S19 consumer in `tests/c-api/` checks every symbol in `c-api.tsv`
 and links the same calls against both libraries. Its LP64 fixture covers the
 transfer engine. The two device-plugin records belong to S22.
 
+The two C++ rows in `bindings.tsv` name their installed controls. A common
+C++20 declaration fixture compiles against both header trees. The remaining
+language and plugin rows retain their own steps.
+
 C declarations and semantics resolve to `include/tent/transfer_engine.h` and
 `src/transfer_engine_c.cpp`. RPC numbers, dispatcher and attachment semantics
 resolve to `include/tent/rpc/rpc.h`, `src/rpc/rpc.cpp` and

@@ -106,6 +106,21 @@ mod native {
     }
 
     #[test]
+    fn classic_scatter_never_replays_a_rejected_rdma_owner_on_tcp() -> Result<()> {
+        let p = Pair::new("direct:connect", 3, true, true)?;
+        let b = p.engine.submit_async(
+            TransferOp::Read,
+            &p.peer,
+            &[p.request(2, 8).requiring_post_submit_cancellation()],
+            None,
+            WAIT,
+        )?;
+        assert_eq!(b.wait(WAIT)?.state, BatchState::Failed);
+        let task = b.task_status(0)?;
+        assert_eq!((task.transport, task.failover_count), (Transport::Rdma, 0));
+        p.bytes(false)
+    }
+    #[test]
     fn submit_rejection_walks_the_pinned_policy_once_per_physical_owner() -> Result<()> {
         for (budget, queued) in [(0, false), (1, false), (3, true)] {
             let p = Pair::new("direct:connect", budget, false, queued)?;
@@ -176,6 +191,11 @@ mod native {
                 WAIT,
             )?;
             batch.reach_retry();
+            // The terminal-result extension must neither authorize nor decline this retry.
+            for task in batch.observe_tasks(None)? {
+                assert!(!task.state.is_terminal());
+                assert_eq!(task.failover_count, 0);
+            }
             match decision {
                 "scalar" => assert_eq!(batch.task_status(1)?.state, TaskState::Failed),
                 "vector" => assert!(

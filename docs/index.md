@@ -93,6 +93,7 @@ tent-parity
 
 rust-api
 c-api
+cpp-api
 :::
 
 :::{toctree}

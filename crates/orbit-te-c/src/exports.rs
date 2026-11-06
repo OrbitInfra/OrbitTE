@@ -445,3 +445,33 @@ unsafe extern "C" fn tent_get_nic_load_stats(
         })
     })
 }
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn tent_terminal_result(
+    h: Handle,
+    id: u64,
+    task: usize,
+    code: *mut c_int,
+    known: *mut c_int,
+) -> c_int {
+    call(|| {
+        if !code.is_null() {
+            put(code, UNKNOWN.0)?;
+        }
+        if !known.is_null() {
+            put(known, 0)?;
+        }
+        checked(code, 1)?;
+        checked(known, 1)?;
+        if code == known {
+            return Err(INVALID);
+        }
+        engine::with(h, |e| {
+            let batch = e.batch(id)?;
+            let tasks = lock(&batch)?.observe_tasks((task != usize::MAX).then_some(task))?;
+            let (value, certainty) = batch::terminal(&tasks)?;
+            put(code, value)?;
+            put(known, certainty)
+        })
+    })
+}

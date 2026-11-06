@@ -19,7 +19,6 @@ pub(crate) mod ipc;
 pub mod local_copy;
 mod pinned;
 mod probe;
-#[cfg(feature = "rdma")]
 pub(crate) use probe::discover as discover_topology;
 #[cfg(feature = "rdma")]
 mod rdma;

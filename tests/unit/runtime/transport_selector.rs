@@ -61,10 +61,12 @@ fn context(remote: &RemoteRegion) -> SelectionContext<'_> {
         remote,
         local_segment: SegmentMetadata {
             rdma: true,
+            rdma_direct_gpu: false,
             ..Default::default()
         },
         remote_segment: SegmentMetadata {
             rdma: true,
+            rdma_direct_gpu: false,
             ..Default::default()
         },
         transfer_size: 16,
@@ -600,6 +602,7 @@ fn boot_identity_filters_rules_without_nvlink_and_never_uses_peer_ip() -> Result
         let meta = SegmentMetadata {
             boot: peer,
             rdma: true,
+            rdma_direct_gpu: false,
             ..Default::default()
         };
         let mut bytes = [0; SegmentMetadata::WIRE_SIZE];

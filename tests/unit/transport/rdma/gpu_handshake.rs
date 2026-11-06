@@ -126,6 +126,7 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
         let peer = RemoteSegment {
             metadata: crate::segment::SegmentMetadata {
                 rdma: true,
+                rdma_direct_gpu: false,
                 ..Default::default()
             },
             endpoint: listener.local_addr().unwrap(),

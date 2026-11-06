@@ -21,6 +21,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
+        "cpp-abi": (["rdma", "cuda"], "orbitte-cpp-hardware", "libtent-cpp", "tests/hardware/cpp_abi.cpp"),
         "c-abi": (["rdma", "cuda"], "orbitte-c-hardware", "libtent", "tests/hardware/c_abi.c"),
         "local-copy": (["cuda"], "orbitte-local-copy", "orbitte-installed-local-copy", "tests/hardware/local_copy.rs"),
         "peer-gpu-source": (["cuda"], "orbitte-peer-gpu-source", "orbitte-peer-gpu-source", "tests/hardware/peer_gpu_source.rs"),
@@ -84,7 +85,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             raise ValueError('expected one package root')
         library = packages[0]
         fixture = library / fixture_relative
-        if consumer_kind == 'c-abi':
+        if consumer_kind in ('c-abi', 'cpp-abi'):
+            cpp = consumer_kind == 'cpp-abi'
             patch = 'patch.crates-io.orbit-te.path=' + json.dumps(str(root))
             run('ffi-package', [*package, '-p', 'orbit-te-c', '--config', patch])
             ffi_archive, = (output / 'target/package').glob('orbit-te-c-*.crate')
@@ -94,12 +96,12 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             prefix = output / 'installed'
             run('install-c', ['python3', 'scripts/install-c-api.py', '--prefix', str(prefix),
                               '--toolchain', toolchain, '--features', ','.join(features),
-                              '--manifest-path', str(ffi / 'Cargo.toml'), '--engine-source', str(library)])
+                              '--manifest-path', str(ffi / 'Cargo.toml'), '--engine-source', str(library), *(['--cpp'] if cpp else [])])
             exe = prefix / 'bin' / binary_name
             exe.parent.mkdir()
-            run('build-c', [environment.get('CC', 'cc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
+            run('build-c', [*( [environment.get('CXX', 'c++'), '-std=c++20'] if cpp else [environment.get('CC', 'cc'), '-std=c11']), '-Wall', '-Wextra', '-Werror',
                             '-I' + str(prefix / 'include'), str(fixture), '-L' + str(prefix / 'lib'),
-                            '-Wl,-rpath,$ORIGIN/../lib', '-ltent', '-o', str(exe)])
+                            '-Wl,-rpath,$ORIGIN/../lib', *(['-ltent_cpp', '-pthread'] if cpp else []), '-ltent', '-o', str(exe)])
             manifest.update(status='built', package_sha256=digest(archive),
                             ffi_package_sha256=digest(ffi_archive), binary_sha256=digest(exe),
                             fixture_sha256=digest(fixture))
@@ -242,6 +244,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

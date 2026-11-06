@@ -109,7 +109,6 @@ pub(super) struct Driver {
     pub(super) _library: Option<Library>,
     pub init: unsafe extern "C" fn(c_uint) -> Status,
     pub device_get: unsafe extern "C" fn(*mut c_int, c_int) -> Status,
-    #[cfg(feature = "rdma")]
     pub device_count: unsafe extern "C" fn(*mut c_int) -> Status,
     #[cfg(feature = "rdma")]
     pub device_attribute:
@@ -255,7 +254,6 @@ impl Driver {
             vmm,
             init: symbol!(&library, cuInit),
             device_get: symbol!(&library, cuDeviceGet),
-            #[cfg(feature = "rdma")]
             device_count: symbol!(&library, cuDeviceGetCount),
             #[cfg(feature = "rdma")]
             device_attribute: symbol!(&library, cuDeviceGetAttribute),

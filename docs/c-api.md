@@ -5,6 +5,8 @@ OrbitTE provides the 33 C functions in Mooncake v0.3.14's
 `libtent.a`. Linux LP64 clients can use either library. The CPU/TCP
 qualification uses separate source and requester processes on loopback.
 
+For the native TENT C++ and classic TE source interfaces, see the [C++ API](cpp-api.md).
+
 ## Install and link
 
 ```bash
@@ -126,6 +128,19 @@ out-of-band expected epoch. The Rust API accepts a source-issued epoch.
   records with a zero handle and terminated name/message strings.
   `tent_free_notifs` releases and resets the pointer and count, so a second free
   is safe. Free a previous list before reusing its output struct.
+
+### Observing terminal evidence
+
+The OrbitInfra fork and OrbitTE add `tent_terminal_result(engine, batch, task,
+&code, &known)` outside frozen v0.3.14. Pass `TENT_ALL_TASKS` for the whole
+batch. The query observes cached task outcomes. It neither advances progress
+nor certifies physical drain or permission to replay. A pending owner returns
+`-2`. On a query error the outputs default to 135 and zero. A terminal query
+returns zero and writes a positive native code (zero on success) and an effect
+certainty bit. Cancellation, timeout and missing evidence yield 135 and zero.
+Aliases observe their physical owner. Batch certainty requires every task to
+be terminal and certain. Code 135 takes precedence over the first other error.
+A successful sibling may already have changed its destination.
 
 ### Compatibility with native error codes
 
