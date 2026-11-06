@@ -68,6 +68,7 @@ pub(crate) fn run_case(
     listener.set_nonblocking(true).unwrap();
     let epoch = SourceEpoch([0x55; 16]);
     let mut peer = RemoteSegment {
+        identity: None,
         metadata: crate::segment::SegmentMetadata {
             nvlink: Some(crate::segment::ProcessIdentity {
                 process: crate::SourceEpoch([0x77; 16]),
@@ -90,6 +91,7 @@ pub(crate) fn run_case(
             permission: Permission::RemoteReadWrite,
         }],
     };
+    engine.bind_test_peer(&mut peer).unwrap();
     if case == "region" {
         peer.regions[0].length = 64;
         peer.regions.push(RemoteRegion {

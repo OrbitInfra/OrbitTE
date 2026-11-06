@@ -140,6 +140,15 @@ jobs:
             RUST_TEST_THREADS=$(nproc) "$binary" "${filters[@]}" > "$RUNNER_TEMP/r1b.log" || { cat "$RUNNER_TEMP/r1b.log"; exit 1; }
             grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/r1b.log"
           done
+      - name: Repeat peer retirement owner controls 50 times
+        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          bash .github/scripts/repeat-peer-retirement.sh "$binary" "$RUNNER_TEMP/peer-retirement"
+      - name: Build the packaged peer retirement gate without running hardware
+        if: matrix.features == 'rdma,cuda'
+        run: python3 tests/hardware/build_installed.py --consumer peer-retirement --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/peer-retirement-installed"
       - name: Repeat storage and CUDA release controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |

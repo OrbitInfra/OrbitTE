@@ -53,6 +53,7 @@ fn partial_pin(operation: TransferOp, stop: bool) {
         }),
     );
     peer.endpoint = gate.endpoint;
+    requester.bind_test_peer(&mut peer).unwrap();
     let mut batch = requester
         .submit_async(
             operation,
@@ -187,6 +188,7 @@ fn pin_error_and_invalid_negotiation_never_wait_for_a_success_tail_or_start_cros
             .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         peer.endpoint = listener.local_addr().unwrap();
+        requester.bind_test_peer(&mut peer).unwrap();
         let mut batch = requester
             .submit_async(
                 TransferOp::Write,
@@ -313,6 +315,7 @@ fn native_socket_stop_drains_accepted_cross_and_preserves_cleanup_uncertainty() 
                 ),
             );
             peer.endpoint = gate.endpoint;
+            requester.bind_test_peer(&mut peer).unwrap();
             let mut batch = requester
                 .submit_async(
                     TransferOp::Read,

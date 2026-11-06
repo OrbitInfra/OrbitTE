@@ -339,6 +339,7 @@ fn hook_self_delivers_while_the_remote_peer_withholds_its_receipt() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut remote = own.clone();
     remote.endpoint = listener.local_addr().unwrap();
+    engine.bind_test_peer(&mut remote).unwrap();
     let mut hook = engine
         .notification_routes
         .hook(engine.local_target(), &[remote, own], 1)

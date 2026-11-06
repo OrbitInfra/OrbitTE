@@ -754,6 +754,7 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
                 .unwrap();
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             peer.endpoint = listener.local_addr().unwrap();
+            requester.bind_test_peer(&mut peer).unwrap();
             let target = source.endpoint();
             let relay = std::thread::spawn(move || {
                 let (mut client, _) = listener.accept().unwrap();

@@ -129,6 +129,7 @@ fn local_failure_joins_partial_tcp_or_control_io_before_peer_release() {
             .unwrap();
         let gate = SocketGate::new(source.endpoint(), operation, payload);
         peer.endpoint = gate.endpoint;
+        requester.bind_test_peer(&mut peer).unwrap();
         let (entered, waiting) = mpsc::sync_channel(0);
         let (resume, blocked) = mpsc::sync_channel(0);
         if operation == TransferOp::Read {

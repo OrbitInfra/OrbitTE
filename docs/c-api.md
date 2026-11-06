@@ -103,8 +103,12 @@ metadata lookup pins the responding source's epoch, and every descriptor
 refresh and payload request checks that identity. An epoch mismatch requires
 explicit close and reopen. The 33-function API has no argument for an
 out-of-band expected epoch. The Rust API accepts a source-issued epoch.
-Closing a memory segment currently removes its handle only; it is not an
-admission fence or drain receipt for the peer's native owners.
+Closing a memory segment removes its handle only; it is not an admission
+fence or drain receipt. This matches frozen TENT's `closeSegment` and permits
+reopening the same live source. It deliberately does not call Rust's stronger
+`close_segment(endpoint, epoch, timeout)`, which permanently retires that identity.
+Installed C/C++ controls check same-epoch close and reopen. `Error::PeerClosed`,
+if surfaced through an extended Rust consumer, maps to invalid entry (`-5`).
 
 ## Ownership and results
 

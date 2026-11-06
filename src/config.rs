@@ -154,6 +154,9 @@ pub struct EngineConfig {
     pub max_registered_bytes: usize,
     /// Open or draining local file segments. Zero disables file segment opens.
     pub max_file_segments: usize,
+    /// Live endpoint/epoch identities, including referenced retirement fences
+    /// and failed native cleanup. Unreferenced safe entries are reclaimed; at most 4096.
+    pub max_peer_segments: usize,
     /// Maximum descriptors in one transfer or host-registration batch.
     pub max_batch_requests: usize,
     pub max_allocated_batches: usize,
@@ -259,6 +262,7 @@ impl EngineConfig {
             max_registered_regions: 1024,
             max_registered_bytes: 1 << 30,
             max_file_segments: 1024,
+            max_peer_segments: 1024,
             max_batch_requests: 1024,
             max_allocated_batches: 32,
             max_allocated_requests: 32 * 1024,
@@ -409,6 +413,9 @@ impl EngineConfig {
             return Err(Error::InvalidConfig(
                 "registered regions must be in 1..=4096",
             ));
+        }
+        if !(1..=4096).contains(&self.max_peer_segments) {
+            return Err(Error::InvalidConfig("peer segments must be in 1..=4096"));
         }
         if self.max_file_segments > 4096 {
             return Err(Error::InvalidConfig("at most 4096 open file segments"));

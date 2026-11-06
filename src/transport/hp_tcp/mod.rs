@@ -57,6 +57,9 @@ impl HpTcpTransport {
         self.workers.ready()?;
         self.budget.reserve(length)
     }
+    pub(crate) fn close_peer(&self, peer: crate::runtime::segment_manager::PeerKey) -> Result<()> {
+        self.client.close_peer(peer)
+    }
     pub(crate) fn submit(
         &self,
         op: TransferOp,
@@ -80,7 +83,7 @@ impl HpTcpTransport {
         };
         self.client.submit(
             &self.workers,
-            peer.epoch,
+            peer.into(),
             end,
             frame,
             &r.local,

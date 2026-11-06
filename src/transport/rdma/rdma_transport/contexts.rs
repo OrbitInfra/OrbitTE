@@ -319,6 +319,40 @@ impl RdmaTransport {
         Ok(false)
     }
 
+    pub(crate) fn close_peer(
+        &self,
+        peer: crate::runtime::segment_manager::PeerKey,
+        deadline: Instant,
+    ) -> Result<()> {
+        let endpoints: Vec<_> = {
+            let contexts = self
+                .context_set
+                .lock()
+                .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
+            contexts
+                .slots
+                .iter()
+                .flat_map(|s| s.endpoints.peer(peer))
+                .collect()
+        };
+        let mut failure = None;
+        for endpoint in endpoints {
+            if let Err(e) = endpoint.close(deadline) {
+                failure.get_or_insert(e);
+            }
+        }
+        let mut contexts = self
+            .context_set
+            .lock()
+            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
+        for slot in &mut contexts.slots {
+            if let Err(e) = slot.endpoints.remove_peer(peer) {
+                failure.get_or_insert(e);
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
     pub(crate) fn close(&self, deadline: Instant) -> Result<()> {
         self.workers.monitor.unwatch_contexts();
         let (owners, failure) = {

@@ -638,6 +638,7 @@ fn clean_shm_rejection_falls_through_but_a_lost_tcp_write_ack_never_replays() ->
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let mut fault = peer.clone();
     fault.endpoint = listener.local_addr()?;
+    dst.bind_test_peer(&mut fault)?;
     let epoch = peer.epoch;
     let target = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
@@ -900,3 +901,5 @@ fn shm_counts_bytes_on_its_own_transport_label() -> Result<()> {
     assert_eq!(bytes(&remote), [0, 3, 3, 3, 3, 3, 3, 3, 3, 0]);
     Ok(())
 }
+
+mod peer_retirement;

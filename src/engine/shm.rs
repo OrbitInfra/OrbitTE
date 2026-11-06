@@ -65,6 +65,7 @@ impl TransferEngine {
             .as_ref()
             .ok_or(Error::Unavailable("SHM is disabled"))?
             .prepare(
+                peer.into(),
                 peer.metadata.shm.as_deref().ok_or(Error::RegionNotFound)?,
                 &r.remote,
                 op,

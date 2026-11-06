@@ -513,6 +513,7 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
             .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         peer.endpoint = listener.local_addr().unwrap();
+        requester.bind_test_peer(&mut peer).unwrap();
         let source_address = source.endpoint();
         let proxy = thread::spawn(move || {
             let mut client = ControlChannel {
@@ -819,6 +820,7 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
             .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         peer.endpoint = listener.local_addr().unwrap();
+        requester.bind_test_peer(&mut peer).unwrap();
         let target = source.endpoint();
         let epoch = source.source_epoch();
         let proxy = thread::spawn(move || {

@@ -45,7 +45,14 @@ impl Export {
         Ok(())
     }
 }
-type Key = (Name, u64, u64, u64, bool);
+type Key = (
+    crate::runtime::segment_manager::PeerKey,
+    Name,
+    u64,
+    u64,
+    u64,
+    bool,
+);
 #[derive(Default)]
 struct Exports {
     closed: bool,
@@ -248,6 +255,7 @@ impl ShmTransport {
 
     pub(crate) fn prepare(
         &self,
+        peer: crate::runtime::segment_manager::PeerKey,
         manifest: &Manifest,
         region: &RemoteRegion,
         op: TransferOp,
@@ -260,7 +268,7 @@ impl ShmTransport {
             return Err(Error::PermissionDenied);
         }
         let write = op == TransferOp::Write;
-        let key = (d.name, d.dev, d.ino, d.size, write);
+        let key = (peer, d.name, d.dev, d.ino, d.size, write);
         let mut imports = self
             .imports
             .lock()
@@ -320,6 +328,48 @@ impl ShmTransport {
             .retire()
             .inspect_err(|e| imports.fault = Some(e.for_report()))?;
         Ok(true)
+    }
+    pub(crate) fn close_peer(&self, peer: crate::runtime::segment_manager::PeerKey) -> Result<()> {
+        let mut imports = self.imports.lock().unwrap_or_else(|p| p.into_inner());
+        let keys: Vec<_> = imports
+            .entries
+            .keys()
+            .filter(|k| k.0 == peer)
+            .copied()
+            .collect();
+        let mut failure = None;
+        for key in keys {
+            if imports
+                .entries
+                .get(&key)
+                .is_some_and(|m| Arc::strong_count(m) != 1)
+            {
+                failure.get_or_insert(Error::Unquiesced {
+                    operation: "SHM peer mapping borrowed",
+                    code: libc::EBUSY,
+                });
+                continue;
+            }
+            if let Some(mapping) = imports.entries.remove(&key) {
+                match Arc::try_unwrap(mapping) {
+                    Ok(owner) => {
+                        if let Err(e) = owner.retire() {
+                            failure.get_or_insert(e);
+                        }
+                    }
+                    Err(owner) => {
+                        imports.entries.insert(key, owner);
+                        failure.get_or_insert(Error::Unquiesced {
+                            operation: "SHM peer mapping borrowed",
+                            code: libc::EBUSY,
+                        });
+                    }
+                }
+            }
+        }
+        // A failed munmap retains its fd/mapping/budget in Mapping. Keep the
+        // failure with the retired peer, without fencing independent imports.
+        failure.map_or(Ok(()), Err)
     }
     pub(crate) fn close_imports(&self, deadline: Instant) -> Result<()> {
         loop {

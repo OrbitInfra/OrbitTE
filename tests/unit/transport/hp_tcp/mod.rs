@@ -429,3 +429,5 @@ impl HpTcpTransport {
         }
     }
 }
+
+mod peer_retirement;

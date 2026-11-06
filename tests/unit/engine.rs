@@ -270,6 +270,7 @@ pub(crate) fn rdma_fixture_with_config(
         #[cfg(feature = "metrics")]
         metrics: None,
         notification_routes: NotificationRoutes::new(&config),
+        peers: SegmentManager::new(config.max_peer_segments),
         progress_worker,
         files: FileSegments::default(),
         #[cfg(feature = "io-uring")]
@@ -1232,6 +1233,7 @@ pub(crate) fn staging_fixture(
         #[cfg(feature = "metrics")]
         metrics: None,
         notification_routes: NotificationRoutes::new(&config),
+        peers: SegmentManager::new(config.max_peer_segments),
         progress_worker,
         files: FileSegments::default(),
         #[cfg(feature = "io-uring")]

@@ -208,13 +208,13 @@ impl NotificationRoutes {
         peers: &[RemoteSegment],
         bytes: usize,
     ) -> Result<NotificationHook> {
-        self.hook_targets(local, peers.iter().map(Target::from), bytes)
+        self.hook_targets(local, peers.iter(), bytes)
     }
 
-    pub(crate) fn hook_targets(
+    pub(crate) fn hook_targets<'a>(
         &self,
         local: Target,
-        peers: impl ExactSizeIterator<Item = Target>,
+        peers: impl ExactSizeIterator<Item = &'a RemoteSegment>,
         bytes: usize,
     ) -> Result<NotificationHook> {
         let count = peers.len();
@@ -232,7 +232,19 @@ impl NotificationRoutes {
         targets
             .try_reserve_exact(peers.len())
             .map_err(|_| Error::ResourceExhausted)?;
-        targets.extend(peers);
+        let mut identities = Vec::new();
+        identities
+            .try_reserve_exact(count)
+            .map_err(|_| Error::ResourceExhausted)?;
+        for peer in peers {
+            let handle = peer.identity.clone().ok_or(Error::InvalidConfig(
+                "open_segment before attaching a notification",
+            ))?;
+            identities.push((crate::runtime::segment_manager::PeerKey::from(peer), handle));
+            targets.push(Target::from(peer));
+        }
+        identities.sort_unstable_by_key(|(key, _)| (key.endpoint, key.epoch.0));
+        identities.dedup_by_key(|(key, _)| *key);
         targets.sort_unstable_by_key(|t| (*t != local, t.endpoint, t.epoch.0));
         targets.dedup();
         // Charge the allocated slots even if duplicate destinations collapse.
@@ -240,7 +252,9 @@ impl NotificationRoutes {
         usage.1 += bytes;
         Ok(NotificationHook {
             targets,
+            identities,
             permanent: None,
+            peers: Vec::new(),
             charge: self.outbox.clone(),
             count,
             bytes,
@@ -250,12 +264,26 @@ impl NotificationRoutes {
 
 pub(crate) struct NotificationHook {
     targets: Vec<Target>,
+    identities: Vec<(
+        crate::runtime::segment_manager::PeerKey,
+        crate::runtime::segment_manager::PeerHandle,
+    )>,
+    peers: Vec<Arc<crate::runtime::segment_manager::PeerPermit>>,
     permanent: Option<Arc<NotificationStatus>>,
     charge: Arc<Mutex<(usize, usize)>>,
     count: usize,
     bytes: usize,
 }
 impl NotificationHook {
+    pub(crate) fn admit(&mut self, engine: &TransferEngine) -> Result<()> {
+        self.peers
+            .try_reserve_exact(self.identities.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        for (key, handle) in &self.identities {
+            self.peers.push(engine.admit_peer_handle(handle, *key)?);
+        }
+        Ok(())
+    }
     pub(crate) fn pending(&self) -> bool {
         !self.targets.is_empty()
     }

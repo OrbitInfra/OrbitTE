@@ -18,6 +18,7 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let epoch = SourceEpoch([7; 16]);
         let peer = RemoteSegment {
+            identity: None,
             metadata: Default::default(),
             endpoint: listener.local_addr().unwrap(),
             epoch,
@@ -135,6 +136,7 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let epoch = SourceEpoch([8; 16]);
     let peer = RemoteSegment {
+        identity: None,
         metadata: Default::default(),
         endpoint: listener.local_addr().unwrap(),
         epoch,

@@ -163,7 +163,10 @@ fn periodic_fanout_rotates_lanes_independently_per_peer() {
     let mut conf = cfg();
     conf.hp_tcp.connections_per_peer = 2;
     let (_a, dst, ra, local, mut pa) = setup(conf.clone(), 8);
-    let (_b, _dummy, rb, _unused, mut pb) = setup(conf, 8);
+    let (b, _dummy, rb, _unused, _) = setup(conf, 8);
+    let mut pb = dst
+        .open_segment(b.endpoint(), b.source_epoch(), WAIT)
+        .unwrap();
     let mut handlers = Vec::new();
     for p in [&mut pa, &mut pb] {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();

@@ -59,6 +59,7 @@ impl From<&Error> for Code {
             Error::TentConfig { .. } => INVALID,
             Error::SourceClosed
             | Error::RequesterClosed
+            | Error::PeerClosed
             | Error::Cancelled
             | Error::DeadlineInfeasible => Code(5),
             _ => INTERNAL,

@@ -403,6 +403,9 @@ fn transport_selector_public_sync_async_and_atomic_preflight() {
     batch.free().unwrap();
     // Unconfigured explicit callers keep their existing route, while Unspec also works.
     let direct = TransferEngine::new(EngineConfig::default()).unwrap();
+    let peer = direct
+        .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+        .unwrap();
     let target = direct
         .register_memory(vec![0; 4].into_boxed_slice(), Permission::LocalOnly)
         .unwrap();
