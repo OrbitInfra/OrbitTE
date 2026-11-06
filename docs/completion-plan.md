@@ -47,7 +47,7 @@ artifacts and hardware profiles.
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
-| P9 | C/C++/Python and operational compatibility | P0/P2/P6 | C ABI, C++ source adapters and configuration implemented. Python remains open |
+| P9 | C/C++/Python and operational compatibility | P0/P2/P6 | C ABI, C++ source adapters, Python wheels and configuration implemented |
 | P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Planned |
 
@@ -99,7 +99,8 @@ The P2P-only discovery boundary precedes S21. External etcd/Redis/HTTP stores,
 cluster membership and KV indexes belong to the consumer; S18 is out of scope
 by design. Per-peer admission fencing, drain and selective transport retirement
 are implemented; native cleanup is shim-tested and awaits the installed gate.
-S21–S26 retain their order.
+S21 implements the [Python surface](python.md), installed-wheel byte and lifetime
+controls, and CPython 3.10–3.14 packaging. S22–S26 retain their order.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -396,8 +397,10 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
 - [x] F21 native C++ and TENT-backed classic TE source adapters. The installed
   clients exercise both binding rows, including progress, sync/wait, scatter
   callbacks, named policies, deadlines and intent. Native hardware profiles remain queued.
-- [ ] Python classes, properties, overloads, context managers, error
-  translation, GIL release and buffer lifetime.
+- [x] F21 Python classes, properties, overloads, enums, defaults and context
+  managers; typed errors, GIL release and exporter lifetime through physical drain.
+  Installed-wheel controls map all three S16 Python binding rows and 128 detailed
+  surface rows. Native profiles remain unqualified.
 - [x] F06 P2P-only configuration boundary; S18 external stores and cluster discovery are out of scope by design.
 - [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. Identity charges follow live handles/operations; safe unreferenced entries reclaim, while uncertain cleanup remains charged. C/C++ segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
 - [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
@@ -458,8 +461,9 @@ Beta evidence uses the existing [source and mixed-peer checks](qualification.md#
 [C++ adapters](qualification.md#c-source-adapters),
 [HP-TCP](qualification.md#hp-tcp-rail-verification),
 [SHM](qualification.md#shared-memory-and-cxl-verification) and
-[io_uring](qualification.md#local-file-segments) profiles. S21 and S23 must add
-their Python and directional TENT TCP evidence before beta. A source implementation
+[io_uring](qualification.md#local-file-segments) and
+[Python wheels](qualification.md#python-wheels) profiles. S23 must add
+directional TENT TCP evidence before beta. A source implementation
 or shim does not satisfy an installed hardware gate.
 
 The [verification queue](qualification.md#verification-queue) owns the commands
@@ -513,7 +517,7 @@ lives under `/root/orbitte-artifacts/` and is valid only for those artifacts.
 | `src/runtime/` | Control plane, transport selection, admission queue, QoS, receiver credits and ProxyManager |
 | `src/transport/tcp/`, `src/transport/rdma/`, `src/transport/nvlink/` | Payload transports and their native resource owners |
 | `src/cuda/`, `src/platform/` | NVIDIA allocation, streams, IPC and host topology |
-| `crates/orbite-c/`, `include/` | Transfer-engine C library and installed header, plus the diagnostics header. C++ and Python packaging remain open |
+| `crates/orbite-c/`, `include/` | Transfer-engine C library and installed header, plus the diagnostics header. C++ source adapters and optional Python wheel boundary |
 | `tests/` | Unit (mirroring `src/`), integration, reference, fault and installed tests |
 | `benches/` | Future reusable traces and matched-run drivers |
 | `docs/` | Contracts, recipes, support matrix and this plan |

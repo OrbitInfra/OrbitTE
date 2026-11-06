@@ -280,11 +280,12 @@ segment declarations preserve the reference's `NotImplemented` result.
 Python parity includes `OpCode`, `TransferStatusEnum`, `Permission`,
 `TransportType`, `IntentType`, `SegmentInfoType`, `Notification`, `Request`,
 `TransferStatus`, `SegmentInfoBuffer`, `SegmentInfo`, `MemoryOptions`,
-`MemoryGuard`, `BatchGuard` and `TransferEngine`. Cover the current field
-properties, constructors, overloads and method names in [the binding][python],
-not just the native transfer methods. In particular, preserve buffer/exporter
-ownership through native work, release the GIL during blocking native calls,
-and prevent guard exit/destruction from freeing submitted work prematurely.
+`MemoryGuard`, `BatchGuard` and `TransferEngine`. The [Python wheel](python.md)
+implements the properties, constructors, overloads and method names from
+[the binding][python]. `python.tsv` refines the three S16 binding rows into
+128 surface rows. Retained buffer exports, detached native calls and deferred
+guard release preserve physical lifetime. Bare foreign pointers require an
+explicit exporter owner, a stronger rule checked by a negative control.
 
 ## Wire and consumer boundaries
 

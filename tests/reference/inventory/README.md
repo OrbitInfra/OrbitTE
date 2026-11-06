@@ -18,7 +18,9 @@ transfer engine. The two device-plugin records belong to S22.
 
 The two C++ rows in `bindings.tsv` name their installed controls. A common
 C++20 declaration fixture compiles against both header trees. The remaining
-language and plugin rows retain their own steps.
+plugin rows retain their own step. The three Python rows are implemented by
+installed-wheel tests. [Python declarations](python.tsv) expand them into 128
+surface rows (132 declarations with overloads), checked against `pybind.cpp`.
 
 C declarations and semantics resolve to `include/tent/transfer_engine.h` and
 `src/transfer_engine_c.cpp`. RPC numbers, dispatcher and attachment semantics
