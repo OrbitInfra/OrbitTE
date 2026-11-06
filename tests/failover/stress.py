@@ -68,6 +68,7 @@ def main():
                     completed += 1
                     if not passed:
                         failures.append(index)
+                        print(f"Failure at iteration {index}:\n" + (args.output / f"failure-{index}.log").read_text(errors="replace"), flush=True)
                     # Finish running controls, but do not keep generating work
                     # after a failure. Its full diagnostics stay in the output.
                     if not failures:
