@@ -75,7 +75,7 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 | [MNNVL / EGM](docs/cuda-ipc.md#multi-node-nvlink-and-egm) | GPU and host-NUMA memory over an NVLink fabric | Implemented. Installed profile unqualified |
 | MPComm, libfabric | Optional network providers | Planned (P8) |
 
-TENT's C, C++ and Python APIs and wire compatibility are planned in P9.
+TENT's C/C++ adapters and [Python API](docs/python.md) are implemented; TENT wire interoperability remains planned.
 [Capabilities](docs/capabilities.md) lists the exact limits of each path.
 
 ## Quick Start

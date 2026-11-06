@@ -40,6 +40,11 @@ fn uncertain_cleanup_keeps_the_real_python_exporter_and_closed_slot() {
             assert!(witness.upgrade().is_some());
         });
         // The retained view still prevents resizing the actual Python allocation.
-        assert!(bytes.call_method1("extend", (b"x".as_slice(),)).is_err());
+        assert!(
+            bytes
+                .call_method1("extend", (b"x".as_slice(),))
+                .unwrap_err()
+                .is_instance_of::<pyo3::exceptions::PyBufferError>(py)
+        );
     });
 }

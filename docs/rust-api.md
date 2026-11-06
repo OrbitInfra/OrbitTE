@@ -264,3 +264,6 @@ while admission stays open; see
 Runnable examples: [TCP](../examples/tcp_roundtrip.rs),
 [external allocation](../examples/external_host.rs) and
 [async batches](../examples/async_batch.rs).
+
+The [Python API](python.md) uses the same Rust owners through the optional wheel
+boundary; Rust consumers do not compile or load Python.
