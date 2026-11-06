@@ -277,6 +277,9 @@ jobs:
         run: |
           repeat=1
           if [[ "$RUSTUP_TOOLCHAIN" == stable ]]; then repeat=50; fi
+          for i in $(seq 1 "$repeat"); do
+            cargo test -p orbite-c --locked --features "$ORBITE_FEATURES" synchronous_copy_excludes_concurrent_alias_publication
+          done
           python3 tests/device-plugin/run.py --prefix "$RUNNER_TEMP/orbite-c" --repeat "$repeat"
           if [[ ",$ORBITE_FEATURES," == *,cuda,* ]]; then
             python3 tests/device-plugin/cuda.py --prefix "$RUNNER_TEMP/orbite-c" --repeat "$repeat"
