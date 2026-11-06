@@ -46,6 +46,16 @@ metrics and explicit-identity precedence rules. A failed construction can
 return an opaque handle with `tent_available(engine) == 0`. Destroy it normally.
 See [loading TENT configuration](rust-api.md#loading-tent-configuration).
 
+Discovery and external metadata stores belong to the consumer. Non-P2P
+`metadata_type` and etcd/Redis/HTTP(S) server URIs fail construction before
+engine startup. `tent_available` returns zero and integer operations on the
+unavailable handle return `-6` (TENT's `InvalidMetadataType`, with the fork's
+negative-code convention). The log facade emits migration guidance to publish
+endpoint and source epoch in the consumer's registry without logging the URI.
+The classic adapter returns `ERR_METADATA`; native C++ status messages carry
+the same guidance. These APIs install no logger. See the
+[discovery boundary](rust-api.md#discovery-boundary).
+
 ## Register and transfer
 
 The source registers a live allocation with `tent_register_memory` and passes
@@ -93,6 +103,8 @@ metadata lookup pins the responding source's epoch, and every descriptor
 refresh and payload request checks that identity. An epoch mismatch requires
 explicit close and reopen. The 33-function API has no argument for an
 out-of-band expected epoch. The Rust API accepts a source-issued epoch.
+Closing a memory segment currently removes its handle only; it is not an
+admission fence or drain receipt for the peer's native owners.
 
 ## Ownership and results
 

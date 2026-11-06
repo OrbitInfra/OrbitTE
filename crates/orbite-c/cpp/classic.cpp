@@ -90,8 +90,11 @@ int TransferEngine::init(const std::string &metadata, const std::string &local, 
     if (!tent_device_filter_.empty())
         config->set("topology/rdma_whitelist", tent_device_filter_);
     auto next = std::make_shared<tent::TransferEngine>(config);
-    if (!next->available())
-        return ERR_CONTEXT;
+    if (!next->available()) {
+        size_t limit = 0;
+        const auto rc = orbite_limits_v1(next->owner_, &limit);
+        return rc ? classic(static_cast<tent::Status::Code>(-rc)) : ERR_CONTEXT;
+    }
     if (shutdown_requested_)
         detail::on_shutdown(next, next->owner_);
     impl_tent_ = std::move(next);

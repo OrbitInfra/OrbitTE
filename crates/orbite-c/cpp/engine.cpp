@@ -13,6 +13,10 @@
 namespace mooncake::tent {
 namespace {
 Status result(int rc, const char *operation) {
+    if (rc == -static_cast<int>(Status::Code::kInvalidMetadataType))
+        return Status::InvalidMetadataType(
+            "external metadata stores and cluster discovery are unsupported; publish endpoint "
+            "and source epoch in your own registry and pass the authoritative epoch to open_segment");
     return rc ? Status(static_cast<Status::Code>(-rc), operation) : Status::OK();
 }
 bool cstring(const std::string &value) { return value.find('\0') == std::string::npos; }

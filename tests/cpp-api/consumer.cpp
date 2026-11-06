@@ -50,6 +50,49 @@ static std::shared_ptr<native::Config> config(const std::string &host = "127.0.0
     c->set("metrics/enabled", false);
     return c;
 }
+static void rejected_metadata(native::TransferEngine &e) {
+    assert(!e.available());
+    native::SegmentID id = 734;
+    const auto status = e.openSegment(id, "127.0.0.1:1");
+    assert(status.IsInvalidMetadataType() && id == 734);
+    const auto message = status.ToString();
+    assert(message.find("publish endpoint") != std::string::npos &&
+           message.find("authoritative epoch") != std::string::npos &&
+           message.find("private") == std::string::npos);
+}
+static void metadata_contracts(const std::string &path, bool environment) {
+    if (environment) {
+        native::TransferEngine defaults, explicit_config(config()), file(path);
+        rejected_metadata(defaults);
+        rejected_metadata(explicit_config);
+        rejected_metadata(file);
+        for (uint32_t source : {0, 1, 2}) {
+            auto raw = orbite_create_v1(source, source == 0 ? nullptr : source == 1 ? "{}" : path.c_str());
+            assert(raw && !tent_available(raw));
+            size_t limit = 42;
+            assert(orbite_limits_v1(raw, &limit) == -6 && limit == 42);
+            tent_destroy_engine(raw);
+        }
+        classic::TransferEngine e;
+        assert(e.init(P2PHANDSHAKE, "") == ERR_METADATA);
+    } else {
+        for (const auto &scheme : {"etcd", "redis", "http", "https"}) {
+            auto c = config();
+            c->set("metadata_type", scheme);
+            native::TransferEngine typed(c);
+            rejected_metadata(typed);
+            c->set("metadata_type", "p2p");
+            c->set("metadata_servers", std::string(scheme) + "://private");
+            native::TransferEngine uri(c);
+            rejected_metadata(uri);
+            classic::TransferEngine old;
+            assert(old.init(std::string(scheme) + "://private", "") == ERR_METADATA);
+            assert(!old.getTentEngine());
+        }
+        classic::TransferEngine old;
+        assert(old.init("127.0.0.1:2379", "") == ERR_METADATA);
+    }
+}
 static std::string message() { return std::string(4200, 'm') + std::string("\0tail", 5); }
 static Bytes initial() {
     Bytes b;
@@ -475,7 +518,9 @@ static void scatter(const std::string &name, bool hp) {
 int main(int argc, char **argv) {
     assert(argc >= 2);
     std::string cmd = argv[1];
-    if (cmd == "scatter" || cmd == "no-scatter")
+    if (cmd == "metadata" || cmd == "metadata-env")
+        metadata_contracts(argv[2], cmd == "metadata-env");
+    else if (cmd == "scatter" || cmd == "no-scatter")
         scatter(argv[2], cmd == "scatter");
     else if (cmd == "signal") {
         classic::TransferEngine e;

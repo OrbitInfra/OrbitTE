@@ -322,6 +322,9 @@ impl EngineConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(settings) = &self.tent {
+            settings.validate()?;
+        }
         #[cfg(feature = "io-uring")]
         self.io_uring.slot_size()?;
         self.hp_tcp.validate(self.tcp)?;

@@ -31,6 +31,11 @@ do not turn this file into a second status diary.
 - Excluded: `UB`/URMA, Ascend, Sunrise, TPU/PJRT, XPU/SYCL, MLU, Hylink,
   MemFabric and ROCm/HIP. Their ABI constants stay recognized and return
   unavailable. Never implement them or add their SDKs.
+- Cluster discovery, membership, KV indexes and external metadata stores
+  (etcd, Redis, HTTP) belong to the consumer. OrbiTE is point-to-point and
+  keeps only the self-description handshake: segment descriptors,
+  capabilities, registration keys and source epochs. Reject non-P2P metadata
+  configuration and direct consumers to publish endpoint and epoch themselves.
 
 Read the frozen source directly when a step names it, for example:
 
@@ -61,8 +66,8 @@ Check `gh pr list` before branching from current main. The work order is in §7.
   Record the step as "Implemented; installed profile unqualified" and add the
   exact gate command to the verification queue in
   [docs/qualification.md](docs/qualification.md).
-- Paths that need no special hardware (io_uring on Linux, HP-TCP, SHM, metadata
-  stores, C ABI, Python, TENT TCP interop, libfabric `tcp` provider) must be
+- Paths that need no special hardware (io_uring on Linux, HP-TCP, SHM,
+  C ABI, Python, TENT TCP interop, libfabric `tcp` provider) must be
   tested for real in CI. Only those can be called qualified on CI evidence.
 - Never write "qualified" or "accepted" for a GPU, RDMA, GDS, MNNVL or fabric
   profile without an installed hardware run. Missing hardware means
@@ -522,20 +527,9 @@ codec compute. Keep the consumer contract in [local copies](docs/local-copy.md).
   - Immutable per-engine snapshots; never mutate process environment to
     configure engines.
 
-### S18 — Optional F06 metadata stores [CPU, CI services]
+### S18 — F06 external metadata stores
 
-Deferred until a non-OrbitKV consumer needs etcd, Redis or HTTP. OrbitKV
-builds Mooncake with `USE_ETCD=OFF`, `USE_REDIS=OFF` and `USE_HTTP=OFF` and
-uses P2P metadata, which the OrbiTE control plane already provides.
-
-- **TENT:** `runtime/metastore.cpp`, `metastore/{etcd,redis,http}.cpp`,
-  `redis_metastore_test`.
-- **Implement:**
-  - Additional etcd, Redis (username, password, DB) and HTTP stores.
-  - Publication and lookup failure handling, with a schema compatible with
-    TENT.
-- Opt-in features with light dependencies; record the client choice.
-- **Done:** CI uses etcd and Redis service containers.
+Out of scope by design: the consumer owns discovery and etcd/Redis/HTTP; OrbiTE provides P2P self-description only.
 
 ### S19 — C ABI (F21) [CPU]
 

@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 from pathlib import Path
 import os
 import re
@@ -91,6 +92,27 @@ def refuse_after_describe(listener, peer, events):
 
 
 def cases(exe, tmp, env, features):
+    for key, value in [
+        ("metadata_type", "etcd"),
+        *[
+            ("metadata_servers", scheme + "://private")
+            for scheme in ("etcd", "redis", "http", "https")
+        ],
+    ]:
+        document = json.dumps({key: value})
+        subprocess.run(
+            [exe, "metadata-field", key, value], check=True, timeout=30, env=env
+        )
+        subprocess.run(
+            [exe, "metadata-json", key, document], check=True, timeout=30, env=env
+        )
+        config = tmp / "external-metadata.json"
+        config.write_text(document)
+        for source in (document, str(config)):
+            subprocess.run(
+                [exe, "metadata-env", key, value],
+                check=True, timeout=30, env=dict(env, MC_TENT_CONF=source),
+            )
     constructor = tmp / "constructor.json"
     constructor.write_text('{"rpc_server_hostname":"127.0.0.3"}')
     file = tmp / "test.bin"
