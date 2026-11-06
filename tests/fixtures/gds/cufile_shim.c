@@ -21,7 +21,7 @@ typedef struct {
 typedef struct { void *cookie; unsigned status; size_t bytes; } event_t;
 typedef struct { unsigned count, depth; event_t events[]; } batch_t;
 static status_t result(bool ok) { return (status_t){ok ? 0 : 5035, 0}; }
-static bool setting(const char *s) { const char *v=getenv("ORBITTE_CUFILE_SHIM"); return v && !strcmp(v,s); }
+static bool setting(const char *s) { const char *v=getenv("ORBITE_CUFILE_SHIM"); return v && !strcmp(v,s); }
 
 status_t cuFileDriverOpen(void) { return result(!setting("open-error")); }
 status_t cuFileDriverGetProperties(props_t *p) {

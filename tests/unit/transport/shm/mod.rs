@@ -44,7 +44,7 @@ struct Dir(PathBuf);
 impl Dir {
     fn new() -> Self {
         let path = PathBuf::from("/dev/shm")
-            .join(format!("orbitte-test-{}", SourceEpoch::generate().unwrap()));
+            .join(format!("orbite-test-{}", SourceEpoch::generate().unwrap()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }

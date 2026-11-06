@@ -31,8 +31,8 @@ pub(super) struct CompletionFault(Command);
 impl CompletionFault {
     pub(super) fn load() -> Result<Self> {
         // SAFETY: the supervisor pins this process-local test library by hash.
-        // No OrbitTE symbol or production API is replaced by this control ABI.
-        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbitte_cq_fault".as_ptr()) };
+        // No OrbiTE symbol or production API is replaced by this control ABI.
+        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbite_cq_fault".as_ptr()) };
         if symbol.is_null() {
             return Err("missing installed CQ fault library".into());
         }

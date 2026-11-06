@@ -2,9 +2,7 @@ use crate::{
     abi::{Buffer, Options},
     boundary::*,
 };
-use orbit_te::{
-    HostMemory, MemoryBacking, Permission, RegisteredMemory, TransferEngine, Transport,
-};
+use orbite::{HostMemory, MemoryBacking, Permission, RegisteredMemory, TransferEngine, Transport};
 use std::{
     collections::BTreeMap,
     ffi::c_void,
@@ -106,7 +104,7 @@ impl Opt {
 enum WeakBacking {
     Host(Weak<HostMemory>),
     #[cfg(feature = "cuda")]
-    Cuda(Weak<orbit_te::cuda::CudaMemory>),
+    Cuda(Weak<orbite::cuda::CudaMemory>),
 }
 impl WeakBacking {
     fn new(m: &MemoryBacking) -> Self {
@@ -159,10 +157,10 @@ fn foreign(
         // SAFETY: the C registration contract pins the allocation until successful
         // unregister. The native probe checks kind, extent and current context.
         if let Some(gpu) = unsafe {
-            orbit_te::cuda::CudaMemory::from_foreign_address(p as usize as u64, n, owner.clone())
+            orbite::cuda::CudaMemory::from_foreign_address(p as usize as u64, n, owner.clone())
         }? {
             if let Location::Cuda(id) = loc {
-                if !matches!(gpu.location(0,n)?.location, orbit_te::MemoryLocation::Cuda{device,..} if device==id)
+                if !matches!(gpu.location(0,n)?.location, orbite::MemoryLocation::Cuda{device,..} if device==id)
                 {
                     return Err(INVALID);
                 }
@@ -305,9 +303,9 @@ impl Memory {
                         (MemoryBacking::Cuda(e.allocate_mnnvl(id, n)?), Kind::Fabric)
                     } else {
                         let gpu = if e.transport_installed(Transport::Nvlink) {
-                            orbit_te::cuda::CudaMemory::allocate_ipc(id, n)?
+                            orbite::cuda::CudaMemory::allocate_ipc(id, n)?
                         } else {
-                            orbit_te::cuda::CudaMemory::allocate(id, n)?
+                            orbite::cuda::CudaMemory::allocate(id, n)?
                         };
                         (MemoryBacking::Cuda(Arc::new(gpu)), Kind::Ordinary)
                     }
@@ -427,7 +425,7 @@ impl Memory {
             #[cfg(feature = "cuda")]
             (MemoryBacking::Cuda(g), Kind::Fabric) => e.free_mnnvl(g),
             (MemoryBacking::Host(h), _) => Arc::try_unwrap(h)
-                .map_err(|_| orbit_te::Error::BatchBusy)?
+                .map_err(|_| orbite::Error::BatchBusy)?
                 .release_owned(),
             #[cfg(feature = "cuda")]
             (MemoryBacking::Cuda(g), _) => g.release_owned(),
@@ -479,10 +477,10 @@ impl Memory {
             };
             match (o.location, actual) {
                 (Location::Any, _) => (),
-                (Location::Cpu(requested), orbit_te::MemoryLocation::Cpu(known))
+                (Location::Cpu(requested), orbite::MemoryLocation::Cpu(known))
                     if requested == known => {}
-                (Location::Cpu(_), orbit_te::MemoryLocation::Cpu(None)) => return Err(UNSUPPORTED),
-                (Location::Cuda(requested), orbit_te::MemoryLocation::Cuda { device, .. })
+                (Location::Cpu(_), orbite::MemoryLocation::Cpu(None)) => return Err(UNSUPPORTED),
+                (Location::Cuda(requested), orbite::MemoryLocation::Cuda { device, .. })
                     if requested == device => {}
                 _ => return Err(INVALID),
             }
@@ -512,7 +510,7 @@ impl Memory {
         }
         let registered = match e.register_memory_ranges(&ranges, o.perm, o.route, o.internal) {
             Ok(v) => v,
-            Err(err @ orbit_te::Error::Unquiesced { .. }) => {
+            Err(err @ orbite::Error::Unquiesced { .. }) => {
                 let mut all = lock(spans())?;
                 for (memory, _, _) in ranges {
                     if let Some(s) = all.get_mut(&base(&memory)) {

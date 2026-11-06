@@ -24,7 +24,7 @@ wire.segment	S18/S23	src/runtime/control_plane.rs	Get and invalidate named descr
 wire.tcp	S23	src/runtime/control_plane.rs	Native TCP READ/WRITE against checked binary attachments	LE address and length, payload and error/size contract
 wire.bootstrap	S23	src/transport/rdma	Serialize and parse RDMA peer descriptor, missing GID and error reply	exact JSON fields and failure before QP use
 wire.stage	S23	src/runtime/proxy_manager.rs	Native client calls synthetic Delegate, Pin and Unpin recipients	serialized delegated fields, address and reply attachment
-wire.excluded	S23	src/runtime/control_plane.rs	Encode and decode the dedicated UB envelope without invoking a provider	separate ID and validated version; excluded in OrbitTE
+wire.excluded	S23	src/runtime/control_plane.rs	Encode and decode the dedicated UB envelope without invoking a provider	separate ID and validated version; excluded in OrbiTE
 wire.hp	S23	src/transport/hp_tcp/protocol.rs	Re-encode READ, WRITE and ACK with the native HP-TCP codec	exact existing .bin files, network byte order and rejection of bad magic
 wire.fabric	S24	src/transport	Compile native fabric attribute codec alone; later run real libfabric tcp provider	provider, NIC address bytes, offset mode, chunk NIC/key alignment
 wire.mpcomm	S25	src/transport	Run native peer address codec without an MPComm device	encoded endpoint, address and port or malformed prefix error

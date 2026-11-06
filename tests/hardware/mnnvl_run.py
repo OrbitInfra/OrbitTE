@@ -90,7 +90,7 @@ def confirm(before, after, pairs):
 def run(a):
     art = a.artifact.resolve(strict=True)
     package = json.loads((art / 'manifest.json').read_text())
-    binary = art / 'installed/bin/orbitte-mnnvl'
+    binary = art / 'installed/bin/orbite-mnnvl'
     if (package['status'] != 'passed' or package['dirty'] or package['consumer'] != 'mnnvl'
             or digest(binary) != package['binary_sha256']
             or digest(art / Path(package['archive']).name) != package['archive_sha256']

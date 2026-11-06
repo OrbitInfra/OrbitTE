@@ -2,14 +2,14 @@
 
 Build the current source on Linux with Rust 1.85 or later. The default CPU/TCP
 path needs no CUDA toolkit, RNIC or native provider library. The published
-`orbit-te` alpha is the original package reservation; use this checkout for
+`orbit-te` alpha is the historical package reservation; build `orbite` from this checkout for
 the examples below.
 
 ## Get the source
 
 ```sh
-git clone https://github.com/OrbitInfra/OrbitTE.git
-cd OrbitTE
+git clone https://github.com/OrbitInfra/OrbiTE.git
+cd OrbiTE
 cargo run --locked --example tcp_roundtrip
 ```
 
@@ -17,7 +17,7 @@ The example starts two engines, exports a source allocation, discovers its
 descriptor using the source owner's epoch, and reads its bytes over loopback.
 
 ```text
-18 bytes: hello from OrbitTE
+17 bytes: hello from OrbiTE
 ```
 
 ## Register, discover and transfer
@@ -27,7 +27,7 @@ The central transfer uses registered allocation addresses:
 
 ```rust
 let request = TransferRequest::new(
-    orbit_te::Transport::Tcp,
+    orbite::Transport::Tcp,
     destination.base_address(),
     remote.base_address(),
     exported.len(),

@@ -1,4 +1,4 @@
-"""Package OrbitTE and install an independent public-API consumer outside the checkout."""
+"""Package OrbiTE and install an independent public-API consumer outside the checkout."""
 import argparse
 import hashlib
 import json
@@ -21,21 +21,21 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
-        "cpp-abi": (["rdma", "cuda"], "orbitte-cpp-hardware", "libtent-cpp", "tests/hardware/cpp_abi.cpp"),
-        "c-abi": (["rdma", "cuda"], "orbitte-c-hardware", "libtent", "tests/hardware/c_abi.c"),
-        "local-copy": (["cuda"], "orbitte-local-copy", "orbitte-installed-local-copy", "tests/hardware/local_copy.rs"),
-        "peer-gpu-source": (["cuda"], "orbitte-peer-gpu-source", "orbitte-peer-gpu-source", "tests/hardware/peer_gpu_source.rs"),
-        "peer-gpu-requester": ([], "orbitte-peer-gpu-requester", "orbitte-peer-gpu-requester", "tests/hardware/peer_gpu_requester.rs"),
-        "shm": ([], "orbitte-shm", "orbitte-installed-shm", "tests/hardware/shm.rs"),
-        "hp-tcp": ([], "orbitte-hp-tcp", "orbitte-installed-hp-tcp", "tests/hardware/hp_tcp.rs"),
-        "host": (["rdma"], "orbitte-rdma-host", "orbitte-installed-host-v4", "tests/hardware/rdma_host.rs"),
-        "gpu": (["rdma", "cuda"], "orbitte-hardware-peer", "orbitte-hardware-peer-v1", "examples/hardware_peer.rs"),
-        "mnnvl": (["cuda"], "orbitte-mnnvl", "orbitte-installed-mnnvl", "tests/hardware/mnnvl.rs"),
-        "nvlink": (["cuda"], "orbitte-nvlink", "orbitte-installed-nvlink-v1", "tests/hardware/nvlink.rs"),
-        "gds": (["gds"], "orbitte-gds", "orbitte-installed-gds-v1", "tests/hardware/gds.rs"),
-        "mixed-gpu": (["rdma", "cuda"], "orbitte-mixed-gpu", "orbitte-installed-mixed-gpu", "tests/hardware/mixed_gpu.rs"),
-        "staging-control": (["rdma", "cuda"], "orbitte-staging-control", "orbitte-installed-staging-control", "tests/hardware/staging_control.rs"),
-        "storage-cuda": (["cuda", "io-uring"], "orbitte-storage-cuda", "orbitte-installed-storage-cuda-v1", "tests/hardware/storage_cuda.rs"),
+        "cpp-abi": (["rdma", "cuda"], "orbite-cpp-hardware", "libtent-cpp", "tests/hardware/cpp_abi.cpp"),
+        "c-abi": (["rdma", "cuda"], "orbite-c-hardware", "libtent", "tests/hardware/c_abi.c"),
+        "local-copy": (["cuda"], "orbite-local-copy", "orbite-installed-local-copy", "tests/hardware/local_copy.rs"),
+        "peer-gpu-source": (["cuda"], "orbite-peer-gpu-source", "orbite-peer-gpu-source", "tests/hardware/peer_gpu_source.rs"),
+        "peer-gpu-requester": ([], "orbite-peer-gpu-requester", "orbite-peer-gpu-requester", "tests/hardware/peer_gpu_requester.rs"),
+        "shm": ([], "orbite-shm", "orbite-installed-shm", "tests/hardware/shm.rs"),
+        "hp-tcp": ([], "orbite-hp-tcp", "orbite-installed-hp-tcp", "tests/hardware/hp_tcp.rs"),
+        "host": (["rdma"], "orbite-rdma-host", "orbite-installed-host-v4", "tests/hardware/rdma_host.rs"),
+        "gpu": (["rdma", "cuda"], "orbite-hardware-peer", "orbite-hardware-peer-v1", "examples/hardware_peer.rs"),
+        "mnnvl": (["cuda"], "orbite-mnnvl", "orbite-installed-mnnvl", "tests/hardware/mnnvl.rs"),
+        "nvlink": (["cuda"], "orbite-nvlink", "orbite-installed-nvlink-v1", "tests/hardware/nvlink.rs"),
+        "gds": (["gds"], "orbite-gds", "orbite-installed-gds-v1", "tests/hardware/gds.rs"),
+        "mixed-gpu": (["rdma", "cuda"], "orbite-mixed-gpu", "orbite-installed-mixed-gpu", "tests/hardware/mixed_gpu.rs"),
+        "staging-control": (["rdma", "cuda"], "orbite-staging-control", "orbite-installed-staging-control", "tests/hardware/staging_control.rs"),
+        "storage-cuda": (["cuda", "io-uring"], "orbite-storage-cuda", "orbite-installed-storage-cuda-v1", "tests/hardware/storage_cuda.rs"),
     }[consumer_kind]
     root, output = root.resolve(), output.resolve()
     if output.is_relative_to(root):
@@ -71,7 +71,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         if allow_dirty:
             package.append('--allow-dirty')
         run('package', package)
-        archives = list((output / 'target/package').glob('orbit-te-*.crate'))
+        archives = list((output / 'target/package').glob('orbite-*.crate'))
         if len(archives) != 1:
             raise ValueError('expected one packaged crate')
         archive = output / archives[0].name
@@ -87,12 +87,12 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         fixture = library / fixture_relative
         if consumer_kind in ('c-abi', 'cpp-abi'):
             cpp = consumer_kind == 'cpp-abi'
-            patch = 'patch.crates-io.orbit-te.path=' + json.dumps(str(root))
-            run('ffi-package', [*package, '-p', 'orbit-te-c', '--config', patch])
-            ffi_archive, = (output / 'target/package').glob('orbit-te-c-*.crate')
+            patch = 'patch.crates-io.orbite.path=' + json.dumps(str(root))
+            run('ffi-package', [*package, '-p', 'orbite-c', '--config', patch])
+            ffi_archive, = (output / 'target/package').glob('orbite-c-*.crate')
             with tarfile.open(ffi_archive) as bundle:
                 bundle.extractall(unpack, filter='data')
-            ffi, = unpack.glob('orbit-te-c-*')
+            ffi, = unpack.glob('orbite-c-*')
             prefix = output / 'installed'
             run('install-c', ['python3', 'scripts/install-c-api.py', '--prefix', str(prefix),
                               '--toolchain', toolchain, '--features', ','.join(features),
@@ -160,7 +160,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             compiler = shlex.split(environment.get('CC', 'cc'))
             manifest['fault_compiler'] = run('fault-compiler', [*compiler, '--version'])
             flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread']
-            fault_library = output / 'liborbitte_cq_fault.so'
+            fault_library = output / 'liborbite_cq_fault.so'
             run('fault-library', [*compiler, *flags, '-fPIC', '-shared',
                                  str(fault_sources / 'cq_fault.c'), '-ldl', '-o', str(fault_library)])
             for name in ('cq_fault', 'inflight', 'memory', 'dependency', 'accounting'):
@@ -169,10 +169,10 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
                                              '-ldl', '-o', str(control)])
                 fault_root = output / (name + '-control')
                 fault_root.mkdir()
-                environment.update(ORBITTE_RESTART_ROOT=str(fault_root), ORBITTE_RESTART_GENERATION='0')
+                environment.update(ORBITE_RESTART_ROOT=str(fault_root), ORBITE_RESTART_GENERATION='0')
                 run(name + '-control', [str(control)], cwd=output)
-            environment.pop('ORBITTE_RESTART_ROOT')
-            environment.pop('ORBITTE_RESTART_GENERATION')
+            environment.pop('ORBITE_RESTART_ROOT')
+            environment.pop('ORBITE_RESTART_GENERATION')
             manifest.update(fault_library=str(fault_library), fault_library_sha256=digest(fault_library))
         if gpu:
             source = library / 'tests/hardware/nvlink_observer.c'
@@ -192,14 +192,14 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             '[package]\nname = ' + json.dumps(binary_name) + '\nversion = "0.0.0"\n'
             'edition = "2024"\nrust-version = "1.85"\npublish = false\n'
             '[workspace]\n[dependencies]\n'
-            'orbit-te = { path = ' + json.dumps(str(library)) + ', features = ' + json.dumps(features) + ' }\n'
+            'orbite = { path = ' + json.dumps(str(library)) + ', features = ' + json.dumps(features) + ' }\n'
             + ('cudarc = { version = "0.19.0", default-features = false, features = ["std", "driver", "dynamic-loading", "cuda-13000"] }\nserde_json = "1.0.151"\n' if consumer_kind == 'local-copy' else '')
             + ('libloading = "0.8.9"\n' if consumer_kind == 'storage-cuda' else ''))
         shutil.copy2(library / 'Cargo.lock', consumer / 'Cargo.lock')
         metadata = json.loads(run('metadata', ['cargo', 'metadata', '--offline', '--format-version', '1'], cwd=consumer))
-        dependency = [p for p in metadata['packages'] if p['name'] == 'orbit-te']
+        dependency = [p for p in metadata['packages'] if p['name'] == 'orbite']
         if len(dependency) != 1 or Path(dependency[0]['manifest_path']) != library / 'Cargo.toml':
-            raise ValueError('consumer resolved an unexpected OrbitTE source')
+            raise ValueError('consumer resolved an unexpected OrbiTE source')
         resolved = next(n['features'] for n in metadata['resolve']['nodes'] if n['id'] == dependency[0]['id'])
         expected_features = {'default', *features}
         if consumer_kind == 'gds':

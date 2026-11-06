@@ -165,7 +165,7 @@ fn frame<const N: usize>(stream: &mut TcpStream) -> Result<[u8; N]> {
 
 fn header(bytes: &[u8]) -> Result<(u8, usize)> {
     if bytes[..8] != *b"ORBITTE\0" || bytes[8..10] != WIRE_VERSION.to_be_bytes() || bytes[11] != 0 {
-        return Err("relay only supports the OrbitTE development wire header".into());
+        return Err("relay only supports the OrbiTE development wire header".into());
     }
     Ok((
         bytes[10],
@@ -278,12 +278,12 @@ mod tests;
 
 #[test]
 fn relay_tracks_the_public_engines_current_wire() {
-    let source = TransferEngine::new(orbit_te::EngineConfig::default()).unwrap();
-    let requester = TransferEngine::new(orbit_te::EngineConfig::default()).unwrap();
+    let source = TransferEngine::new(orbite::EngineConfig::default()).unwrap();
+    let requester = TransferEngine::new(orbite::EngineConfig::default()).unwrap();
     let memory = source
         .register_memory(
             vec![1; 17].into_boxed_slice(),
-            orbit_te::Permission::RemoteRead,
+            orbite::Permission::RemoteRead,
         )
         .unwrap();
     let gate = GrantGate::new("127.0.0.1:0".parse().unwrap(), source.endpoint()).unwrap();

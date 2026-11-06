@@ -2,23 +2,23 @@
 //!
 //! This first implementation follows TENT's engine, segment/control-plane and
 //! transport ownership boundaries. Its versioned development protocol is
-//! OrbitTE-only; full hardware coverage and TENT wire/ABI compatibility remain open.
+//! OrbiTE-only; full hardware coverage and TENT wire/ABI compatibility remain open.
 //! See the repository's completion plan for qualification and integration gates.
 //!
 //! ```
 //! use std::time::Duration;
-//! use orbit_te::{EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest};
+//! use orbite::{EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest};
 //!
-//! # fn main() -> orbit_te::Result<()> {
+//! # fn main() -> orbite::Result<()> {
 //! let source = TransferEngine::new(EngineConfig::default())?;
 //! let exported = source.register_memory(b"orbit".to_vec().into_boxed_slice(), Permission::RemoteRead)?;
 //! let requester = TransferEngine::new(EngineConfig::default())?;
 //! let destination = requester.register_memory(vec![0; 5].into_boxed_slice(), Permission::LocalOnly)?;
 //! // Obtain this epoch from the authoritative source owner, not untrusted discovery.
 //! let peer = requester.open_segment(source.endpoint(), source.source_epoch(), Duration::from_secs(1))?;
-//! let remote = peer.regions().iter().find(|r| r.id() == exported.id()).ok_or(orbit_te::Error::RegionNotFound)?;
+//! let remote = peer.regions().iter().find(|r| r.id() == exported.id()).ok_or(orbite::Error::RegionNotFound)?;
 //! let request = TransferRequest::new(
-//!     orbit_te::Transport::Tcp,
+//!     orbite::Transport::Tcp,
 //!     destination.base_address(),
 //!     remote.base_address(),
 //!     5,
@@ -37,7 +37,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(unsupported_native_target)]
-compile_error!("OrbitTE's `cuda`, `rdma`, `io-uring` and `gds` features require a Linux target");
+compile_error!("OrbiTE's `cuda`, `rdma`, `io-uring` and `gds` features require a Linux target");
 
 pub mod diagnostics;
 

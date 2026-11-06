@@ -58,17 +58,17 @@ fn panic_sentinels_and_typed_statuses_are_independent_of_task_state() {
     assert!(guard(ptr::null_mut::<c_void>(), || panic!("control")).is_null());
     assert_eq!(guard(0u64, || panic!("control")), 0);
     void_call("control", || panic!("control"));
-    assert_eq!(Code::from(orbit_te::Error::ResourceExhausted), FULL);
+    assert_eq!(Code::from(orbite::Error::ResourceExhausted), FULL);
     assert_eq!(
-        Code::from(orbit_te::Error::Unquiesced {
+        Code::from(orbite::Error::Unquiesced {
             operation: "close",
             code: 5
         }),
         UNKNOWN
     );
-    let f = orbit_te::NotificationFailure {
-        error: orbit_te::Error::Timeout,
-        effect: orbit_te::NotificationEffect::Unknown,
+    let f = orbite::NotificationFailure {
+        error: orbite::Error::Timeout,
+        effect: orbite::NotificationEffect::Unknown,
     };
     assert_eq!(Code::from(f), UNKNOWN);
 }

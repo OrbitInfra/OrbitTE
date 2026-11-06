@@ -50,17 +50,17 @@ def restart_plan(case):
 
 def native_peer_test(profile):
     runner = profile.get('runner')
-    if runner == 'orbitte-multirail':
+    if runner == 'orbite-multirail':
         return 'transport::rdma::cq_lane::tests::hardware::multirail::multirail_peer'
-    if runner == 'orbitte-connected':
+    if runner == 'orbite-connected':
         return 'transport::rdma::cq_lane::tests::hardware::connected::connected_endpoint_peer'
-    if runner == 'orbitte-shared-cq':
+    if runner == 'orbite-shared-cq':
         return 'transport::rdma::cq_lane::tests::hardware::shared_cq_peer'
-    if runner == 'orbitte-window':
+    if runner == 'orbite-window':
         return 'transport::rdma::cq_lane::tests::hardware::source_window_peer'
     if runner == 'orbitkv-peer-host':
-        return 'peer::orbitte::tests::rdma_host::registered_host_rdma_peer'
-    if runner in (None, 'orbitte-installed-host'):
+        return 'peer::orbite::tests::rdma_host::registered_host_rdma_peer'
+    if runner in (None, 'orbite-installed-host'):
         return None
     raise ValueError('unsupported hardware runner')
 
@@ -76,7 +76,7 @@ class Controller:
     def __init__(self, profile, binary, output):
         self.profile, self.binary, self.output = profile, binary, output
         self.sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
-        self.remote = '/var/tmp/orbitte-runs/' + output.name + '-' + uuid.uuid4().hex[:12]
+        self.remote = '/var/tmp/orbite-runs/' + output.name + '-' + uuid.uuid4().hex[:12]
         self.commands = []
         self.started = []
         self.connections = []
@@ -106,7 +106,7 @@ class Controller:
             raise RuntimeError('host/boot identity changed before deployment')
         self.ssh(node, ['mkdir', '-m', '700', '-p', self.remote])
         if self.fault_library is not None:
-            self.copy(node, self.fault_library, self.remote + '/liborbitte_cq_fault.so')
+            self.copy(node, self.fault_library, self.remote + '/liborbite_cq_fault.so')
         if self.inventory_tool is not None:
             self.copy(node, self.inventory_tool, self.remote + '/discovery_inventory.py')
         self.copy(node, self.binary, self.remote + '/hardware_peer')
@@ -127,7 +127,7 @@ class Controller:
         target = self.profile['nodes'][node]
         locks = []
         if transport == 'rdma':
-            if self.profile.get('runner') in ('orbitte-multirail', 'orbitte-installed-host') or self.profile.get('rails'):
+            if self.profile.get('runner') in ('orbite-multirail', 'orbite-installed-host') or self.profile.get('rails'):
                 locks.extend(self.rail_locks(node))
             else:
                 locks.append(target['nic_lock'])
@@ -136,32 +136,32 @@ class Controller:
             locks.append(target['gpu_lock'])
             environment['CUDA_VISIBLE_DEVICES'] = target['gpu_uuid']
         config = {'hostname': target['hostname'], 'boot_id': target['boot_id'], 'binary_sha256': self.sha256, 'arguments': arguments, 'locks': locks, 'env': environment, 'timeout_seconds': 55}
-        if environment.get('ORBITTE_HOST_DISCOVERY') == 'auto':
+        if environment.get('ORBITE_HOST_DISCOVERY') == 'auto':
             if self.inventory_tool is None:
                 raise ValueError('automatic discovery requires its packaged inventory tool')
             config['inventory_tool_sha256'] = hashlib.sha256(self.inventory_tool.read_bytes()).hexdigest()
-        if 'ORBITTE_RESTART_GENERATIONS' in environment:
-            config.update(restart_role=environment['ORBITTE_SHARED_ROLE'],
-                          restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
-                          restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']),
-                          restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'))
-        if environment.get('ORBITTE_STAGING_OBSERVE') == '1':
+        if 'ORBITE_RESTART_GENERATIONS' in environment:
+            config.update(restart_role=environment['ORBITE_SHARED_ROLE'],
+                          restart_kill_role=environment['ORBITE_RESTART_KILL_ROLE'],
+                          restart_generations=int(environment['ORBITE_RESTART_GENERATIONS']),
+                          restart_live_peer=environment.get('ORBITE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'))
+        if environment.get('ORBITE_STAGING_OBSERVE') == '1':
             if self.fault_library is None:
                 raise ValueError('staging gate requires its pinned CUDA observer')
-            environment.update(LD_PRELOAD=self.remote + '/liborbitte_cq_fault.so', ORBITTE_IPC_LOG=root + '/cuda-staging.jsonl')
+            environment.update(LD_PRELOAD=self.remote + '/liborbite_cq_fault.so', ORBITE_IPC_LOG=root + '/cuda-staging.jsonl')
             config['fault_library_sha256'] = hashlib.sha256(self.fault_library.read_bytes()).hexdigest()
-        if environment.get('ORBITTE_GDR_OBSERVE') == '1':
+        if environment.get('ORBITE_GDR_OBSERVE') == '1':
             if self.fault_library is None:
                 raise ValueError('GPU direct gate requires its pinned native observer')
-            environment['LD_PRELOAD'] = self.remote + '/liborbitte_cq_fault.so'
+            environment['LD_PRELOAD'] = self.remote + '/liborbite_cq_fault.so'
             config['fault_library_sha256'] = hashlib.sha256(self.fault_library.read_bytes()).hexdigest()
-        if (environment.get('ORBITTE_HOST_MODE') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-rail-accounting')
-                and environment['ORBITTE_SHARED_ROLE'] == 'requester') or (
-                environment.get('ORBITTE_HOST_MODE') == 'installed-memory-cleanup'
-                and environment['ORBITTE_SHARED_ROLE'] == environment['ORBITTE_CLEANUP_ROLE']):
+        if (environment.get('ORBITE_HOST_MODE') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-rail-accounting')
+                and environment['ORBITE_SHARED_ROLE'] == 'requester') or (
+                environment.get('ORBITE_HOST_MODE') == 'installed-memory-cleanup'
+                and environment['ORBITE_SHARED_ROLE'] == environment['ORBITE_CLEANUP_ROLE']):
             if self.fault_library is None:
                 raise ValueError('native fault requires its pinned observer library')
-            environment['LD_PRELOAD'] = self.remote + '/liborbitte_cq_fault.so'
+            environment['LD_PRELOAD'] = self.remote + '/liborbite_cq_fault.so'
             config['fault_library_sha256'] = hashlib.sha256(self.fault_library.read_bytes()).hexdigest()
         local = self.output / (Path(root).name + '.json')
         local.write_text(json.dumps(config, indent=2) + '\n')
@@ -220,24 +220,24 @@ class Controller:
         return [locks[name] for name in rails]
 
     def case(self, index, case):
-        if self.profile.get('runner') == 'orbitte-mixed-gpu':
+        if self.profile.get('runner') == 'orbite-mixed-gpu':
             return self.run_case(index, case, lambda node, role, kind, root, readiness=None:
                                  mixed_gpu.command(self.profile, case, node, role, root, readiness))
-        if self.profile.get('runner') == 'orbitte-installed-host':
+        if self.profile.get('runner') == 'orbite-installed-host':
             installed.validate(case)
             for node in (case['source'], case['requester']):
                 self.rail_locks(node)
             return self.run_case(index, case, lambda node, role, kind, root, readiness=None:
                                  installed.command(self.profile, case, node, role, root, readiness))
-        if self.profile.get('runner') == 'orbitte-multirail':
+        if self.profile.get('runner') == 'orbite-multirail':
             return self.multirail_case(index, case)
         source, requester = case['source'], case['requester']
         source_root = self.remote + f'/{index:02}-source'
         requester_root = self.remote + f'/{index:02}-requester'
         consumer = self.profile.get('runner') == 'orbitkv-peer-host'
-        window_probe = self.profile.get('runner') == 'orbitte-window'
-        shared = self.profile.get('runner') in ['orbitte-shared-cq', 'orbitte-window', 'orbitte-connected']
-        if self.profile.get('runner') not in [None, 'orbitkv-peer-host', 'orbitte-shared-cq', 'orbitte-window', 'orbitte-connected']:
+        window_probe = self.profile.get('runner') == 'orbite-window'
+        shared = self.profile.get('runner') in ['orbite-shared-cq', 'orbite-window', 'orbite-connected']
+        if self.profile.get('runner') not in [None, 'orbitkv-peer-host', 'orbite-shared-cq', 'orbite-window', 'orbite-connected']:
             raise ValueError('unsupported hardware runner')
         if consumer and (case['transport'] != 'rdma' or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu'):
             raise ValueError('OrbitKV registered-read component gate accepts host RDMA only')
@@ -252,13 +252,13 @@ class Controller:
 
         multi_context = case.get('rdma_multi_context', False)
         if type(multi_context) is not bool or (multi_context and (
-                self.profile.get('runner') != 'orbitte-shared-cq' or case.get('duplex')
+                self.profile.get('runner') != 'orbite-shared-cq' or case.get('duplex')
                 or case['transport'] != 'rdma'
                 or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu')):
             raise ValueError('rdma_multi_context requires a boolean host shared-CQ profile')
 
         shared_qp = case.get("shared_qp")
-        if shared_qp is not None and (self.profile.get("runner") != "orbitte-shared-cq"
+        if shared_qp is not None and (self.profile.get("runner") != "orbite-shared-cq"
                 or shared_qp not in ("healthy", "lost-receive")
                 or case.get("operation") not in ("read", "write")
                 or case.get("transport") != "rdma"
@@ -280,116 +280,116 @@ class Controller:
                     raise ValueError('fragmented fault gate requires three 4096-byte WRs')
                 arguments = [native_peer_test(self.profile), '--exact', '--ignored', '--test-threads=1', '--nocapture']
                 environment = {
-                    'ORBITTE_SHARED_ROLE': role,
-                    'ORBITTE_SHARED_BIND': self.profile['nodes'][node]['bind'],
-                    'ORBITTE_SHARED_DEVICE': self.profile['rnic'],
-                    'ORBITTE_SHARED_GID': str(self.profile['gid_index']),
-                    'ORBITTE_SHARED_PAYLOAD': str(case['payload']),
-                    'ORBITTE_SHARED_SEED': str(case['seed']),
-                    'ORBITTE_SHARED_CQES': str(capacity),
-                    'ORBITTE_SHARED_WINDOW': str(window),
-                    'ORBITTE_SHARED_MAPS': root + '/maps.txt',
+                    'ORBITE_SHARED_ROLE': role,
+                    'ORBITE_SHARED_BIND': self.profile['nodes'][node]['bind'],
+                    'ORBITE_SHARED_DEVICE': self.profile['rnic'],
+                    'ORBITE_SHARED_GID': str(self.profile['gid_index']),
+                    'ORBITE_SHARED_PAYLOAD': str(case['payload']),
+                    'ORBITE_SHARED_SEED': str(case['seed']),
+                    'ORBITE_SHARED_CQES': str(capacity),
+                    'ORBITE_SHARED_WINDOW': str(window),
+                    'ORBITE_SHARED_MAPS': root + '/maps.txt',
                 }
-                environment['ORBITTE_RDMA_EVENTS'] = str(int(cq_events))
+                environment['ORBITE_RDMA_EVENTS'] = str(int(cq_events))
                 if shared_qp:
-                    environment["ORBITTE_SHARED_QP"] = shared_qp
-                    environment["ORBITTE_SHARED_OPERATION"] = case["operation"]
+                    environment["ORBITE_SHARED_QP"] = shared_qp
+                    environment["ORBITE_SHARED_OPERATION"] = case["operation"]
                 if multi_context:
-                    environment['ORBITTE_RDMA_MULTI_CONTEXT'] = '1'
+                    environment['ORBITE_RDMA_MULTI_CONTEXT'] = '1'
                 if discovery:
-                    environment['ORBITTE_RDMA_DISCOVERY'] = '1'
+                    environment['ORBITE_RDMA_DISCOVERY'] = '1'
                 if case.get('duplex'):
-                    environment['ORBITTE_SHARED_DUPLEX'] = '1'
+                    environment['ORBITE_SHARED_DUPLEX'] = '1'
                     role_capacity = case.get(role + '_rdma_max_cqes', capacity)
                     if type(role_capacity) is not int or not 1 <= role_capacity <= 4:
                         raise ValueError('invalid duplex CQ capacity')
-                    environment['ORBITTE_SHARED_CQES'] = str(role_capacity)
+                    environment['ORBITE_SHARED_CQES'] = str(role_capacity)
                 if window_probe:
                     if case.get('window_probe') not in ['revoked', 'parent', 'remote', 'range', 'fragment-read', 'fragment-write', 'partial-read', 'partial-write']:
                         raise ValueError('invalid MW probe')
-                    environment['ORBITTE_WINDOW_PROBE'] = case['window_probe']
+                    environment['ORBITE_WINDOW_PROBE'] = case['window_probe']
                 if readiness is not None:
                     if len(readiness) != 1:
                         raise ValueError('invalid shared CQ readiness')
-                    environment['ORBITTE_SHARED_PEER'] = readiness[0]
+                    environment['ORBITE_SHARED_PEER'] = readiness[0]
                 return arguments, environment
             if consumer:
                 arguments = [native_peer_test(self.profile), '--exact', '--ignored', '--test-threads=1', '--nocapture']
                 environment = {
-                    'ORBITKV_ORBITTE_ROLE': role,
-                    'ORBITKV_ORBITTE_BIND': self.profile['nodes'][node]['bind'],
-                    'ORBITKV_ORBITTE_RDMA_DEVICE': self.profile['rnic'],
-                    'ORBITKV_ORBITTE_RDMA_PORT': str(self.profile.get('rdma_port', 1)),
-                    'ORBITKV_ORBITTE_RDMA_GID_INDEX': str(self.profile['gid_index']),
-                    'ORBITKV_ORBITTE_PAYLOAD': str(case['payload']),
-                    'ORBITKV_ORBITTE_SEED': str(case['seed']),
-                    'ORBITKV_ORBITTE_MAPS': root + '/maps.txt',
+                    'ORBITKV_ORBITE_ROLE': role,
+                    'ORBITKV_ORBITE_BIND': self.profile['nodes'][node]['bind'],
+                    'ORBITKV_ORBITE_RDMA_DEVICE': self.profile['rnic'],
+                    'ORBITKV_ORBITE_RDMA_PORT': str(self.profile.get('rdma_port', 1)),
+                    'ORBITKV_ORBITE_RDMA_GID_INDEX': str(self.profile['gid_index']),
+                    'ORBITKV_ORBITE_PAYLOAD': str(case['payload']),
+                    'ORBITKV_ORBITE_SEED': str(case['seed']),
+                    'ORBITKV_ORBITE_MAPS': root + '/maps.txt',
                 }
                 if readiness is not None:
-                    if len(readiness) != 4 or not readiness[0].startswith('orbitte+rdma://'):
+                    if len(readiness) != 4 or not readiness[0].startswith('orbite+rdma://'):
                         raise ValueError('invalid OrbitKV RDMA readiness')
-                    environment['ORBITKV_ORBITTE_REMOTE'] = json.dumps(readiness)
+                    environment['ORBITKV_ORBITE_REMOTE'] = json.dumps(readiness)
                 return arguments, environment
             arguments = [role, self.profile['nodes'][node]['bind'], self.profile['rnic'], str(self.profile['gid_index']), kind, str(case['payload']), str(case['seed']), case['transport']]
             host_memory = case.get(role + '_host_memory', case.get('host_memory', 'direct'))
             if host_memory not in ['direct', 'staged']:
                 raise ValueError('RDMA host memory must be direct or staged')
             environment = {
-                'ORBITTE_HARDWARE_MAPS': root + '/maps.txt',
-                'ORBITTE_RDMA_HOST_MEMORY': host_memory,
-                'ORBITTE_EXPECT_QP_REUSE': str(int(case['transport'] == 'rdma' and all(
+                'ORBITE_HARDWARE_MAPS': root + '/maps.txt',
+                'ORBITE_RDMA_HOST_MEMORY': host_memory,
+                'ORBITE_EXPECT_QP_REUSE': str(int(case['transport'] == 'rdma' and all(
                     case.get(r + '_host_memory', case.get('host_memory', 'direct')) == 'direct'
                     and (case[r + '_kind'] == 'cpu' or case[r + '_kind'].startswith('pinned:'))
                     for r in ['source', 'requester']))),
             }
             if 'staging_chunk_size' in case:
                 staging.validate_case(case)
-                environment.update(ORBITTE_SHARED_ROLE=role, ORBITTE_STAGING_OBSERVE='1', ORBITTE_STAGING_CHUNK_SIZE=str(staging.configured_chunk(case, role)), ORBITTE_STAGING_CHUNK_COUNT=str(staging.configured_depth(case, role)),
-                    ORBITTE_STAGING_PIPELINE_DEPTH=str(staging.configured_depth(case, role)),
-                    ORBITTE_EXPECT_STAGE_DEPTH=str(staging.stage_width(case, role)),
-                    ORBITTE_EXPECT_STAGE_CHUNK_SIZE=str(staging.transfer_chunk(case)))
+                environment.update(ORBITE_SHARED_ROLE=role, ORBITE_STAGING_OBSERVE='1', ORBITE_STAGING_CHUNK_SIZE=str(staging.configured_chunk(case, role)), ORBITE_STAGING_CHUNK_COUNT=str(staging.configured_depth(case, role)),
+                    ORBITE_STAGING_PIPELINE_DEPTH=str(staging.configured_depth(case, role)),
+                    ORBITE_EXPECT_STAGE_DEPTH=str(staging.stage_width(case, role)),
+                    ORBITE_EXPECT_STAGE_CHUNK_SIZE=str(staging.transfer_chunk(case)))
             if case.get('remote_staging', False):
                 staging.validate_case(case)
                 length = case.get('slice_bytes', case['payload'] // 4 - 23)
                 chunk = staging.transfer_chunk(case)
-                environment.update(ORBITTE_REMOTE_STAGING='1',
-                    ORBITTE_EXPECT_QP_REUSE=str(int(case['transport'] == 'rdma')),
-                    ORBITTE_EXPECT_GRANTS=str(6 * ((length + chunk - 1) // chunk)))
+                environment.update(ORBITE_REMOTE_STAGING='1',
+                    ORBITE_EXPECT_QP_REUSE=str(int(case['transport'] == 'rdma')),
+                    ORBITE_EXPECT_GRANTS=str(6 * ((length + chunk - 1) // chunk)))
             cuda_memory = case.get('cuda_memory', 'staged')
             if cuda_memory not in ('staged', 'direct'):
                 raise ValueError('CUDA RDMA memory policy must be staged or direct')
             if cuda_memory == 'direct':
                 if shared or consumer or case['transport'] != 'rdma':
                     raise ValueError('CUDA direct gate requires the public native peer')
-                environment.update(ORBITTE_RDMA_CUDA_MEMORY='direct', MLX5_SCATTER_TO_CQE='0', ORBITTE_GDR_OBSERVE='1', ORBITTE_SHARED_ROLE=role)
+                environment.update(ORBITE_RDMA_CUDA_MEMORY='direct', MLX5_SCATTER_TO_CQE='0', ORBITE_GDR_OBSERVE='1', ORBITE_SHARED_ROLE=role)
                 reuse = case.get('gpu_source_reuse', False)
-                environment['ORBITTE_EXPECT_GPU_KEY_REUSE'] = str(int(reuse and role == 'source'))
-                environment['ORBITTE_EXPECT_QP_REUSE'] = str(int(
+                environment['ORBITE_EXPECT_GPU_KEY_REUSE'] = str(int(reuse and role == 'source'))
+                environment['ORBITE_EXPECT_QP_REUSE'] = str(int(
                     (reuse or not case['source_kind'].startswith('cuda:')) and all(
                         case.get(r + '_host_memory', case.get('host_memory', 'direct')) == 'direct'
                         for r in ('source', 'requester'))))
             if self.profile.get('rails'):
                 if cuda_memory != 'direct':
                     raise ValueError('public multirail profile requires explicit CUDA direct policy')
-                environment['ORBITTE_RDMA_RAILS'] = ','.join(self.profile['rails'])
+                environment['ORBITE_RDMA_RAILS'] = ','.join(self.profile['rails'])
                 count = case.get('expected_grants')
                 if type(count) is not int or not 6 <= count <= 4096:
                     raise ValueError('multirail profile must pin its expected physical grant count')
-                environment['ORBITTE_EXPECT_GRANTS'] = str(count)
+                environment['ORBITE_EXPECT_GRANTS'] = str(count)
             if 'slice_bytes' in case:
                 length = case['slice_bytes']
                 if type(length) is not int or not 1 <= length <= case['payload'] // 4 - 23:
                     raise ValueError('explicit slice length exceeds the payload')
-                environment['ORBITTE_RDMA_SLICE_BYTES'] = str(length)
-            for key, variable, limit in [('rdma_block_size', 'ORBITTE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITTE_RDMA_MAX_SEND_WR', 64), ('rdma_max_cqes', 'ORBITTE_RDMA_MAX_CQES', 4096), ('rdma_max_endpoints', 'ORBITTE_RDMA_MAX_ENDPOINTS', 4096)]:
+                environment['ORBITE_RDMA_SLICE_BYTES'] = str(length)
+            for key, variable, limit in [('rdma_block_size', 'ORBITE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITE_RDMA_MAX_SEND_WR', 64), ('rdma_max_cqes', 'ORBITE_RDMA_MAX_CQES', 4096), ('rdma_max_endpoints', 'ORBITE_RDMA_MAX_ENDPOINTS', 4096)]:
                 value = case.get(key)
                 if value is not None:
                     if type(value) is not int or not 1 <= value <= limit:
                         raise ValueError('invalid ' + key)
                     environment[variable] = str(value)
-            environment['ORBITTE_RDMA_EVENTS'] = str(int(cq_events))
+            environment['ORBITE_RDMA_EVENTS'] = str(int(cq_events))
             if discovery:
-                environment['ORBITTE_RDMA_DISCOVERY'] = '1'
+                environment['ORBITE_RDMA_DISCOVERY'] = '1'
             return arguments + (readiness[:3] if readiness else []), environment
 
         return self.run_case(index, case, command)
@@ -425,7 +425,7 @@ class Controller:
             raise ValueError('completion-channel cleanup requires event-driven progress')
 
         shared_qp = case.get("shared_qp")
-        if shared_qp is not None and (self.profile.get("runner") != "orbitte-shared-cq"
+        if shared_qp is not None and (self.profile.get("runner") != "orbite-shared-cq"
                 or shared_qp not in ("healthy", "lost-receive")
                 or case.get("operation") not in ("read", "write")
                 or case.get("transport") != "rdma"
@@ -438,26 +438,26 @@ class Controller:
         def command(node, role, kind, root, readiness=None):
             arguments = [native_peer_test(self.profile), '--exact', '--ignored', '--test-threads=1', '--nocapture']
             environment = {
-                'ORBITTE_SHARED_ROLE': role,
-                'ORBITTE_SHARED_BIND': self.profile['nodes'][node]['bind'],
-                'ORBITTE_SHARED_RAILS': ','.join(self.profile['rails']),
-                'ORBITTE_SHARED_GID': str(self.profile['gid_index']),
-                'ORBITTE_SHARED_MAPS': root + '/maps.txt',
-                'ORBITTE_RDMA_EVENTS': str(int(case['rdma_events'])),
-                'ORBITTE_RDMA_LANES': str(workers),
-                'ORBITTE_RAIL_MODE': case['mode'],
-                'ORBITTE_RAIL_OPERATION': case['operation'],
-                'ORBITTE_RAIL_FAULT': str(case['fault_rail']),
-                'ORBITTE_RAIL_MASK': str(case['mask']),
-                'ORBITTE_RAIL_FAULT_ROLE': str(case.get('fault_role', 'source')),
+                'ORBITE_SHARED_ROLE': role,
+                'ORBITE_SHARED_BIND': self.profile['nodes'][node]['bind'],
+                'ORBITE_SHARED_RAILS': ','.join(self.profile['rails']),
+                'ORBITE_SHARED_GID': str(self.profile['gid_index']),
+                'ORBITE_SHARED_MAPS': root + '/maps.txt',
+                'ORBITE_RDMA_EVENTS': str(int(case['rdma_events'])),
+                'ORBITE_RDMA_LANES': str(workers),
+                'ORBITE_RAIL_MODE': case['mode'],
+                'ORBITE_RAIL_OPERATION': case['operation'],
+                'ORBITE_RAIL_FAULT': str(case['fault_rail']),
+                'ORBITE_RAIL_MASK': str(case['mask']),
+                'ORBITE_RAIL_FAULT_ROLE': str(case.get('fault_role', 'source')),
             }
             if restart is not None:
-                environment['ORBITTE_RESTART_KILL_ROLE'] = restart[0]
-                environment['ORBITTE_RESTART_GENERATIONS'] = str(restart[1])
+                environment['ORBITE_RESTART_KILL_ROLE'] = restart[0]
+                environment['ORBITE_RESTART_GENERATIONS'] = str(restart[1])
             if readiness is not None:
                 if len(readiness) != 1:
                     raise ValueError('invalid multirail readiness')
-                environment['ORBITTE_SHARED_PEER'] = readiness[0]
+                environment['ORBITE_SHARED_PEER'] = readiness[0]
             return arguments, environment
 
         return self.run_case(index, case, command)
@@ -475,7 +475,7 @@ class Controller:
             if evidence['result.json'] is not None:
                 raise RuntimeError('source exited before readiness: ' + json.dumps(evidence))
             for line in (evidence['stdout.log'] or '').splitlines():
-                if line.startswith('ORBITTE_READY '):
+                if line.startswith('ORBITE_READY '):
                     readiness = line.split()[1:]
             if readiness:
                 break
@@ -498,7 +498,7 @@ class Controller:
             if restart is not None:
                 running = json.loads(evidence['source']['running.json'] or '{}')
                 ready = [line.split()[1] for line in (evidence['source']['stdout.log'] or '').splitlines()
-                         if line.startswith('ORBITTE_READY ')]
+                         if line.startswith('ORBITE_READY ')]
                 generation = (len(ready) - 1 if case.get('mode') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure')
                               else running.get('generation'))
                 if (type(generation) is int and 0 < generation < restart[1]
@@ -512,9 +512,9 @@ class Controller:
             time.sleep(0.3)
         passed = all(record['result.json'] is not None and json.loads(record['result.json'])['status'] == 'passed' and record['maps.txt'] is not None for record in evidence.values())
         validation_error = None
-        if passed and self.profile.get('runner') in ('orbitte-installed-host', 'orbitte-mixed-gpu'):
+        if passed and self.profile.get('runner') in ('orbite-installed-host', 'orbite-mixed-gpu'):
             try:
-                if self.profile['runner'] == 'orbitte-mixed-gpu':
+                if self.profile['runner'] == 'orbite-mixed-gpu':
                     mixed_gpu.verify(case, evidence)
                 else:
                     installed.verify(self.profile, case, evidence)
@@ -578,8 +578,8 @@ def main():
             gdr.validate_profile(profile, require_reuse=args.require_gpu_source_reuse)
             controller.fault_library = args.gdr_observer.resolve()
             manifest['gdr_observer_sha256'] = hashlib.sha256(controller.fault_library.read_bytes()).hexdigest()
-        if profile.get('runner') in ('orbitte-installed-host', 'orbitte-mixed-gpu'):
-            if profile['runner'] == 'orbitte-mixed-gpu':
+        if profile.get('runner') in ('orbite-installed-host', 'orbite-mixed-gpu'):
+            if profile['runner'] == 'orbite-mixed-gpu':
                 mixed_gpu.validate(profile)
                 protocol = mixed_gpu.PROTOCOL
             else:
@@ -592,7 +592,7 @@ def main():
                     or installation.get('binary_sha256') != controller.sha256
                     or installation.get('protocol') != protocol):
                 raise ValueError('installation is dirty, incomplete or belongs to another binary')
-            if profile['runner'] == 'orbitte-mixed-gpu':
+            if profile['runner'] == 'orbite-mixed-gpu':
                 for name in ('mixed_gpu.py', 'run.py', 'supervise.py'):
                     driver = Path(__file__).with_name(name)
                     if hashlib.sha256(driver.read_bytes()).hexdigest() != installation['fixture_files_sha256']['tests/hardware/' + name]:
@@ -614,7 +614,7 @@ def main():
             if (not (args.gdr_observer or args.staging_observer) or installation.get('status') != 'passed'
                     or installation.get('dirty') or installation.get('consumer') != 'gpu'
                     or installation.get('binary_sha256') != controller.sha256
-                    or installation.get('protocol') != 'orbitte-hardware-peer-v1'
+                    or installation.get('protocol') != 'orbite-hardware-peer-v1'
                     or (args.gdr_observer and installation.get('fault_library_sha256') != manifest['gdr_observer_sha256'])
                     or (args.staging_observer and installation.get('cuda_observer_sha256') != manifest['cuda_observer_sha256'])):
                 raise ValueError('GPU installation is dirty, incomplete or belongs to other inputs')

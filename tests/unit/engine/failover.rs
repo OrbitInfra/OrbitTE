@@ -444,13 +444,13 @@ mod native {
                 assert_eq!(j["tent_read_bytes_total"], 8 * budget);
                 assert_eq!(j["tent_transport_failover_total"], budget);
                 let nics = p.engine.nic_load_stats()?;
-                assert_eq!(j["orbitte_rdma_inflight_bytes"], 0);
+                assert_eq!(j["orbite_rdma_inflight_bytes"], 0);
                 let charged = nics.iter().map(|nic| nic.allocated_bytes).sum::<u64>();
                 assert!(
                     charged >= 8,
                     "the original RDMA parent owned its exact slice charge"
                 );
-                assert_eq!(j["orbitte_rdma_allocated_bytes_total"], charged);
+                assert_eq!(j["orbite_rdma_allocated_bytes_total"], charged);
                 assert_eq!(j["tent_inflight_attempts"], 0);
                 if budget == 0 {
                     assert!(text.contains(&format!(

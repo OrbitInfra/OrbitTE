@@ -3,15 +3,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use orbit_te::{Error, RemoteEffect};
+use orbite::{Error, RemoteEffect};
 
 use super::*;
 
 fn file(kind: &str, phase: usize) -> Result<PathBuf> {
-    Ok(
-        PathBuf::from(env::var("ORBITTE_RESTART_ROOT")?)
-            .join(format!("restart-{kind}-{phase}.txt")),
-    )
+    Ok(PathBuf::from(env::var("ORBITE_RESTART_ROOT")?).join(format!("restart-{kind}-{phase}.txt")))
 }
 
 fn wait_peer(phase: usize) -> Result<SocketAddr> {
@@ -90,7 +87,7 @@ fn stale(
         return Err(format!("stale request crossed authority fence: {failure:?}").into());
     }
     println!(
-        "ORBITTE_INSTALLED_STALE {{\"phase\":{phase},\"previous\":{previous},\"old_epoch\":\"{}\",\"new_epoch\":\"{}\",\"opened_qps\":0,\"posted_wrs\":0,\"remote_effect_none\":true,\"locally_drained\":true}}",
+        "ORBITE_INSTALLED_STALE {{\"phase\":{phase},\"previous\":{previous},\"old_epoch\":\"{}\",\"new_epoch\":\"{}\",\"opened_qps\":0,\"posted_wrs\":0,\"remote_effect_none\":true,\"locally_drained\":true}}",
         old.source_epoch(),
         new.source_epoch()
     );
@@ -108,7 +105,7 @@ fn terminate(engine: &TransferEngine, phase: usize, state: &str, pending: bool) 
     }
     maps()?;
     println!(
-        "ORBITTE_INSTALLED_KILL {{\"phase\":{phase},\"pid\":{},\"cached_qps\":{},\"persistent_mrs\":{},\"sq_debt\":{},\"rq_debt\":{},\"orderly_close\":false}}",
+        "ORBITE_INSTALLED_KILL {{\"phase\":{phase},\"pid\":{},\"cached_qps\":{},\"persistent_mrs\":{},\"sq_debt\":{},\"rq_debt\":{},\"orderly_close\":false}}",
         std::process::id(),
         stats.active_endpoints,
         stats.persistent_mrs,
@@ -131,9 +128,9 @@ pub(super) fn request_kill(phase: usize, state: &str) -> Result<()> {
 }
 
 pub(super) fn run(case: &Case) -> Result<()> {
-    let mode = env::var("ORBITTE_HOST_MODE")?;
+    let mode = env::var("ORBITE_HOST_MODE")?;
     let pd_cleanup = mode == "installed-cleanup-failure"
-        && env::var("ORBITTE_CLEANUP_KIND").as_deref() == Ok("pd");
+        && env::var("ORBITE_CLEANUP_KIND").as_deref() == Ok("pd");
     let lost_completion = !pd_cleanup
         && matches!(
             mode.as_str(),
@@ -143,20 +140,20 @@ pub(super) fn run(case: &Case) -> Result<()> {
     if interrupted && case.payload > case.block {
         return Err("interruption relay requires one slice per parent".into());
     }
-    let killed_source = match env::var("ORBITTE_RESTART_KILL_ROLE")?.as_str() {
+    let killed_source = match env::var("ORBITE_RESTART_KILL_ROLE")?.as_str() {
         "source" => true,
         "requester" => false,
         _ => return Err("invalid restart role".into()),
     };
-    let generations = number("ORBITTE_RESTART_GENERATIONS")?;
-    let generation = number("ORBITTE_RESTART_GENERATION")?;
+    let generations = number("ORBITE_RESTART_GENERATIONS")?;
+    let generation = number("ORBITE_RESTART_GENERATION")?;
     let target = case.source == killed_source;
     if !(2..=3).contains(&generations) || generation >= generations || (!target && generation != 0)
     {
         return Err("invalid live-peer restart profile".into());
     }
     let bind = if generation == 0 {
-        env::var("ORBITTE_SHARED_BIND")?.parse()?
+        env::var("ORBITE_SHARED_BIND")?.parse()?
     } else {
         let state = std::fs::read_to_string(file("state", 0)?)?;
         state
@@ -225,7 +222,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
         // engine's service address that the replacement must reuse.
         let mut stream = control(
             case.source,
-            env::var("ORBITTE_SHARED_BIND")?.parse()?,
+            env::var("ORBITE_SHARED_BIND")?.parse()?,
             peer_address,
         )?;
         barrier(
@@ -260,7 +257,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
         }
         let before = idle(&engine)?;
         println!(
-            "ORBITTE_INSTALLED_PHASE {{\"phase\":{phase},\"pid\":{},\"endpoint\":\"{}\",\"epoch\":\"{}\",\"region_id\":{},\"address\":{},\"peer_endpoint\":\"{}\",\"peer_epoch\":\"{}\",\"opened_qps\":{},\"opened_mrs\":{},\"read_bytes\":{},\"write_bytes\":{},\"stale_bytes_unchanged\":true}}",
+            "ORBITE_INSTALLED_PHASE {{\"phase\":{phase},\"pid\":{},\"endpoint\":\"{}\",\"epoch\":\"{}\",\"region_id\":{},\"address\":{},\"peer_endpoint\":\"{}\",\"peer_epoch\":\"{}\",\"opened_qps\":{},\"opened_mrs\":{},\"read_bytes\":{},\"write_bytes\":{},\"stale_bytes_unchanged\":true}}",
             std::process::id(),
             advertised,
             engine.source_epoch(),
@@ -325,7 +322,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
             }
             idle(&engine)?;
             println!(
-                "ORBITTE_INSTALLED_PEER_EXIT {{\"phase\":{phase},\"survivor_pid\":{},\"locally_idle\":true}}",
+                "ORBITE_INSTALLED_PEER_EXIT {{\"phase\":{phase},\"survivor_pid\":{},\"locally_idle\":true}}",
                 std::process::id()
             );
             old_peers.push(peer);

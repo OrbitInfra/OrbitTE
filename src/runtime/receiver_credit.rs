@@ -53,7 +53,7 @@ pub struct CreditAmount {
 }
 
 /// A cooperative receiver's application-delivered cumulative update.
-/// Automatic bindings synchronize equivalent totals over OrbitTE's control wire;
+/// Automatic bindings synchronize equivalent totals over OrbiTE's control wire;
 /// neither API nor encoding is TENT wire-compatible.
 #[derive(Clone, Debug)]
 pub struct ReceiverCreditUpdateV1 {

@@ -1,7 +1,7 @@
 # Frozen CPU comparison
 
 P0.1 supplies one executable behavioral trace for the existing CPU/TCP slice.
-It runs public OrbitTE Rust APIs and the frozen native TENT C ABI in separate
+It runs public OrbiTE Rust APIs and the frozen native TENT C ABI in separate
 runner processes. Each runner owns a source engine, requester engine and actual
 host backing. Remote operations use real loopback TCP between those engines.
 This is a correctness gate, not a throughput comparison or mixed-peer test.
@@ -14,7 +14,7 @@ revision/SHA-256. The runner checks clean reference source, both Git revisions
 and the archive hash before building. Compiler commands, effective CMake cache,
 binary/library hashes and loaded dependencies remain in external artifacts.
 Native code is compiled from the unmodified reference; no C++ implementation
-is copied into OrbitTE.
+is copied into OrbiTE.
 
 The runner configures Mooncake's root CMake project, which defines the CLI11
 header target needed by TENT, and builds only `tent_shared` and its dependencies.
@@ -26,7 +26,7 @@ uses four RPC threads, and disables merging, the runtime queue and background
 progress. Compiled provider availability does not qualify those paths. No
 external metadata service or accelerator is used by this trace.
 
-Reference sources, libraries and build output stay outside the OrbitTE checkout
+Reference sources, libraries and build output stay outside the OrbiTE checkout
 and OrbitKV's staged runtime. The runner removes inherited Mooncake configuration
 and native loader overrides. It verifies that native Mooncake/ASIO dependencies
 resolve inside its private build and that the Rust executable has none of those
@@ -46,9 +46,9 @@ outputs is insufficient.
 | F05/F07/F08 CPU movement | Noncontiguous batched READ, offset WRITE, exact bytes/sentinels and completed byte counts | Native error mapping, partial posts, cancellation, failover and mixed peers |
 | F08 batch lifetime | Both drivers allocate/submit/poll/free; the first READ appends two groups to one capacity reservation; terminal polling repeats without redelivery | Asynchronous multi-target hooks and merged task aliases |
 | F11 notifications | Explicit local/remote, attached READ/WRITE, empty submission, deliberate repeats, empty names/messages and empty polls | Ambiguous native receipts, provider fallback and durable/deduplicated delivery |
-| Selected F09 C output | Native notification result reuse, reset on free and repeated free | OrbitTE C ABI and the remaining 33-symbol/native contract |
+| Selected F09 C output | Native notification result reuse, reset on free and repeated free | OrbiTE C ABI and the remaining 33-symbol/native contract |
 
-The text format starts with `ORBITTE_CPU_TRACE 1`. `BUFFER` selects a named
+The text format starts with `ORBITE_CPU_TRACE 1`. `BUFFER` selects a named
 source/local backing with length and `pattern` (index modulo 251) or one fill
 byte. `REGISTER`, `UNREGISTER` and `DESCRIBE` change or inspect registration.
 `REGISTER_BATCH name r count` adds `count` references to an already registered
@@ -82,7 +82,7 @@ the runner refuses to overwrite evidence or put it inside a source checkout.
 The fast source gate needs no native libraries or downloads:
 
 ```sh
-python3 tests/reference/run.py --rust-only --output /var/tmp/orbitte-fixture-001
+python3 tests/reference/run.py --rust-only --output /var/tmp/orbite-fixture-001
 ```
 
 It explicitly reports `passed-rust-fixture-only`; it cannot pass the native
@@ -92,7 +92,7 @@ For the real native comparison on Debian/Ubuntu, install the build dependencies
 listed in [the native CI workflow](../.github/workflows/native-cpu.yml), then:
 
 ```sh
-python3 tests/reference/run.py --fetch-reference --output /var/tmp/orbitte-native-001
+python3 tests/reference/run.py --fetch-reference --output /var/tmp/orbite-native-001
 ```
 
 This explicitly downloads the fixed public Git commit/submodule and archive.
@@ -102,7 +102,7 @@ For an already provisioned clean reference and verified archive:
 python3 tests/reference/run.py \
   --tent-source /var/tmp/tent-reference \
   --ylt-archive /var/tmp/45c6463c0afbcc46262e373effa30635be3846a0.tar.gz \
-  --output /var/tmp/orbitte-native-002
+  --output /var/tmp/orbite-native-002
 ```
 
 The full run reports `passed-cpu-trace` only after both real runners exit
@@ -127,7 +127,7 @@ inputs, outputs and binary hashes stay in a new external evidence directory.
 ```sh
 python3 tests/reference/rdma_geometry.py \
   --tent-source /var/tmp/tent-reference \
-  --output /var/tmp/orbitte-rdma-geometry-001
+  --output /var/tmp/orbite-rdma-geometry-001
 ```
 
 An optional `--binary /path/to/frozen-libtest` executes the same exact unit test
@@ -139,7 +139,7 @@ This probe executes only the isolated native function. It does not execute
 native TENT RDMA transport, establish invalid-input parity, qualify hardware or
 measure throughput. The separate two-RNIC libtest profile and its ownership
 controls are recorded in the
-[frozen geometry evidence](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
+[frozen geometry evidence](https://github.com/OrbitInfra/OrbiTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
 
 ## Qualification limits
 

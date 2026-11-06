@@ -3,7 +3,7 @@ use crate::{
     boundary::*,
     engine::{self, Engine},
 };
-use orbit_te::{FileSegment, Permission, RemoteSegment, SourceEpoch, TransferTarget};
+use orbite::{FileSegment, Permission, RemoteSegment, SourceEpoch, TransferTarget};
 use std::{
     collections::HashMap,
     net::{SocketAddr, ToSocketAddrs},
@@ -168,9 +168,9 @@ impl Engine {
         }
     }
 }
-fn metadata_error(e: orbit_te::Error) -> Code {
+fn metadata_error(e: orbite::Error) -> Code {
     match e {
-        orbit_te::Error::Io(ref io)
+        orbite::Error::Io(ref io)
             if matches!(
                 io.kind(),
                 std::io::ErrorKind::ConnectionRefused

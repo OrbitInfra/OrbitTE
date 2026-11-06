@@ -5,9 +5,9 @@ fn vectored_host_iovecs_gather_scatter_and_stop_in_the_middle_of_a_range() -> Re
     if !kernel() {
         return Ok(());
     }
-    let ext4 = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
+    let ext4 = std::env::var_os("ORBITE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
     let tmpfs =
-        std::env::var_os("ORBITTE_TMPFS_DIR").map_or_else(|| PathBuf::from("/dev/shm"), Into::into);
+        std::env::var_os("ORBITE_TMPFS_DIR").map_or_else(|| PathBuf::from("/dev/shm"), Into::into);
     for dir in [ext4, tmpfs] {
         host_vector(&dir)?;
     }
@@ -143,9 +143,9 @@ fn vectored_padding_uses_private_scratch_and_counts_eof_inside_a_gap() -> Result
     if !kernel() {
         return Ok(());
     }
-    let ext4 = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
+    let ext4 = std::env::var_os("ORBITE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
     let tmpfs =
-        std::env::var_os("ORBITTE_TMPFS_DIR").map_or_else(|| PathBuf::from("/dev/shm"), Into::into);
+        std::env::var_os("ORBITE_TMPFS_DIR").map_or_else(|| PathBuf::from("/dev/shm"), Into::into);
     for dir in [ext4, tmpfs] {
         let image: Vec<u8> = (0..4110).map(|i| (i % 251 + 1) as u8).collect();
         let mut f = Fixture::new(

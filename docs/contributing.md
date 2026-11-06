@@ -1,6 +1,6 @@
 # Contributing
 
-OrbitTE is an independent Rust implementation using frozen Mooncake TENT as
+OrbiTE is an independent Rust implementation using frozen Mooncake TENT as
 the capability and architecture reference. Start with the
 [architecture](architecture.md), [parity contract](tent-parity.md) and
 [completion plan](completion-plan.md). The completion plan is the only
@@ -34,20 +34,20 @@ Use Python 3.11 or 3.12 and install the pinned lightweight documentation stack
 into an environment outside the source checkout:
 
 ```sh
-python3 -m venv /tmp/orbitte-docs-venv
-/tmp/orbitte-docs-venv/bin/pip install -r docs/requirements.txt
-/tmp/orbitte-docs-venv/bin/sphinx-build -n -W --keep-going \
-  docs /tmp/orbitte-docs/html
-python3 scripts/check-docs.py /tmp/orbitte-docs/html
-python3 -m http.server 8000 --bind 127.0.0.1 --directory /tmp/orbitte-docs/html
+python3 -m venv /tmp/orbite-docs-venv
+/tmp/orbite-docs-venv/bin/pip install -r docs/requirements.txt
+/tmp/orbite-docs-venv/bin/sphinx-build -n -W --keep-going \
+  docs /tmp/orbite-docs/html
+python3 scripts/check-docs.py /tmp/orbite-docs/html
+python3 -m http.server 8000 --bind 127.0.0.1 --directory /tmp/orbite-docs/html
 ```
 
 Open `http://127.0.0.1:8000/`. Generated HTML, browser screenshots, logs and
 validation reports stay outside Git. Docs CI runs the same strict build and
 local-link check without CUDA, RDMA devices or a Rust native build. The
-`orbitte-docs` CI artifact contains the generated website for preview.
+`orbite-docs` CI artifact contains the generated website for preview.
 
-The public site is [orbitinfra.github.io/OrbitTE](https://orbitinfra.github.io/OrbitTE/).
+The public site is [orbitinfra.github.io/OrbiTE](https://orbitinfra.github.io/OrbiTE/).
 Every push to `main` builds and checks the site, uploads the Pages artifact and
 deploys it through the `github-pages` environment. Pull requests run the build
 and local-link checks and provide the preview artifact. A manual workflow run
@@ -83,6 +83,6 @@ Sphinx Book Theme is installed as an upstream dependency. Project styles
 and assets are maintained separately.
 
 The Orbit ring geometry comes from OrbitKV's existing project branding. The
-OrbitTE wordmark and architecture SVG are repository-native assets under
+OrbiTE wordmark and architecture SVG are repository-native assets under
 `docs/_static/`. Mooncake's logo, adoption claims and measured performance are
-not OrbitTE capabilities.
+not OrbiTE capabilities.

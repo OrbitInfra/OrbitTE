@@ -1,5 +1,5 @@
 //! Installed requester built without native features.
-use orbit_te::{
+use orbite::{
     EngineConfig, MemoryType, Permission, TransferEngine, TransferOp, TransferRequest, Transport,
 };
 use std::{error::Error, time::Duration};
@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let first = args.next().ok_or("expected endpoint")?;
     if first == "--protocol" {
-        println!("orbitte-peer-gpu-requester");
+        println!("orbite-peer-gpu-requester");
         return Ok(());
     }
     let wait = Duration::from_secs(30);

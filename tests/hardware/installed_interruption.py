@@ -9,10 +9,10 @@ def verify(case, evidence):
         source = role == 'source'
         target = role == case['fault_role']
         record = evidence[role]
-        pending = records(record, 'ORBITTE_INSTALLED_PENDING ')
-        drains = records(record, 'ORBITTE_INSTALLED_DRAIN ')
-        history = records(record, 'ORBITTE_INSTALLED_PHASE ')
-        rounds = records(record, 'ORBITTE_INSTALLED_ROUND ')
+        pending = records(record, 'ORBITE_INSTALLED_PENDING ')
+        drains = records(record, 'ORBITE_INSTALLED_DRAIN ')
+        history = records(record, 'ORBITE_INSTALLED_PHASE ')
+        rounds = records(record, 'ORBITE_INSTALLED_ROUND ')
         expected = list(range(case['generations'] - 1))
         if ([r['phase'] for r in pending] != expected
                 or [r['phase'] for r in drains] != ([] if target else expected)):

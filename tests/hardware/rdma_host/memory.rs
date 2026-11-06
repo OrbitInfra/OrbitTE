@@ -1,6 +1,6 @@
 //! Installed MR/MW retention and same-process engine replacement.
 
-use orbit_te::{Error, RemoteEffect};
+use orbite::{Error, RemoteEffect};
 use std::ffi::{CString, c_char, c_void};
 
 use super::*;
@@ -30,7 +30,7 @@ struct MemoryFault(Command);
 impl MemoryFault {
     fn arm(case: &Case, memory: &RegisteredMemory, window: bool) -> Result<Self> {
         // SAFETY: the supervisor pins the observer exporting this versioned ABI.
-        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbitte_memory_fault".as_ptr()) };
+        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbite_memory_fault".as_ptr()) };
         if symbol.is_null() {
             return Err("missing native memory cleanup control".into());
         }
@@ -95,7 +95,7 @@ fn fail_window(
             return Err(format!("MW cleanup reported false completion: {report:?}").into());
         }
         println!(
-            "ORBITTE_INSTALLED_MEMORY_REQUEST {{\"pid\":{},\"failed\":true,\"locally_drained\":true}}",
+            "ORBITE_INSTALLED_MEMORY_REQUEST {{\"pid\":{},\"failed\":true,\"locally_drained\":true}}",
             std::process::id()
         );
     }
@@ -173,7 +173,7 @@ fn retain(
     }
     let native = fault.retained()?;
     println!(
-        "ORBITTE_INSTALLED_MEMORY_RETAINED {{\"pid\":{},\"resource\":{},\"sequence\":{},\"mr\":{},\"mw\":{},\"pd\":{},\"attempts\":1,\"code\":5,\"persistent_mrs\":{},\"persistent_mr_bytes\":{},\"retained_mrs\":{},\"source_mrs\":{},\"retained_windows\":{},\"retained_grants\":{},\"key_indices\":{},\"burned_keys\":{},\"sq_debt\":{},\"rq_debt\":{},\"direct_bytes\":{},\"memory_busy\":{window},\"unregistered\":true,\"close_attempts\":2,\"locally_drained\":false,\"fixture_owners_dropped\":true,\"backing_retained\":true}}",
+        "ORBITE_INSTALLED_MEMORY_RETAINED {{\"pid\":{},\"resource\":{},\"sequence\":{},\"mr\":{},\"mw\":{},\"pd\":{},\"attempts\":1,\"code\":5,\"persistent_mrs\":{},\"persistent_mr_bytes\":{},\"retained_mrs\":{},\"source_mrs\":{},\"retained_windows\":{},\"retained_grants\":{},\"key_indices\":{},\"burned_keys\":{},\"sq_debt\":{},\"rq_debt\":{},\"direct_bytes\":{},\"memory_busy\":{window},\"unregistered\":true,\"close_attempts\":2,\"locally_drained\":false,\"fixture_owners_dropped\":true,\"backing_retained\":true}}",
         std::process::id(),
         native.kind,
         native.sequence,
@@ -196,12 +196,12 @@ fn retain(
 }
 
 pub(super) fn run(case: &Case) -> Result<()> {
-    let window = match env::var("ORBITTE_CLEANUP_KIND")?.as_str() {
+    let window = match env::var("ORBITE_CLEANUP_KIND")?.as_str() {
         "mr" => false,
         "mw" => true,
         _ => return Err("unsupported memory owner".into()),
     };
-    let fault_source = match env::var("ORBITTE_CLEANUP_ROLE")?.as_str() {
+    let fault_source = match env::var("ORBITE_CLEANUP_ROLE")?.as_str() {
         "source" => true,
         "requester" => false,
         _ => return Err("invalid memory fault role".into()),
@@ -215,7 +215,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
         return Err("memory cleanup requires one QP; only source grants own MWs".into());
     }
     let target = case.source == fault_source;
-    let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
+    let bind = env::var("ORBITE_SHARED_BIND")?.parse()?;
     let (engine, memory, backing) = cleanup::create(case, bind)?;
     let endpoint = engine.endpoint();
     let epoch = engine.source_epoch();
@@ -223,7 +223,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
     let mut stream = control(case.source, bind, None)?;
     let peer = open_peer(case, &engine, &memory, &mut stream, endpoint)?;
     println!(
-        "ORBITTE_INSTALLED_MEMORY_OWNER {{\"pid\":{},\"address\":{address},\"target\":{target}}}",
+        "ORBITE_INSTALLED_MEMORY_OWNER {{\"pid\":{},\"address\":{address},\"target\":{target}}}",
         std::process::id()
     );
     rounds(case, &engine, &memory, &peer, &mut stream, 0)?;
@@ -296,7 +296,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
         return Err("stale epoch opened native QPs".into());
     }
     println!(
-        "ORBITTE_INSTALLED_MEMORY_REPLACED {{\"pid\":{},\"endpoint\":\"{endpoint}\",\"old_epoch\":\"{epoch}\",\"new_epoch\":\"{}\",\"address\":{},\"same_process\":true,\"stale_epoch_before_qp\":true}}",
+        "ORBITE_INSTALLED_MEMORY_REPLACED {{\"pid\":{},\"endpoint\":\"{endpoint}\",\"old_epoch\":\"{epoch}\",\"new_epoch\":\"{}\",\"address\":{},\"same_process\":true,\"stale_epoch_before_qp\":true}}",
         std::process::id(),
         engine.source_epoch(),
         memory.base_address()
@@ -313,7 +313,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
     }
     maps()?;
     println!(
-        "ORBITTE_INSTALLED_MEMORY_RESULT {{\"protocol\":\"{PROTOCOL}\",\"pid\":{},\"target\":{target},\"resource\":{},\"healthy_rounds\":6,\"full_bytes_and_guards\":true,\"fresh_engine_drained\":true,\"fresh_backing_released\":true,\"old_backing_retained\":{target}}}",
+        "ORBITE_INSTALLED_MEMORY_RESULT {{\"protocol\":\"{PROTOCOL}\",\"pid\":{},\"target\":{target},\"resource\":{},\"healthy_rounds\":6,\"full_bytes_and_guards\":true,\"fresh_engine_drained\":true,\"fresh_backing_released\":true,\"old_backing_retained\":{target}}}",
         std::process::id(),
         if window { 2 } else { 1 }
     );

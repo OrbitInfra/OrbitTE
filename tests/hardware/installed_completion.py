@@ -15,12 +15,12 @@ def native_logs(case, evidence):
         raise ValueError('missing immutable native fault library')
     if (json.loads(source['result.json']).get('fault_library_sha256')
             or any(source.get('cq-fault-' + str(g) + '.jsonl') for g in range(3))
-            or any('liborbitte_cq_fault.so' in (value or '') for name, value in source.items() if name.startswith('maps'))):
+            or any('liborbite_cq_fault.so' in (value or '') for name, value in source.items() if name.startswith('maps'))):
         raise ValueError('native completion fault escaped requester scope')
     logs = []
     for generation, process in enumerate(processes):
         maps = requester['maps-' + str(generation) + '.txt']
-        if 'liborbitte_cq_fault.so' not in maps:
+        if 'liborbite_cq_fault.so' not in maps:
             raise ValueError('native child did not map the pinned fault library')
         rows = [json.loads(line) for line in (requester.get('cq-fault-' + str(generation) + '.jsonl') or '').splitlines()]
         if not rows or len(rows) > 4096:
@@ -67,14 +67,14 @@ def verify(case, evidence):
         return verify_dependency(case, evidence, logs)
     requester, source = evidence['requester'], evidence['source']
     target = case['fault_role'] == 'requester'
-    pending = records(requester, 'ORBITTE_INSTALLED_CQE_PENDING ')
-    drains = records(requester, 'ORBITTE_INSTALLED_CQE_DRAIN ')
+    pending = records(requester, 'ORBITE_INSTALLED_CQE_PENDING ')
+    drains = records(requester, 'ORBITE_INSTALLED_CQE_DRAIN ')
     phases = list(range(case['generations'] - 1))
     if ([r['phase'] for r in pending] != phases
             or [r['phase'] for r in drains] != ([] if target else phases)):
         raise ValueError('missing native pending or drain receipts')
-    local = records(requester, 'ORBITTE_INSTALLED_PHASE ')
-    remote = records(source, 'ORBITTE_INSTALLED_PHASE ')
+    local = records(requester, 'ORBITE_INSTALLED_PHASE ')
+    remote = records(source, 'ORBITE_INSTALLED_PHASE ')
     operation = 1 if case['operation'] == 'read' else 2
     count, payload = case['parents'], case['payload']
     bank, destination = 2 * payload + 192, payload + 128

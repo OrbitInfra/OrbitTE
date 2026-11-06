@@ -48,7 +48,7 @@ def verify(profile, case, evidence):
         require(result['status'] == 'passed' and result['child_reaped']
                 and result['resource_locks_released'] and result.get('fault_library_sha256'),
                 role + ': process/observer proof missing')
-        allocations = records(proof, 'ORBITTE_MEMORY ')
+        allocations = records(proof, 'ORBITE_MEMORY ')
         require(len(allocations) == 1, role + ': ambiguous allocation')
         memory[role] = allocations[0]
         require(memory[role]['cuda'] == case[role + '_kind'].startswith('cuda:'),
@@ -69,7 +69,7 @@ def verify(profile, case, evidence):
             local = {row['context'] for row in gpu if row['address'] == memory[role]['base']
                      and row['length'] == memory[role]['length'] and row['access'] == 1}
             require(local == set(contexts[role]), role + ': persistent local GPU MR missing on a context')
-        qp = records(proof, 'ORBITTE_GPU_MR_STATS ')
+        qp = records(proof, 'ORBITE_GPU_MR_STATS ')
         require(len(qp) == 1 and qp[0]['active_private_pds'] == 0
                 and qp[0]['opened_private_pds'] == qp[0]['closed_private_pds'],
                 role + ': private PD drain failed')
@@ -109,7 +109,7 @@ def verify(profile, case, evidence):
             'wrong completion SEND authority profile')
     if reuse:
         source = native['source']
-        stats, = records(evidence['source'], 'ORBITTE_GPU_MR_STATS ')
+        stats, = records(evidence['source'], 'ORBITE_GPU_MR_STATS ')
         count = case.get('expected_grants', 6)
         require(stats['opened_private_pds'] == 0 and stats.get('opened_keys') == count
                 and stats.get('invalidated_keys') == count and stats.get('reused_connections', 0) > 0,

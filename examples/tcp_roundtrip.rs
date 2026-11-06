@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-use orbit_te::{EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest};
+use orbite::{EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest};
 
-fn main() -> orbit_te::Result<()> {
+fn main() -> orbite::Result<()> {
     let source = TransferEngine::new(EngineConfig::default())?;
     let exported = source.register_memory(
-        b"hello from OrbitTE".to_vec().into_boxed_slice(),
+        b"hello from OrbiTE".to_vec().into_boxed_slice(),
         Permission::RemoteRead,
     )?;
     let requester = TransferEngine::new(EngineConfig::default())?;
@@ -22,9 +22,9 @@ fn main() -> orbit_te::Result<()> {
         .regions()
         .iter()
         .find(|region| region.id() == exported.id())
-        .ok_or(orbit_te::Error::RegionNotFound)?;
+        .ok_or(orbite::Error::RegionNotFound)?;
     let request = TransferRequest::new(
-        orbit_te::Transport::Tcp,
+        orbite::Transport::Tcp,
         destination.base_address(),
         remote.base_address(),
         exported.len(),

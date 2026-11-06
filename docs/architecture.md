@@ -1,19 +1,19 @@
 # Architecture
 
-OrbitTE follows frozen Mooncake TENT's engine, transport, context, registered
+OrbiTE follows frozen Mooncake TENT's engine, transport, context, registered
 buffer, endpoint and worker boundaries, implemented as Rust resource owners.
 Architectural alignment does not by itself establish behavior, ABI, wire or
 performance parity. See [capabilities](capabilities.md) for support and the
 [completion plan](completion-plan.md#p4-remaining-delivery) for open work.
 
 :::{image} _static/architecture.svg
-:alt: OrbitTE network transports and the implemented DRAM and GPU paths to local SSD
+:alt: OrbiTE network transports and the implemented DRAM and GPU paths to local SSD
 :class: dark-light
 :::
 
 ## C transfer-engine boundary
 
-The `orbit-te-c` package exports the frozen C records and catches unwinding at
+The `orbite-c` package exports the frozen C records and catches unwinding at
 each entry. Bounded, non-reused engine and batch tokens resolve to the Rust
 owners. C requests can mix opcodes and targets in one submit. The batch worker
 prepares every group before publishing the interval and owns its notification.
@@ -55,10 +55,10 @@ topology file contents. The TENT loader also resolves the RPC hostname once.
 Device discovery still
 checks those settings against the host when the engine starts.
 
-TENT installs process-wide glog settings. OrbitTE leaves the log filter with
+TENT installs process-wide glog settings. OrbiTE leaves the log filter with
 the application and rejects `log_level`. Legacy CUDA IPC still requires an
 explicit opt-in for cooperative peers. RPC workers are capped at 128 and
-RDMA send queues at 64 work requests. The endpoint budget counts OrbitTE's
+RDMA send queues at 64 work requests. The endpoint budget counts OrbiTE's
 retained native owners and has a ceiling of 4096. Unsupported verbs
 parameters and TCP retry knobs return configuration errors. The CPU controls
 exercise these differences and the captured environment without changing a
@@ -67,7 +67,7 @@ process variable.
 ## Engine and transport boundary
 
 S16 keeps the upstream serializer and headers inside the frozen CPU oracle.
-The [acceptance inventory](https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory)
+The [acceptance inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
 connects each public field or message to its source, owner, test trigger and
 expected result. The oracle captures the two YLT envelope layers separately
 from TENT's attachments. The Rust control plane uses its existing codec.
@@ -96,9 +96,9 @@ slice receipt. The typed configuration, frame layout, static rail limits and
 generation fence are described in [HP-TCP](hp-tcp.md).
 
 SHM follows the shared allocator and synchronous copy in frozen TENT. TENT
-can also copy a caller-supplied path from `MemoryOptions`. OrbitTE publishes
+can also copy a caller-supplied path from `MemoryOptions`. OrbiTE publishes
 only allocations whose mapping and fd it owns, so an ordinary host buffer
-cannot grant access to an unrelated inode. OrbitTE also publishes the inode,
+cannot grant access to an unrelated inode. OrbiTE also publishes the inode,
 allocation offset and registration grant. The source holds Linux OFD locks for
 the permitted directions, and every requester holds a separate activity lock
 through its copy. Those receipts fence a cached mapping across unregister or
@@ -154,14 +154,14 @@ indices, native SL/TC and cache claims independently of CQ worker placement.
 The pool layout is immutable across admitted work. See
 [transport selection](transport-selection.md).
 
-Library diagnostics use the shared `log` facade. OrbitTE installs no logger.
+Library diagnostics use the shared `log` facade. OrbiTE installs no logger.
 Consumers can enable selector warnings and errors through their own logger.
 
 ## Batch progress and notification ownership
 
 The batch executor runs each admitted transport to its receipt. Submitting
 work and completing an execution signal the same per-batch state that
-`progress_batch` advances. TENT uses progress-lock shards. OrbitTE uses a lock
+`progress_batch` advances. TENT uses progress-lock shards. OrbiTE uses a lock
 per live batch and a bounded weak-ID registry for admission and deferred
 retirement. The optional engine worker owns a bounded wake set and joins on
 drop. The typed `progress_fallback_interval` corresponds to TENT's
@@ -177,7 +177,7 @@ Pin controls cover these boundaries.
 
 Notification routing visits installed channels before the control RPC. TCP and
 self share the bounded control inbox. An async hook retains a charged set of
-outstanding destinations. OrbitTE omits RDMA from notification routing because
+outstanding destinations. OrbiTE omits RDMA from notification routing because
 its data grant QPs have no notification receive owner. An RPC-only engine can
 send and receive even without an installed TCP notification channel. A lost
 receipt precludes automatic replay. See [notifications](cpu-tcp.md#notification-contracts).
@@ -193,7 +193,7 @@ receipt precludes automatic replay. See [notifications](cpu-tcp.md#notification-
 
 `runtime/request_merge.rs` maps original task IDs to physical owners after
 registration, permission and route resolution. TENT sorts by hint and address.
-OrbitTE also fences overlapping destinations and self-copy dependencies to
+OrbiTE also fences overlapping destinations and self-copy dependencies to
 preserve public byte order. When either endpoint is CUDA, a change in the
 selected transport, per-request remote staging or local/remote backing types
 starts a new merge partition. This prevents a later direct alias from writing
@@ -212,7 +212,7 @@ enabled, each file owner enters separately, as in TENT’s queued dispatch.
 
 The source describes one exact location per registered view. TENT’s
 `coalesceRegions` buckets multiple NUMA probe entries within one buffer.
-OrbitTE has no such per-page location list. Adjacent registered views keep
+OrbiTE has no such per-page location list. Adjacent registered views keep
 their separate IDs, permissions and lifetimes. The queue reserves capacity
 for a real proxy session, whose private CROSS tasks already have a bounded
 lifetime inside that owner. This avoids reacquiring the parent’s window from
@@ -227,7 +227,7 @@ The same worker starts the next attempt. Public terminal states have no path
 back to pending.
 
 Frozen TENT permits duplicate same-content WRITEs after partial enqueue.
-OrbitTE requires proof that a WRITE posted nothing. It has no general remote
+OrbiTE requires proof that a WRITE posted nothing. It has no general remote
 revocation receipt for replay. A lost TCP ACK or a failed native WRITE can
 therefore make the effect unknown. A drained READ can replay after QP retirement
 or a confirmed CUDA copy and stage release. An unquiesced destination, an
@@ -251,7 +251,7 @@ release backing or admission. Registration gauges change at publication and fina
 The exporter samples existing queue, QoS, receiver-credit and rail owners only
 on a scrape. Benchmark-only QoS reports have no runtime series.
 
-Frozen TENT uses process-wide ylt metrics. OrbitTE engines own separate
+Frozen TENT uses process-wide ylt metrics. OrbiTE engines own separate
 registries and use a bounded standard-library listener, so no C++ runtime or
 HTTP dependency is needed. Each worker serves one connection with a 4 KiB
 request-header limit and an absolute 500 ms I/O deadline. Dropping the engine
@@ -276,7 +276,7 @@ document against the CLI and rejects an unsupported format.
 ## RDMA resource owners
 
 A bounded rail table is shared by requester workers and the existing port
-monitor. TENT keeps one table per worker. OrbitTE serializes only pair
+monitor. TENT keeps one table per worker. OrbiTE serializes only pair
 accounting so two workers cannot arm concurrent trials. A receipt identifies
 the admitted generation and trial. A late completion from before a port
 fault cannot close the new circuit. `an_open_pair_admits_one_probe_and_only_its_receipt_can_reopen_it`
@@ -301,15 +301,15 @@ retains a live or uncertain entry under pressure.
 | `EndpointStore`, `RdmaEndpoint` | Peer identity, fixed-width construction slots and persistent QPs across CQ lanes | Context endpoint store, `RdmaEndPoint::qp_list_` |
 | `RdmaQp`, `ConnectionResources`, `QpStore` | One QP shared by independently retained grant records | Endpoint QPs and affiliated slice ownership |
 | `qp::send_queue::SendQueue` | Physical send depth, exact outstanding WR IDs and fenced admission | Per-QP `wr_depth_list_` and `slice_queue_` |
-| `qp::receive_queue::ReceiveQueue` | Receive buffers/MRs, RQ debt and binding/key dispatch | QP-owned receive WRs; exact receipts are OrbitTE's |
-| `RdmaGrant`, `GrantResources` | One exact-range DMA loan, source MW, SEND storage and grant charge | OrbitTE authority extension over registered regions |
+| `qp::receive_queue::ReceiveQueue` | Receive buffers/MRs, RQ debt and binding/key dispatch | QP-owned receive WRs; exact receipts are OrbiTE's |
+| `RdmaGrant`, `GrantResources` | One exact-range DMA loan, source MW, SEND storage and grant charge | OrbiTE authority extension over registered regions |
 | `RdmaSlice`, `SendWork`, `ReceiveWork` | Per-grant geometry, WR windows and completion identities | `RdmaSlice` work and completion state |
 | `CqLane` | SQ/RQ CQ pair, grant records, submission, drain and recovery | Per-context CQs consumed by workers |
 | `Workers`, `PostQueue` | Data threads, lane assignment, priority promotion and urgency ordering | `Workers::submit`, `asyncPostSend`, `promoteTimedOutRequests`, `orderByDeadline`, `asyncPollCq` |
 | `SharedSlotManager` | Optional cross-process priority slots on existing workers | `SharedSlotManager::canSend` |
 | `Monitor` | Event consumption and periodic context reclaim and recovery | `Workers::monitorThread`, `reclaimEndpoints`, `resumePausedContexts` |
 | `DeviceSelector`, `DeviceInfo`, `SchedulingParams` | Compiled NIC eligibility, grant byte charges, bandwidth-weighted selection and estimates | TENT's classes of the same names |
-| `CqQuota`, `GrantCredits`, `ReceiveCredits` | Aggregate SQ/RQ wakes and whole-parent grant/receive admission | Bounded slice admission; receive credits are OrbitTE's |
+| `CqQuota`, `GrantCredits`, `ReceiveCredits` | Aggregate SQ/RQ wakes and whole-parent grant/receive admission | Bounded slice admission; receive credits are OrbiTE's |
 
 Each context slot owns its PD, CQ lanes and peer endpoint registry. Several
 grant records can share one QP, which keeps its send and receive queues across
@@ -331,7 +331,7 @@ an old guard from releasing a replacement slot. The source publishes its pair
 before GRANT, so later handshakes share it; a fresh bootstrap may retire an old
 **idle** pair but never an active sibling. TENT's
 `getOrInsert` / `construct` / `EP_HANDSHAKING` follow the same lock discipline,
-with an eager bidirectional QP list instead of OrbitTE's lazy per-capability
+with an eager bidirectional QP list instead of OrbiTE's lazy per-capability
 arrays.
 
 ## QP send ownership
@@ -350,7 +350,7 @@ exact record before checking QPN, WR identity and operation, and native access
 follows grant → QP → context lock order. GPU sources that opt into reuse borrow the published local-only MR on rails that prove exact,
 revocable indirect keys. A fresh key is bound to one QP and direction. The
 private PD and exact MR remain the path for other providers. Frozen TENT
-publishes a registration-lifetime key. OrbitTE's stale-key, guard-byte and
+publishes a registration-lifetime key. OrbiTE's stale-key, guard-byte and
 failed-destruction controls exercise its per-grant authority. See
 [GPU ownership](rdma-cuda.md#gpudirect-rdma-ownership).
 
@@ -360,7 +360,7 @@ serializes reset and tick against concurrent feedback. Admission in enforce mode
 rolls back the device reservation if the route defers. Only an explicit receipt
 returns a permit’s charge. The moved/dropped permit control covers this
 difference from C++ move assignment. The TENT worker has no call site for this
-core and OrbitTE keeps the same integration boundary.
+core and OrbiTE keeps the same integration boundary.
 
 ## QP receive ownership
 
@@ -371,7 +371,7 @@ buffer's donor. Duplicate, stale or mismatched messages cannot complete another
 receipt. RQ depth uses `max_cqes`, so a parent can prepare all receives even when
 its grants exceed the SQ width, and receive credits stay charged until the
 consumed buffer's MR is reaped. TENT also owns WRs at the QP and dispatches CQEs
-to work identities; the bound source receipt is OrbitTE's authority extension.
+to work identities; the bound source receipt is OrbiTE's authority extension.
 
 ## Follow one transfer
 
@@ -396,7 +396,7 @@ Workers bind to NUMA CPU sets; this does not move application pages.
 
 The frozen RDMA quota has two scopes. The selector charges exact slice bytes
 in one process. A configured POSIX shm name shares priority eligibility among
-processes on the same host. OrbitTE uses a same-UID header, bounded nonblocking
+processes on the same host. OrbiTE uses a same-UID header, bounded nonblocking
 file locks and an aligned atomic slot. A process killed under the lock cannot
 strand its peers. A stale Low slot cannot extend eligibility past its clock
 boundary. The Linux controls kill a publisher with a live device lease, check
@@ -405,7 +405,7 @@ Pool shutdown joins the publisher and consults the single unmap receipt. An
 unconfirmed unmap retains the mapping and fd and returns `Unquiesced`.
 
 TENT's receiver ledger names four resources and assumes its caller has fenced
-the old epoch. OrbitTE checks its physical permits and their completion
+the old epoch. OrbiTE checks its physical permits and their completion
 receipts before retiring even a manual epoch. The lost TCP WRITE acknowledgement
 control checks that an applied payload with no receipt cannot free credit.
 Manual grant updates never release automatic Pin leases. QoS uses one resolved
@@ -457,15 +457,15 @@ the public API; see [installed host](installed-host.md). Private tests live unde
 
 ## P4 source audit
 
-The audit compared OrbitTE `f2c7e7f` (PR #55) with frozen TENT
+The audit compared OrbiTE `f2c7e7f` (PR #55) with frozen TENT
 `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`. At that point both RDMA
-implementations were about 11k physical lines (OrbitTE 38 Rust files, TENT 28
+implementations were about 11k physical lines (OrbiTE 38 Rust files, TENT 28
 `.cpp`/`.h` files, tests excluded). Per-request MW authority, exact source
-receipts, bilateral epochs and conservative retention are deliberate OrbitTE
+receipts, bilateral epochs and conservative retention are deliberate OrbiTE
 contracts beyond TENT's registered-region path. The audit found two gaps
 against the [context implementation at the audited revision](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/context.cpp), both since implemented:
 
-| Behavior | Frozen TENT | OrbitTE at `f2c7e7f` | Current source |
+| Behavior | Frozen TENT | OrbiTE at `f2c7e7f` | Current source |
 | --- | --- | --- | --- |
 | Initially down port with valid device/GID | `RdmaContext::enable` keeps it as `DEVICE_PAUSED` | Discovery filtered non-active ports | Paused context/PD kept; MR publication includes it, route admission excludes it |
 | Automatic GID reselection on recovery | `refreshAddress` reruns `getBestGidIndex` | Refresh queried the existing index | Paused refresh reranks GIDs on the same port; pins stay strict |
@@ -480,10 +480,10 @@ fabric qualification stays in the [P4 queue](completion-plan.md#p4-remaining-del
 The reference is frozen at `e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`; see
 TENT's [transport header][transport], [endpoint][endpoint] and [workers][workers].
 
-| Area | Current OrbitTE | Difference from TENT |
+| Area | Current OrbiTE | Difference from TENT |
 | --- | --- | --- |
 | QP arrays | Fixed-width, lazily populated, concurrent grants, drain-aware rollback | TENT builds its QP list eagerly and shares it across directions |
-| Monitor | Unified get/ACK, periodic reclaim, paused contexts, GID reselection, rate refresh | OrbitTE keeps retained-resource quarantine |
+| Monitor | Unified get/ACK, periodic reclaim, paused contexts, GID reselection, rate refresh | OrbiTE keeps retained-resource quarantine |
 | Path metadata | `path.rs` validates NIC/PD descriptions and compatible pairs; `rail_monitor.rs` gates selection and tracks native receipts | TENT `RailMonitor` |
 | Grant authority | Exact-range host MW or private GPU PD/MR, with a bound source receipt | TENT publishes native MR keys; not wire parity |
 | CQ layout | Separate SQ and RQ CQ per lane | TENT uses one lane CQ for data QPs |
@@ -496,9 +496,9 @@ TENT's [transport header][transport], [endpoint][endpoint] and [workers][workers
 
 ## CUDA copy stream ownership
 
-The caller-stream local copy engine is an OrbitTE extension beyond TENT. It
+The caller-stream local copy engine is an OrbiTE extension beyond TENT. It
 takes the DMA compiler and grid-strided copy from OrbitKV. The caller supplies
-layout and allocator leases. OrbitTE resolves physical registration identities,
+layout and allocator leases. OrbiTE resolves physical registration identities,
 bounds each flight, and records an event after its final enqueue, including
 partial failures. An event receipt retires loans only after exact context
 restoration. Separate pinned and device descriptor slots let outstanding kernel
@@ -579,14 +579,14 @@ excludes link speed, so a rate change keeps existing QPs. See
 The stream handle is acquired before memory locks and returned before close and
 control I/O; loans survive event polls without holding allocation mutexes. TENT
 keeps a transport-wide relocation cache and queries the task event in
-`getTransferStatus`; OrbitTE closes imports per subbatch by default and adds
+`getTransferStatus`; OrbiTE closes imports per subbatch by default and adds
 explicit close receipts. See [CUDA IPC](cuda-ipc.md).
 
 MNNVL shares this completion owner and its bounded import/export cache. The
 creator drops its physical handle reference after mapping. Local free retains
 the handle again, unmaps, releases it and frees the VA. An imported mapping
 keeps its physical reference until the same teardown sequence. Frozen TENT
-clears its relocation table on uninstall. OrbitTE uses explicit native
+clears its relocation table on uninstall. OrbiTE uses explicit native
 receipts, bounds whole mapped extents and preserves the actual owners on
 uncertain cleanup. New device and EGM mappings are zeroed through the rounded
 extent before their first grant. Handle publication requires an admitted

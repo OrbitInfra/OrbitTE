@@ -1,4 +1,4 @@
-/* Installed public API consumer. No OrbitTE internals or Rust linkage helpers. */
+/* Installed public API consumer. No OrbiTE internals or Rust linkage helpers. */
 #define _POSIX_C_SOURCE 200809L
 #include <tent/transfer_engine.h>
 #include <assert.h>

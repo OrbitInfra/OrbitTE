@@ -1,4 +1,4 @@
-"""Run the shared CPU trace against public OrbitTE APIs and frozen native TENT."""
+"""Run the shared CPU trace against public OrbiTE APIs and frozen native TENT."""
 
 from __future__ import annotations
 

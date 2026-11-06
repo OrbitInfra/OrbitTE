@@ -1,7 +1,7 @@
 //! Packaged two-process GPU Direct/staging gate, driven by tests/hardware/run.py.
-use orbit_te::cuda::CudaMemory;
-use orbit_te::transport::rdma::{RdmaConfig, RdmaCudaMemory, RdmaHostMemory};
-use orbit_te::{
+use orbite::cuda::CudaMemory;
+use orbite::transport::rdma::{RdmaConfig, RdmaCudaMemory, RdmaHostMemory};
+use orbite::{
     EngineConfig, Notification, NotificationStatus, Permission, RegisteredMemory, RemoteSegment,
     SourceEpoch, TaskState, TransferEngine, TransferOp, TransferRequest, Transport,
 };
@@ -32,7 +32,7 @@ fn check(view: &RegisteredMemory, expected: &[u8; LEN]) -> Result<()> {
 
 fn source(engine: &TransferEngine, view: &RegisteredMemory, leg: &str) -> Result<()> {
     println!(
-        "ORBITTE_READY {} {}",
+        "ORBITE_READY {} {}",
         engine.endpoint(),
         engine.source_epoch()
     );
@@ -142,7 +142,7 @@ fn requester(
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args == ["--protocol"] {
-        println!("orbitte-installed-mixed-gpu");
+        println!("orbite-installed-mixed-gpu");
         return Ok(());
     }
     let [role, bind, device, gid, leg, peer @ ..] = &args[..] else {
@@ -216,11 +216,11 @@ fn main() -> Result<()> {
         return Err(format!("unexpected route or retained owners: {rdma:?} {stage:?}").into());
     }
     std::fs::write(
-        std::env::var("ORBITTE_HARDWARE_MAPS")?,
+        std::env::var("ORBITE_HARDWARE_MAPS")?,
         std::fs::read("/proc/self/maps")?,
     )?;
     println!(
-        "ORBITTE_MIXED_OK {role} {leg} rdma_read={} rdma_write={} private_pds={} staged_bytes={} pins={}",
+        "ORBITE_MIXED_OK {role} {leg} rdma_read={} rdma_write={} private_pds={} staged_bytes={} pins={}",
         rdma.completed_read_bytes,
         rdma.completed_write_bytes,
         rdma.closed_grant_pds,

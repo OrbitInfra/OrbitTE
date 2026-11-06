@@ -1,7 +1,7 @@
 # C API
 
-OrbitTE provides the 33 C functions in Mooncake v0.3.14's
-`<tent/transfer_engine.h>`. The `orbit-te-c` crate builds `libtent.so` and
+OrbiTE provides the 33 C functions in Mooncake v0.3.14's
+`<tent/transfer_engine.h>`. The `orbite-c` crate builds `libtent.so` and
 `libtent.a`. Linux LP64 clients can use either library. The CPU/TCP
 qualification uses separate source and requester processes on loopback.
 
@@ -131,7 +131,7 @@ out-of-band expected epoch. The Rust API accepts a source-issued epoch.
 
 ### Observing terminal evidence
 
-The OrbitInfra fork and OrbitTE add `tent_terminal_result(engine, batch, task,
+The OrbitInfra fork and OrbiTE add `tent_terminal_result(engine, batch, task,
 &code, &known)` outside frozen v0.3.14. Pass `TENT_ALL_TASKS` for the whole
 batch. The query observes cached task outcomes. It neither advances progress
 nor certifies physical drain or permission to replay. A pending owner returns

@@ -22,7 +22,7 @@ def exact(stream, count):
     while len(out) != count:
         chunk = stream.recv(count - len(out))
         if not chunk:
-            raise EOFError("truncated OrbitTE control frame")
+            raise EOFError("truncated OrbiTE control frame")
         out.extend(chunk)
     return out
 
@@ -286,7 +286,7 @@ def main():
             s.split()[-1] for s in nm.splitlines() if s.split()[-1].startswith("tent_")
         } == symbols
         subprocess.run(
-            [*flags, "-DORBITTE_C_API_ONLY", INVENTORY / "abi.c", "-o", tmp / "layout"],
+            [*flags, "-DORBITE_C_API_ONLY", INVENTORY / "abi.c", "-o", tmp / "layout"],
             check=True,
         )
         observed = subprocess.check_output([tmp / "layout"], text=True).splitlines()

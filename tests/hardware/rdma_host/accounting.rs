@@ -29,7 +29,7 @@ pub(super) struct Accounting(Command);
 
 impl Accounting {
     pub(super) fn load(case: &Case, memory: &RegisteredMemory) -> Result<Option<Self>> {
-        if env::var("ORBITTE_HOST_MODE")? != "installed-rail-accounting" {
+        if env::var("ORBITE_HOST_MODE")? != "installed-rail-accounting" {
             return Ok(None);
         }
         if case.parents != 16
@@ -41,7 +41,7 @@ impl Accounting {
             return Err("rail accounting requires the frozen folded-tail profile".into());
         }
         println!(
-            "ORBITTE_INSTALLED_RAIL_MEMORY {{\"pid\":{},\"address\":{}}}",
+            "ORBITE_INSTALLED_RAIL_MEMORY {{\"pid\":{},\"address\":{}}}",
             std::process::id(),
             memory.base_address()
         );
@@ -49,7 +49,7 @@ impl Accounting {
             return Ok(None);
         }
         // SAFETY: the supervisor pins the observer library and this exact ABI by hash.
-        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbitte_rail_accounting".as_ptr()) };
+        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbite_rail_accounting".as_ptr()) };
         if symbol.is_null() {
             return Err("missing native rail accounting library".into());
         }
@@ -98,7 +98,7 @@ impl Accounting {
             return Err(format!("rail accounting did not drain: {receipt:?}, {stats:?}").into());
         }
         println!(
-            "ORBITTE_INSTALLED_RAIL_ROUND {{\"round\":{round},\"posts\":{},\"completed\":{},\"bytes\":{},\"peak\":{},\"rail_peak\":{:?},\"sequence\":{},\"drained\":true}}",
+            "ORBITE_INSTALLED_RAIL_ROUND {{\"round\":{round},\"posts\":{},\"completed\":{},\"bytes\":{},\"peak\":{},\"rail_peak\":{:?},\"sequence\":{},\"drained\":true}}",
             receipt.posts,
             receipt.completed,
             receipt.bytes,

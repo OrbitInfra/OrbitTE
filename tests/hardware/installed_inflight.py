@@ -6,7 +6,7 @@ from installed_restart import records
 
 
 def one(record, suffix):
-    rows = records(record, 'ORBITTE_INSTALLED_DMA_' + suffix + ' ')
+    rows = records(record, 'ORBITE_INSTALLED_DMA_' + suffix + ' ')
     if len(rows) != 1:
         raise ValueError('missing or duplicate DMA ' + suffix)
     return rows[0]
@@ -29,12 +29,12 @@ def verify(profile, case, evidence):
         if role == 'requester':
             digest = supervisor.get('fault_library_sha256', '')
             if (len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)
-                    or 'liborbitte_cq_fault.so' not in maps):
+                    or 'liborbite_cq_fault.so' not in maps):
                 raise ValueError('requester lacks the pinned native observer')
-        elif (supervisor.get('fault_library_sha256') or 'liborbitte_cq_fault.so' in maps
+        elif (supervisor.get('fault_library_sha256') or 'liborbite_cq_fault.so' in maps
               or any(record.get('cq-fault-' + str(g) + '.jsonl') for g in range(3))):
             raise ValueError('in-flight fault escaped its requester process')
-        nics = records(record, 'ORBITTE_INSTALLED_NIC ')
+        nics = records(record, 'ORBITE_INSTALLED_NIC ')
         if (len(nics) != 2 or {r['name'] for r in nics} != set(profile['rails'])
                 or len({r['pci'] for r in nics}) != 2):
             raise ValueError('in-flight peer lacks both locked RNIC contexts')
@@ -58,7 +58,7 @@ def verify(profile, case, evidence):
                 or (destination and (sum(counts) != case['payload'] or min(counts[:2]) <= 0))
                 or (not destination and any(counts))):
             raise ValueError('partial DMA bytes were not demonstrated after native drain')
-        rounds = records(record, 'ORBITTE_INSTALLED_ROUND ')
+        rounds = records(record, 'ORBITE_INSTALLED_ROUND ')
         if [(r['phase'], r['round']) for r in rounds] != [(p, r) for p in range(2) for r in range(3)]:
             raise ValueError('in-flight peer lacks healthy rounds before and after recovery')
         for index, row in enumerate(rounds):
@@ -72,18 +72,18 @@ def verify(profile, case, evidence):
                             if role == 'requester' and case['operation'] == operation else 0)
                 if row[operation + '_bytes'] != expected:
                     raise ValueError('failed WR was counted as successful payload or recovery bytes differ')
-        if records(record, 'ORBITTE_INSTALLED_RESULT ') != [dict(
+        if records(record, 'ORBITE_INSTALLED_RESULT ') != [dict(
                 protocol=PROTOCOL, status='passed', role=role, operation=case['operation'],
                 parents=1, payload=case['payload'], rounds=3,
                 full_bytes_and_guards=True, locally_drained=True)]:
             raise ValueError('missing final closed installed result')
         # The byte observer must follow drain and precede every recovery write.
         tagged = [line.split(' ', 1) for line in record['stdout.log'].splitlines()
-                  if line.startswith('ORBITTE_INSTALLED_')]
-        positions = {tag: i for i, (tag, _) in enumerate(tagged) if tag.startswith('ORBITTE_INSTALLED_DMA_')}
+                  if line.startswith('ORBITE_INSTALLED_')]
+        positions = {tag: i for i, (tag, _) in enumerate(tagged) if tag.startswith('ORBITE_INSTALLED_DMA_')}
         recovery = next(i for i, (tag, raw) in enumerate(tagged)
-                        if tag == 'ORBITTE_INSTALLED_ROUND' and json.loads(raw)['phase'] == 1)
-        if not positions['ORBITTE_INSTALLED_DMA_DRAIN'] < positions['ORBITTE_INSTALLED_DMA_BYTES'] < recovery:
+                        if tag == 'ORBITE_INSTALLED_ROUND' and json.loads(raw)['phase'] == 1)
+        if not positions['ORBITE_INSTALLED_DMA_DRAIN'] < positions['ORBITE_INSTALLED_DMA_BYTES'] < recovery:
             raise ValueError('byte proof was taken outside the drained fault interval')
 
     requester = evidence['requester']

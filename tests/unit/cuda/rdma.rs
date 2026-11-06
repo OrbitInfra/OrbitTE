@@ -294,7 +294,7 @@ fn private_gpu_grants_drain_in_order_or_keep_actual_owner_and_admission() {
 #[test]
 fn direct_mode_requires_provider_scatter_disabled_before_engine_construction() {
     use crate::transport::rdma::{RdmaConfig, RdmaCudaMemory};
-    if let Ok(expected) = std::env::var("ORBITTE_SCATTER_TEST") {
+    if let Ok(expected) = std::env::var("ORBITE_SCATTER_TEST") {
         let config = RdmaConfig {
             cuda_memory: RdmaCudaMemory::Direct,
             ..Default::default()
@@ -306,7 +306,7 @@ fn direct_mode_requires_provider_scatter_disabled_before_engine_construction() {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         child.args(["--exact", "cuda::tests::rdma::direct_mode_requires_provider_scatter_disabled_before_engine_construction"]);
         child
-            .env("ORBITTE_SCATTER_TEST", value)
+            .env("ORBITE_SCATTER_TEST", value)
             .env_remove("MLX5_SCATTER_TO_CQE");
         if value != "missing" {
             child.env("MLX5_SCATTER_TO_CQE", value);

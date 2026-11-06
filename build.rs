@@ -53,11 +53,11 @@ fn build_identity() {
     };
     let commit = commit.filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()));
     println!(
-        "cargo:rustc-env=ORBITTE_BUILD_COMMIT={}",
+        "cargo:rustc-env=ORBITE_BUILD_COMMIT={}",
         commit.as_deref().unwrap_or("unknown")
     );
     println!(
-        "cargo:rustc-env=ORBITTE_BUILD_PROFILE={}",
+        "cargo:rustc-env=ORBITE_BUILD_PROFILE={}",
         env::var("PROFILE").unwrap_or_default()
     );
     let compiler = env::var_os("RUSTC")
@@ -65,7 +65,7 @@ fn build_identity() {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     println!(
-        "cargo:rustc-env=ORBITTE_BUILD_COMPILER={}",
+        "cargo:rustc-env=ORBITE_BUILD_COMPILER={}",
         compiler.as_deref().unwrap_or("unknown")
     );
 }
@@ -82,12 +82,12 @@ fn build_port_shim() {
     let probe = output.join("port_speed_ex.c");
     fs::write(
         &probe,
-        "#include <infiniband/verbs.h>\nint orbitte_speed_ex(struct ibv_port_attr *a) { return a->active_speed_ex; }\n",
+        "#include <infiniband/verbs.h>\nint orbite_speed_ex(struct ibv_port_attr *a) { return a->active_speed_ex; }\n",
     )
     .expect("write port capability probe");
     let mut native = cc::Build::new();
     #[cfg(feature = "cuda")]
-    native.define("ORBITTE_GPU_KEYS", None);
+    native.define("ORBITE_GPU_KEYS", None);
     let compiler = native.get_compiler();
     let extended = compiler
         .to_command()
@@ -100,14 +100,14 @@ fn build_port_shim() {
         .status
         .success();
     if extended {
-        native.define("ORBITTE_HAVE_ACTIVE_SPEED_EX", None);
+        native.define("ORBITE_HAVE_ACTIVE_SPEED_EX", None);
     }
-    println!("cargo:rustc-env=ORBITTE_RDMA_ACTIVE_SPEED_EX={extended}");
-    native.file(SOURCE).compile("orbitte_port");
+    println!("cargo:rustc-env=ORBITE_RDMA_ACTIVE_SPEED_EX={extended}");
+    native.file(SOURCE).compile("orbite_port");
     bindgen::Builder::default()
         .header(HEADER)
-        .allowlist_function("orbitte_query_port")
-        .allowlist_type("orbitte_port_attr")
+        .allowlist_function("orbite_query_port")
+        .allowlist_type("orbite_port_attr")
         .derive_default(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()

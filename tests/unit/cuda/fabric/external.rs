@@ -127,7 +127,7 @@ fn physical_aliases_merge_only_within_the_same_execution_context() -> Result<()>
 fn loader_switch_uses_presence_and_allows_typed_disable() {
     const TEST: &str =
         "cuda::tests::fabric::external::loader_switch_uses_presence_and_allows_typed_disable";
-    if let Ok(expected) = std::env::var("ORBITTE_TEST_MNNVL_SWITCH") {
+    if let Ok(expected) = std::env::var("ORBITE_TEST_MNNVL_SWITCH") {
         assert_eq!(
             EngineConfig::default().mnnvl.is_some(),
             expected == "present"
@@ -147,7 +147,7 @@ fn loader_switch_uses_presence_and_allows_typed_disable() {
         }
         let out = child
             .env(
-                "ORBITTE_TEST_MNNVL_SWITCH",
+                "ORBITE_TEST_MNNVL_SWITCH",
                 if enabled { "present" } else { "absent" },
             )
             .output()

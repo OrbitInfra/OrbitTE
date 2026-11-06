@@ -266,7 +266,7 @@ pub(super) fn resolve(
     if lookup("MC_FORCE_TCP").is_some() || preserved_force {
         force(&mut root)?;
     }
-    // OrbitTE has no shared ylt RPC I/O pool. Never read provider credentials
+    // OrbiTE has no shared ylt RPC I/O pool. Never read provider credentials
     // or SDK environment variables for absent Redis, libfabric or vendor owners.
     for name in ["MC_RPC_CLIENT_IO_THREADS", "MC_TE_RPC_CLIENT_IO_THREADS"] {
         if lookup(name).is_some() {

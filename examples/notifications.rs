@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::time::Duration;
 
-use orbit_te::{
+use orbite::{
     EngineConfig, Notification, NotificationStatus, Permission, TransferEngine, TransferOp,
     TransferRequest,
 };
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         TransferOp::Read,
         &peer,
         &[TransferRequest::new(
-            orbit_te::Transport::Tcp,
+            orbite::Transport::Tcp,
             local.base_address(),
             peer.regions()[0].base_address(),
             32,

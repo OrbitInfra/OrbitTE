@@ -1567,16 +1567,16 @@ fn one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit() {
     #[cfg(feature = "metrics")]
     {
         let j = engine.metrics().unwrap().json();
-        assert_eq!(j["orbitte_qos_owners"], 1);
-        assert_eq!(j["orbitte_qos_inflight_requests"], 1);
-        assert_eq!(j["orbitte_qos_inflight_bytes"], 4);
-        assert_eq!(j["orbitte_dispatching_owners"], 1);
+        assert_eq!(j["orbite_qos_owners"], 1);
+        assert_eq!(j["orbite_qos_inflight_requests"], 1);
+        assert_eq!(j["orbite_qos_inflight_bytes"], 4);
+        assert_eq!(j["orbite_dispatching_owners"], 1);
         assert_eq!(
-            j["orbitte_receiver_credit_active_owners"],
+            j["orbite_receiver_credit_active_owners"],
             credits.active_owners
         );
         assert_eq!(
-            j["orbitte_receiver_credit_reserved_owners"],
+            j["orbite_receiver_credit_reserved_owners"],
             credits.reserved_owners
         );
         assert_eq!(j["tent_inflight_attempts"], 1);

@@ -69,7 +69,7 @@ discards `n` file bytes on READ. Padding needs no local address or
 registration. Tuple-only slices of `(u64, usize)` remain supported.
 
 ```rust
-use orbit_te::{FileIoElement, TransferOp, TransferRequest, Transport};
+use orbite::{FileIoElement, TransferOp, TransferRequest, Transport};
 
 let mut elements = vec![FileIoElement::Range {
     address: layer_1.base_address() + offset_1,
@@ -143,10 +143,10 @@ Async tasks publish their individual CQEs. A short READ or WRITE fails with
 its exact byte count, including zero at EOF. A later task may succeed. Only
 the returned READ prefix is copied back.
 
-OrbitTE reopens the retained inode with the segment's access rights.
+OrbiTE reopens the retained inode with the segment's access rights.
 `file_segment_info().direct_io` records whether a direct fd was obtained.
 TENT repairs an unaligned address with a 4 KiB bounce but passes the offset
-and length through. OrbitTE uses the buffered fd for requests that violate
+and length through. OrbiTE uses the buffered fd for requests that violate
 the filesystem's DIO alignment. It reads `STATX_DIOALIGN` where available
 and otherwise assumes 4096 bytes. tmpfs uses the buffered fd.
 

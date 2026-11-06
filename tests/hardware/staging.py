@@ -67,13 +67,13 @@ def verify(case, evidence):
                 and result.get('fault_library_sha256'), role + ': supervised owner cleanup missing')
         configured = configured_depth(case, role)
         physical_chunk = configured_chunk(case, role)
-        require(records(proof, 'ORBITTE_STAGING_CONFIG ') == [dict(depth=configured, chunk_count=configured, chunk_size=physical_chunk)],
+        require(records(proof, 'ORBITE_STAGING_CONFIG ') == [dict(depth=configured, chunk_count=configured, chunk_size=physical_chunk)],
                 role + ': installed configuration differs from frozen profile')
         if case.get('remote_staging', False):
-            remote = records(proof, 'ORBITTE_REMOTE_STAGE_STATS ')
+            remote = records(proof, 'ORBITE_REMOTE_STAGE_STATS ')
             expected = dict(pins=6, delegates=6 * len(sizes), crosses=6 * len(sizes), unpins=6) if role == 'source' else dict(pins=0, delegates=0, crosses=0, unpins=0)
             require(remote == [expected], role + ': remote staging operations missing or incomplete')
-        stats = records(proof, 'ORBITTE_STAGING_STATS ')
+        stats = records(proof, 'ORBITE_STAGING_STATS ')
         require(len(stats) == 1, role + ': missing staging counters')
         if case[role + '_kind'] == 'cpu':
             require(all(value == 0 for value in stats[0].values()) and not proof.get('cuda-staging.jsonl'), role + ': CPU path spent CUDA chunks')
@@ -82,7 +82,7 @@ def verify(case, evidence):
         require(stats[0] == dict(allocations=width, reuses=5 * width, chunks=6 * len(sizes), bytes=6 * length, reserved_bytes=physical_chunk * width), role + ': chunk accounting mismatch')
         native = [json.loads(line) for line in proof['cuda-staging.jsonl'].splitlines()]
         ledger = staging_native.validate(native, result['native_pid'])
-        memory = records(proof, 'ORBITTE_MEMORY ')
+        memory = records(proof, 'ORBITE_MEMORY ')
         require(len(memory) == 1 and memory[0].get('cuda') is True
                 and memory[0]['base'] > 0 and memory[0]['length'] == case['payload'] + 128,
                 role + ': missing exact GPU allocation identity')

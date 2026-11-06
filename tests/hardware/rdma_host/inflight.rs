@@ -3,7 +3,7 @@
 use std::ffi::{c_char, c_void};
 use std::sync::Arc;
 
-use orbit_te::{BatchState, RemoteEffect, TaskState};
+use orbite::{BatchState, RemoteEffect, TaskState};
 
 use super::*;
 
@@ -34,7 +34,7 @@ struct InflightFault(Command);
 impl InflightFault {
     fn arm(case: &Case) -> Result<Self> {
         // SAFETY: the supervisor pins the library exporting this exact ABI.
-        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbitte_inflight_fault".as_ptr()) };
+        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbite_inflight_fault".as_ptr()) };
         if symbol.is_null() {
             return Err("missing native in-flight fault control".into());
         }
@@ -69,7 +69,7 @@ impl InflightFault {
             return Err(format!("in-flight payload lacks native drain: {native:?}").into());
         }
         println!(
-            "ORBITTE_INSTALLED_DMA_NATIVE {{\"pid\":{},\"qpn\":{},\"wr_id\":{},\"sequence\":{},\"posts\":1,\"modifications\":1,\"failed\":1,\"completed\":0,\"destroyed\":1,\"write_effect_unknown\":{}}}",
+            "ORBITE_INSTALLED_DMA_NATIVE {{\"pid\":{},\"qpn\":{},\"wr_id\":{},\"sequence\":{},\"posts\":1,\"modifications\":1,\"failed\":1,\"completed\":0,\"destroyed\":1,\"write_effect_unknown\":{}}}",
             std::process::id(),
             native.qpn,
             native.wr_id,
@@ -112,7 +112,7 @@ fn bytes(case: &Case, memory: &RegisteredMemory) -> Result<()> {
     }
     memory.write(0, &initial)?;
     println!(
-        "ORBITTE_INSTALLED_DMA_BYTES {{\"pid\":{},\"destination\":{destination},\"copied\":{copied},\"unchanged\":{unchanged},\"ambiguous\":{ambiguous},\"full_bytes_and_guards\":true,\"memory_writable\":true}}",
+        "ORBITE_INSTALLED_DMA_BYTES {{\"pid\":{},\"destination\":{destination},\"copied\":{copied},\"unchanged\":{unchanged},\"ambiguous\":{ambiguous},\"full_bytes_and_guards\":true,\"memory_writable\":true}}",
         std::process::id()
     );
     Ok(())
@@ -126,13 +126,13 @@ pub(super) fn run(case: &Case) -> Result<()> {
     {
         return Err("in-flight profile requires one parent, one QP and one payload WR".into());
     }
-    let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
+    let bind = env::var("ORBITE_SHARED_BIND")?.parse()?;
     let (engine, memory) = create(case, bind)?;
     let engine = Arc::new(engine);
     let mut stream = control(case.source, bind, None)?;
     let peer = open_peer(case, &engine, &memory, &mut stream, engine.endpoint())?;
     println!(
-        "ORBITTE_INSTALLED_DMA_OWNER {{\"pid\":{},\"address\":{}}}",
+        "ORBITE_INSTALLED_DMA_OWNER {{\"pid\":{},\"address\":{}}}",
         std::process::id(),
         memory.base_address()
     );
@@ -218,7 +218,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
         fault.drained(case)?;
     }
     println!(
-        "ORBITTE_INSTALLED_DMA_DRAIN {{\"pid\":{},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"direct_bytes\":{},\"inflight_bytes\":{},\"persistent_mrs\":{},\"closed_qps\":{},\"completion_errors\":{},\"progress_failures\":{},\"progress_recoveries\":{},\"locally_drained\":true}}",
+        "ORBITE_INSTALLED_DMA_DRAIN {{\"pid\":{},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"direct_bytes\":{},\"inflight_bytes\":{},\"persistent_mrs\":{},\"closed_qps\":{},\"completion_errors\":{},\"progress_failures\":{},\"progress_recoveries\":{},\"locally_drained\":true}}",
         std::process::id(),
         rdma.work_requests,
         rdma.receive_work_requests,

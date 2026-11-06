@@ -347,7 +347,7 @@ fn panic_on_close(remaining: usize, seen: Arc<AtomicUsize>) {
             std::thread::current()
                 .name()
                 .unwrap()
-                .starts_with("orbitte-staging-")
+                .starts_with("orbite-staging-")
         );
         seen.fetch_add(1, Ordering::AcqRel);
         if remaining == 1 {

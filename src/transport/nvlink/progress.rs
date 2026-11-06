@@ -81,7 +81,7 @@ impl Progress {
             }
             let shared = Arc::clone(&self.shared);
             match thread::Builder::new()
-                .name("orbitte-nvlink".into())
+                .name("orbite-nvlink".into())
                 .spawn(move || {
                     let _exit = WorkerExit(Arc::clone(&shared));
                     // Drop in-flight owners before WorkerExit publishes termination.

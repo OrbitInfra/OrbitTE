@@ -6,7 +6,7 @@ use std::process::Command;
 // Run alone so other tests' threads, driver singletons and rings cannot affect the count.
 #[test]
 fn storage_runtime_isolation() -> Result<()> {
-    const CHILD: &str = "ORBITTE_TEST_STORAGE_AUDIT";
+    const CHILD: &str = "ORBITE_TEST_STORAGE_AUDIT";
     if std::env::var_os(CHILD).is_some() {
         return exercise();
     }
@@ -44,10 +44,10 @@ fn storage_runtime_isolation() -> Result<()> {
         ])
         .env(CHILD, profile)
         .env("LD_AUDIT", &audit)
-        .env_remove("ORBITTE_TEST_CUFILE");
+        .env_remove("ORBITE_TEST_CUFILE");
         if let Some(provider) = provider {
-            cmd.env("ORBITTE_TEST_CUFILE", provider)
-                .env("ORBITTE_CUFILE_SHIM", "native");
+            cmd.env("ORBITE_TEST_CUFILE", provider)
+                .env("ORBITE_CUFILE_SHIM", "native");
         }
         let output = cmd.output()?;
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -87,7 +87,7 @@ fn live_rings() -> Result<usize> {
 fn exercise() -> Result<()> {
     let temp = TempFile::new(b"file");
     let threads = fs::read_dir("/proc/self/task")?.count();
-    let profile = std::env::var("ORBITTE_TEST_STORAGE_AUDIT").unwrap();
+    let profile = std::env::var("ORBITE_TEST_STORAGE_AUDIT").unwrap();
     let engine = TransferEngine::new(EngineConfig {
         selector: (profile == "io-only")
             .then(|| {
@@ -121,7 +121,7 @@ fn exercise() -> Result<()> {
     #[cfg(any(feature = "io-uring", feature = "gds"))]
     assert_eq!(info.direct_io, None);
     let has_gds = cfg!(feature = "gds")
-        && std::env::var_os("ORBITTE_TEST_CUFILE").is_some()
+        && std::env::var_os("ORBITE_TEST_CUFILE").is_some()
         && profile == "enabled";
     #[cfg(feature = "gds")]
     {

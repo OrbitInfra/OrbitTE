@@ -52,7 +52,7 @@ static void inflight_destroyed(struct ibv_cq *cq, unsigned qpn, int code) {
     }
 }
 
-int orbitte_inflight_fault(unsigned command, unsigned op, struct inflight_snapshot *output) {
+int orbite_inflight_fault(unsigned command, unsigned op, struct inflight_snapshot *output) {
     if (!output) return EINVAL;
     pthread_mutex_lock(&lock);
     int error = 0;

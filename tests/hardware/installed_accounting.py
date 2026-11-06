@@ -10,21 +10,21 @@ def verify(profile, case, evidence):
     fault_hash = process.get('fault_library_sha256', '')
     maps = requester.get('maps.txt') or ''
     if (len(fault_hash) != 64 or any(c not in '0123456789abcdef' for c in fault_hash)
-            or 'liborbitte_cq_fault.so' not in maps
+            or 'liborbite_cq_fault.so' not in maps
             or json.loads(source['result.json']).get('fault_library_sha256')
-            or 'liborbitte_cq_fault.so' in (source.get('maps.txt') or '')
+            or 'liborbite_cq_fault.so' in (source.get('maps.txt') or '')
             or any(source.get('cq-fault-' + str(g) + '.jsonl') for g in range(3))
             or any(requester.get('cq-fault-' + str(g) + '.jsonl') for g in (1, 2))):
         raise ValueError('rail observer escaped its pinned requester process')
     bases = {}
     for role, record in evidence.items():
-        memory = records(record, 'ORBITTE_INSTALLED_RAIL_MEMORY ')
+        memory = records(record, 'ORBITE_INSTALLED_RAIL_MEMORY ')
         if (len(memory) != 1 or memory[0]['pid'] != json.loads(record['result.json'])['native_pid']
                 or memory[0]['address'] <= 0):
             raise ValueError('rail memory identity is missing')
         bases[role] = memory[0]['address']
     rows = [json.loads(line) for line in (requester.get('cq-fault-0.jsonl') or '').splitlines()]
-    receipts = records(requester, 'ORBITTE_INSTALLED_RAIL_ROUND ')
+    receipts = records(requester, 'ORBITE_INSTALLED_RAIL_ROUND ')
     if not rows or len(rows) > 4096 or [r['round'] for r in receipts] != [0, 1, 2]:
         raise ValueError('missing bounded native rail rounds')
     contexts, qps, destroyed = {}, set(), set()

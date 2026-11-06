@@ -50,7 +50,7 @@ Registration errors do not automatically switch to staging.
 
 Use the source owner's current authoritative epoch. Reopening the same TCP
 address with an old epoch cannot adopt a replacement source. Both peers must
-use the current OrbitTE protocol version; legacy protocol fallback and native
+use the current OrbiTE protocol version; legacy protocol fallback and native
 TENT mixed-peer wire compatibility are not implemented.
 
 ## A request times out or returns an uncertain WRITE

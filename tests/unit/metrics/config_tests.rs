@@ -167,7 +167,7 @@ fn invalid_settings_are_typed_and_stale_bucket_keys_do_not_change_the_schema() {
 }
 #[test]
 fn engine_loads_a_metrics_section_from_a_real_bounded_file() {
-    let path = std::env::temp_dir().join(format!("orbitte-metrics-config-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("orbite-metrics-config-{}", std::process::id()));
     struct Cleanup(std::path::PathBuf);
     impl Drop for Cleanup {
         fn drop(&mut self) {

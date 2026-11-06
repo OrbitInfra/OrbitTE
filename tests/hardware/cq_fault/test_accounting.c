@@ -25,10 +25,10 @@ int main(void) {
     struct snapshot loss;
     assert(sizeof(output) == 80);
     for (unsigned op = 1; op <= 2; ++op) {
-        assert(orbitte_rail_accounting(1, op, op, 16, &output) == 0);
-        assert(orbitte_rail_accounting(1, op, op, 16, &output) == EINVAL);
-        assert(orbitte_cq_fault(1, 0, op, 1, &loss) == EINVAL);
-        assert(orbitte_rail_accounting(2, 0, 0, 0, &output) == EINVAL);
+        assert(orbite_rail_accounting(1, op, op, 16, &output) == 0);
+        assert(orbite_rail_accounting(1, op, op, 16, &output) == EINVAL);
+        assert(orbite_cq_fault(1, 0, op, 1, &loss) == EINVAL);
+        assert(orbite_rail_accounting(2, 0, 0, 0, &output) == EINVAL);
         for (int rail = 0; rail < 2; ++rail) for (int i = 0; i < 8; ++i) {
             struct ibv_sge sge = {.addr = 1024, .length = 64};
             struct ibv_send_wr wr = {.wr_id = (unsigned)i + 1, .sg_list = &sge, .num_sge = 1,
@@ -36,7 +36,7 @@ int main(void) {
             struct ibv_send_wr *bad = NULL;
             assert(post(&qp[rail], &wr, &bad) == 0 && !bad);
         }
-        assert(orbitte_rail_accounting(0, 0, 0, 0, &output) == 0);
+        assert(orbite_rail_accounting(0, 0, 0, 0, &output) == 0);
         assert(output.pending == 16 && output.peak == 16 && output.rail_peak[0] == 8 && output.rail_peak[1] == 8);
         for (int rail = 0; rail < 2; ++rail) for (int i = 0; i < 8; ++i) {
             produced[0] = (struct ibv_wc){.wr_id = 999, .status = IBV_WC_SUCCESS, .opcode = IBV_WC_SEND};
@@ -47,17 +47,17 @@ int main(void) {
             poll_count = 3;
             assert(poll(&cq[rail], 3, received) == 3 && memcmp(received, produced, sizeof(produced)) == 0);
         }
-        assert(orbitte_rail_accounting(2, 0, 0, 0, &output) == 0);
+        assert(orbite_rail_accounting(2, 0, 0, 0, &output) == 0);
         assert(output.completed == 16 && output.bytes == 1024 && output.pending == 0 && !output.active);
     }
     assert(post_calls == 32 && poll_calls == 32);
     struct ibv_wc received[3]; poll_count = -5;
     assert(poll(&cq[0], 3, received) == -5 && poll_calls == 33);
-    assert(orbitte_rail_accounting(1, 3, 1, 1, &output) == 0);
+    assert(orbite_rail_accounting(1, 3, 1, 1, &output) == 0);
     /* A CQE without an accepted WR must fail closed, while passing it through. */
     poll_count = 3;
     assert(poll(&cq[0], 3, received) == 3);
-    assert(orbitte_rail_accounting(0, 0, 0, 0, &output) == EINVAL);
+    assert(orbite_rail_accounting(0, 0, 0, 0, &output) == EINVAL);
     puts("Rail accounting controls passed: native callbacks once, untouched CQEs, bounded debt, exact joins");
     return 0;
 }

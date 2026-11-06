@@ -20,7 +20,7 @@ The reference is Mooncake TENT
 
 `ControlService` owns the shared socket service, descriptor and notification
 protocol, source admission and dispatch. TENT keeps its TCP payload handlers in
-`ControlService`; OrbitTE moves the byte behavior into `TcpTransport`. RDMA uses
+`ControlService`; OrbiTE moves the byte behavior into `TcpTransport`. RDMA uses
 a `ControlChannel` for setup without going through `TcpTransport`. Cache keys,
 replica grants and recovery policy stay with OrbitKV.
 
@@ -99,7 +99,7 @@ body submission without a final receipt the effect is `Unknown`; manual retries
 can duplicate a message.
 
 The sender tries each installed notification-capable channel in order. Only
-an unavailable channel with no delivery effect permits fallback. OrbitTE's
+an unavailable channel with no delivery effect permits fallback. OrbiTE's
 installed channel is TCP. The independent control RPC can receive without
 that channel, and uses the same bounded inbox as self delivery. Set
 `tcp_notifications` to disable the TCP channel or `notification_rpc_fallback`
@@ -134,7 +134,7 @@ external allocator's own footprint.
 
 ## Development wire contract
 
-OrbitTE uses its own pre-release control protocol; see the
+OrbiTE uses its own pre-release control protocol; see the
 [wire policy](tent-parity.md#wire-and-consumer-boundaries). Integers are
 unsigned big-endian and each connection carries one operation. Both headers
 begin with the eight-byte `ORBITTE\0` magic, a two-byte version, a one-byte
@@ -168,7 +168,7 @@ a 32-bit count, a one-byte backend (0 for POSIX, 1 for a configured directory)
 and three zero bytes. Each 80-byte record starts with seven ordered 64-bit fields for
 registration ID, allocation offset, mapped size, grant slot, device, inode and
 PID namespace inode. A 32-bit creator PID, four zero bytes and a 16-byte name
-nonce follow. The leaf is `orbitte-shm-{namespace:016x}-{pid:08x}-{nonce:032x}`.
+nonce follow. The leaf is `orbite-shm-{namespace:016x}-{pid:08x}-{nonce:032x}`.
 POSIX opens it with a leading slash. The directory backend opens it relative to
 the local mount. Record IDs increase and every range must fit the published
 object. `tests/reference/shm/describe.bin` freezes a sample trailer.

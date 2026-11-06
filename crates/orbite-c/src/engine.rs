@@ -1,5 +1,5 @@
 use crate::{abi::Handle, boundary::*, memory::Memory, segments::Segments};
-use orbit_te::{Batch, EngineConfig, TransferEngine};
+use orbite::{Batch, EngineConfig, TransferEngine};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
@@ -40,7 +40,7 @@ pub(crate) fn set_field(k: String, v: String) -> Result<()> {
 }
 pub(crate) struct Engine {
     pub core: Arc<TransferEngine>,
-    pub defaults: [orbit_te::PolicyName; 2],
+    pub defaults: [orbite::PolicyName; 2],
     pub memory: Mutex<Memory>,
     pub segments: Mutex<Segments>,
     pub batches: Mutex<HashMap<u64, Arc<Mutex<Batch>>>>,
@@ -58,8 +58,8 @@ impl Engine {
         Ok(Self {
             core: Arc::new(TransferEngine::new(cfg)?),
             defaults: [
-                orbit_te::PolicyName::new("memory_default")?,
-                orbit_te::PolicyName::new("file_default")?,
+                orbite::PolicyName::new("memory_default")?,
+                orbite::PolicyName::new("file_default")?,
             ],
             memory: Mutex::default(),
             segments: Mutex::default(),

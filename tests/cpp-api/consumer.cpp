@@ -14,14 +14,14 @@
 #include <thread>
 #include <type_traits>
 
-static_assert(sizeof(orbitte_request_v1) == 88 && alignof(orbitte_request_v1) == 8);
-static_assert(offsetof(orbitte_request_v1, request) == 8 &&
-              offsetof(orbitte_request_v1, policy_name) == 56 &&
-              offsetof(orbitte_request_v1, policy_name_len) == 64 &&
-              offsetof(orbitte_request_v1, deadline_ns) == 72 &&
-              offsetof(orbitte_request_v1, intent_type) == 80 &&
-              offsetof(orbitte_request_v1, reserved) == 84);
-static_assert(sizeof(orbitte_notification_v1) == 32 && sizeof(orbitte_task_v1) == 24);
+static_assert(sizeof(orbite_request_v1) == 88 && alignof(orbite_request_v1) == 8);
+static_assert(offsetof(orbite_request_v1, request) == 8 &&
+              offsetof(orbite_request_v1, policy_name) == 56 &&
+              offsetof(orbite_request_v1, policy_name_len) == 64 &&
+              offsetof(orbite_request_v1, deadline_ns) == 72 &&
+              offsetof(orbite_request_v1, intent_type) == 80 &&
+              offsetof(orbite_request_v1, reserved) == 84);
+static_assert(sizeof(orbite_notification_v1) == 32 && sizeof(orbite_task_v1) == 24);
 namespace native = mooncake::tent;
 namespace classic = mooncake;
 using Bytes = std::array<unsigned char, 32>;
@@ -344,15 +344,15 @@ static void contracts(const std::string &path) {
         R"({"nics":[{"name":"railA","type":0,"numa_node":0},{"name":"railB","type":0,"numa_node":1}],"mems":[{"name":"cpu:0","type":0,"numa_node":0,"device_list":{"rank0":[0],"rank1":[],"rank2":[1]}}]})"));
     assert(value.getMemCount() == 1 && value.getNicCount() == 2 && value.getNicName(1) == "railB" &&
            value.isCrossNuma(*value.getMemEntry(0), 1));
-    tent_engine_t raw = orbitte_create_v1(2, path.c_str());
+    tent_engine_t raw = orbite_create_v1(2, path.c_str());
     assert(tent_available(raw));
     auto b = tent_allocate_batch(raw, 2);
     Bytes v{};
     assert(!tent_register_memory(raw, v.data(), v.size()));
-    alignas(orbitte_request_v1) uint32_t short_header = sizeof(uint32_t);
-    assert(orbitte_submit_v1(raw, b, reinterpret_cast<const orbitte_request_v1 *>(&short_header), 1,
+    alignas(orbite_request_v1) uint32_t short_header = sizeof(uint32_t);
+    assert(orbite_submit_v1(raw, b, reinterpret_cast<const orbite_request_v1 *>(&short_header), 1,
                              nullptr, 0) == -1);
-    orbitte_request_v1 row{};
+    orbite_request_v1 row{};
     row.struct_size = sizeof row;
     row.abi_version = 1;
     row.request = {OPCODE_READ, v.data() + 8, 0, reinterpret_cast<uintptr_t>(v.data()), 4,
@@ -367,8 +367,8 @@ static void contracts(const std::string &path) {
             invalid.reserved = 1;
         else
             invalid.intent_type = 7;
-        orbitte_request_v1 entries[] = {row, invalid};
-        assert(orbitte_submit_v1(raw, b, entries, 2, nullptr, 0) == -1);
+        orbite_request_v1 entries[] = {row, invalid};
+        assert(orbite_submit_v1(raw, b, entries, 2, nullptr, 0) == -1);
         size_t count = 0;
         tent_status_t out{};
         assert(!tent_task_status_list(raw, b, &out, &count) && count == 0);

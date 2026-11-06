@@ -1,10 +1,10 @@
 # Local CUDA copies
 
-Use `orbit_te::cuda::local_copy` to move retained layer ranges between a GPU
+Use `orbite::cuda::local_copy` to move retained layer ranges between a GPU
 and pinned host memory. Enable the Linux `cuda` feature. One worker binds to
 one caller-owned CUDA stream. Submit several descriptors in either direction
 and keep the completion until the bytes can be reused. The caller chooses the
-blocks, layer layout and cache tier. OrbitTE owns the copies and their receipts.
+blocks, layer layout and cache tier. OrbiTE owns the copies and their receipts.
 
 ## Bind and submit
 
@@ -14,7 +14,7 @@ of the worker. For a default stream, make its context current before binding.
 A per-thread default stream also requires submission on the originating thread.
 
 ```rust
-use orbit_te::cuda::local_copy::{
+use orbite::cuda::local_copy::{
     CopyDirection, LocalCopyConfig, LocalCopyDesc, LocalCopyEngine,
 };
 
@@ -55,8 +55,8 @@ views. Both constructors are unsafe because only the allocator can promise
 these lifetimes and exclude external writes.
 
 ```rust
-use orbit_te::{HostMemory, Permission};
-use orbit_te::cuda::local_copy::PinnedHostRegistration;
+use orbite::{HostMemory, Permission};
+use orbite::cuda::local_copy::PinnedHostRegistration;
 use std::sync::Arc;
 
 // SAFETY: these addresses belong to the stated physical pin and live slot.

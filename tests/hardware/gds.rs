@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use orbit_te::cuda::{CudaMemory, retained_resources};
-use orbit_te::{
+use orbite::cuda::{CudaMemory, retained_resources};
+use orbite::{
     EngineConfig, Error, GdsMode, Permission, Result, TransferEngine, TransferOp, TransferRequest,
     Transport,
 };
@@ -121,9 +121,9 @@ fn exercise(path: &Path) -> Result<()> {
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
-        [flag] if flag == "--protocol" => println!("orbitte-installed-gds-v1"),
+        [flag] if flag == "--protocol" => println!("orbite-installed-gds-v1"),
         [flag, path] if flag == "--exercise" => exercise(Path::new(path))?,
-        _ => return Err("usage: orbitte-gds --protocol | --exercise NEW_FILE".into()),
+        _ => return Err("usage: orbite-gds --protocol | --exercise NEW_FILE".into()),
     }
     Ok(())
 }

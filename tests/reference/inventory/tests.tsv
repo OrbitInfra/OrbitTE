@@ -1,4 +1,4 @@
-source	gtest_filter	orbitte_owner_or_control	trigger	acceptance
+source	gtest_filter	orbite_owner_or_control	trigger	acceptance
 tests/admission_queue_test.cpp	AdmissionQueueTest.*	tests/unit/runtime/admission_queue.rs	CPU	FIFO/EDF, staging reserves, infeasible dispatch and cancellation conserve physical charges
 tests/ascend_direct_transport_test.cpp	AscendDirectResourceConfigTest.*:AscendDirectTransportTest.*	src/runtime/transport_selector.rs	excluded SDK	No ascend_direct_transport execution profile. Reject unavailable selection/registration; retain distinct public constants where declared.
 tests/bootstrap_response_test.cpp	BootstrapResponseTest.*	tests/unit/transport/rdma/connected.rs	RDMA shim	Reject reply_msg or missing GID before use; also exercise native wire codec

@@ -6,7 +6,7 @@ ASCEND_LOCAL_COMM_RES	excluded provider	provider-specific native access; unsuppo
 ASCEND_RDMA_SL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:277	excluded:vendor backend
 ASCEND_RDMA_TC	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:271	excluded:vendor backend
 ASCEND_TRANSFER_TIMEOUT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:248	excluded:vendor backend
-FI_HMEM	libfabric EFA profile	upstream sets system only if absent; existing setting wins; OrbitTE keeps process environment immutable	config.optional	src/transport/fabric/fabric_transport.cpp:162	inactive:provider is absent
+FI_HMEM	libfabric EFA profile	upstream sets system only if absent; existing setting wins; OrbiTE keeps process environment immutable	config.optional	src/transport/fabric/fabric_transport.cpp:162	inactive:provider is absent
 HCCL_INTRA_ROCE_ENABLE	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:312	excluded:vendor backend
 HCCL_RDMA_SL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:280	excluded:vendor backend
 HCCL_RDMA_TC	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:274	excluded:vendor backend

@@ -20,14 +20,14 @@ def main():
     parser.add_argument('--nic-lock', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    binary = args.artifact / 'installed/bin/orbitte-rdma-host'
+    binary = args.artifact / 'installed/bin/orbite-rdma-host'
     args.output.mkdir(parents=True, exist_ok=False)
     manifest = json.loads((args.artifact / 'manifest.json').read_text())
     if (manifest['status'] != 'passed' or manifest['dirty'] or manifest['consumer'] != 'host'
             or digest(binary) != manifest['binary_sha256']
             or digest(args.artifact / Path(manifest['archive']).name) != manifest['archive_sha256']):
         raise ValueError('expected the clean, verified packaged host consumer')
-    slots = 'orbitte-quota-' + uuid.uuid4().hex
+    slots = 'orbite-quota-' + uuid.uuid4().hex
     evidence = {key: manifest[key] for key in ('source_commit', 'binary_sha256', 'archive_sha256')}
     evidence.update(nic=args.nic, slots=slots)
     (args.output / 'installation.json').write_text(json.dumps(evidence, indent=2))
@@ -36,8 +36,8 @@ def main():
         children = []
         try:
             for i in range(2):
-                env = dict(os.environ, ORBITTE_QUOTA_NIC=args.nic, ORBITTE_QUOTA_SLOTS='/' + slots,
-                           ORBITTE_QUOTA_READY_DIR=ready, ORBITTE_QUOTA_ID=str(i))
+                env = dict(os.environ, ORBITE_QUOTA_NIC=args.nic, ORBITE_QUOTA_SLOTS='/' + slots,
+                           ORBITE_QUOTA_READY_DIR=ready, ORBITE_QUOTA_ID=str(i))
                 output = logs.enter_context((args.output / f'participant-{i}.log').open('x'))
                 children.append(subprocess.Popen([binary, '--quota'], env=env, stdout=output,
                                                  stderr=subprocess.STDOUT))

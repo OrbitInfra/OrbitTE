@@ -9,19 +9,19 @@ import cleanup
 def evidence(kind, code, target):
     result = {}
     for role in ('source', 'requester'):
-        rows = [('ORBITTE_RESTART_RESULT ', dict(generation=1, drained=True)),
-                ('ORBITTE_CONCURRENT_RESULT ', dict(mode='large-quota', rounds=2,
+        rows = [('ORBITE_RESTART_RESULT ', dict(generation=1, drained=True)),
+                ('ORBITE_CONCURRENT_RESULT ', dict(mode='large-quota', rounds=2,
                                                    all_resources_drained=True, allocation_released=True))]
         if role == target:
-            rows += [('ORBITTE_NATIVE_CLEANUP_ERROR ', dict(kind=kind, code=code, attempts=1)),
-                     ('ORBITTE_CLEANUP_PROOF ', dict(kind=kind, code=code, attempts=1,
+            rows += [('ORBITE_NATIVE_CLEANUP_ERROR ', dict(kind=kind, code=code, attempts=1)),
+                     ('ORBITE_CLEANUP_PROOF ', dict(kind=kind, code=code, attempts=1,
                         backing_retained=True, native_probe_after_drop=True, syscall_fault_injection=kind == 'qp',
                         retained_endpoints=int(kind == 'qp'), retained_channels=int(kind == 'channel'))),
-                     ('ORBITTE_NATIVE_RETENTION ', dict(kind=kind, native_error=code, native_attempts=1,
+                     ('ORBITE_NATIVE_RETENTION ', dict(kind=kind, native_error=code, native_attempts=1,
                         backing_retained=True, observer_owners_removed=True, post_drop_native_blocker_alive=True,
                         drained=False, retained_grants=1, sq_debt=1, rq_debt=0))]
         if role == 'requester':
-            rows += [('ORBITTE_RESTART_STALE ', dict(opened_qps=0, remote_effect_none=True,
+            rows += [('ORBITE_RESTART_STALE ', dict(opened_qps=0, remote_effect_none=True,
                         same_endpoint=True, old_epoch='old', new_epoch='new'))]
         result[role] = {'stdout.log': ''.join(prefix + json.dumps(row) + '\n' for prefix, row in rows),
                         'maps.txt': 'libibverbs libmlx5',
@@ -40,15 +40,15 @@ class CleanupEvidence(unittest.TestCase):
                 valid = evidence(kind, code, target)
                 cleanup.verify(case, valid)
                 mutations = [
-                    ('ORBITTE_CLEANUP_PROOF ', None, None),
-                    ('ORBITTE_NATIVE_CLEANUP_ERROR ', 'code', 0),
-                    ('ORBITTE_NATIVE_CLEANUP_ERROR ', 'attempts', 2),
-                    ('ORBITTE_CLEANUP_PROOF ', 'backing_retained', False),
-                    ('ORBITTE_CLEANUP_PROOF ', 'native_probe_after_drop', False),
-                    ('ORBITTE_NATIVE_RETENTION ', 'sq_debt', 0),
-                    ('ORBITTE_NATIVE_RETENTION ', 'observer_owners_removed', False),
-                    ('ORBITTE_NATIVE_RETENTION ', 'drained', True),
-                    ('ORBITTE_CONCURRENT_RESULT ', 'rounds', 0),
+                    ('ORBITE_CLEANUP_PROOF ', None, None),
+                    ('ORBITE_NATIVE_CLEANUP_ERROR ', 'code', 0),
+                    ('ORBITE_NATIVE_CLEANUP_ERROR ', 'attempts', 2),
+                    ('ORBITE_CLEANUP_PROOF ', 'backing_retained', False),
+                    ('ORBITE_CLEANUP_PROOF ', 'native_probe_after_drop', False),
+                    ('ORBITE_NATIVE_RETENTION ', 'sq_debt', 0),
+                    ('ORBITE_NATIVE_RETENTION ', 'observer_owners_removed', False),
+                    ('ORBITE_NATIVE_RETENTION ', 'drained', True),
+                    ('ORBITE_CONCURRENT_RESULT ', 'rounds', 0),
                 ]
                 for prefix, field, value in mutations:
                     bad = copy.deepcopy(valid)

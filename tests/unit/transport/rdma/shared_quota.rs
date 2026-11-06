@@ -12,7 +12,7 @@ impl Object {
     pub(in crate::transport::rdma) fn new() -> Self {
         Self(
             CString::new(format!(
-                "/orbitte-slots-test-{}-{}",
+                "/orbite-slots-test-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ))
@@ -191,12 +191,12 @@ fn start(object: &Object, mode: &str) -> (Process, BufReader<TcpStream>) {
                 "--ignored",
                 "--nocapture",
             ])
-            .env("ORBITTE_TEST_SLOT_NAME", object.name())
+            .env("ORBITE_TEST_SLOT_NAME", object.name())
             .env(
-                "ORBITTE_TEST_SLOT_PEER",
+                "ORBITE_TEST_SLOT_PEER",
                 listener.local_addr().unwrap().to_string(),
             )
-            .env("ORBITTE_TEST_SLOT_MODE", mode)
+            .env("ORBITE_TEST_SLOT_MODE", mode)
             .spawn()
             .unwrap(),
     );
@@ -271,9 +271,9 @@ fn shared_slot_subprocess() {
         RdmaConfig,
         quota::{DeviceSelector, tests::topology},
     };
-    let name = std::env::var("ORBITTE_TEST_SLOT_NAME").unwrap();
+    let name = std::env::var("ORBITE_TEST_SLOT_NAME").unwrap();
     let mut control = BufReader::new(
-        TcpStream::connect(std::env::var("ORBITTE_TEST_SLOT_PEER").unwrap()).unwrap(),
+        TcpStream::connect(std::env::var("ORBITE_TEST_SLOT_PEER").unwrap()).unwrap(),
     );
     control
         .get_ref()
@@ -283,7 +283,7 @@ fn shared_slot_subprocess() {
         .get_ref()
         .set_write_timeout(Some(EVENTUAL_PROGRESS))
         .unwrap();
-    let mode = std::env::var("ORBITTE_TEST_SLOT_MODE").unwrap();
+    let mode = std::env::var("ORBITE_TEST_SLOT_MODE").unwrap();
     if mode == "initialize" {
         let (f, created) = (sys::OS.open)(&CString::new(name).unwrap()).unwrap();
         assert!(created);

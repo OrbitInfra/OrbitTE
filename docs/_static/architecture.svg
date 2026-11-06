@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 470" role="img" aria-labelledby="title desc">
-<title id="title">OrbitTE architecture</title>
+<title id="title">OrbiTE architecture</title>
 <desc id="desc">A shared transfer engine owns memory and batches. TCP and RDMA are sibling payload transports with a separate control service. RDMA contexts own protection domains, queues and endpoint stores. A solid two-way arrow connects CPU DRAM and NVIDIA GPU memory to local SSDs through io_uring, pinned CUDA staging and GDS. Broader IPC and stream scheduling are planned.</desc>
 <style>
 .canvas{fill:#fff}.box{fill:#f7f9fc;stroke:#bcc9d8;stroke-width:1.5;rx:8}.label{font:600 18px Arial,sans-serif;fill:#1e293b}.small{font:14px Arial,sans-serif;fill:#475569}.edge{fill:none;stroke:#426a97;stroke-width:2}.future{fill:none;stroke:#64748b;stroke-width:1.5;stroke-dasharray:6 4}

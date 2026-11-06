@@ -1,5 +1,5 @@
 # Shared host/TCP trace. Each engine owns its buffers until successful cleanup.
-ORBITTE_CPU_TRACE 1
+ORBITE_CPU_TRACE 1
 BUFFER source 64 pattern
 BUFFER local 64 238
 REGISTER source rw

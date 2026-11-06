@@ -162,7 +162,7 @@ pub(in super::super) fn retained(
     let retained = trace.retirement.as_ref().unwrap();
     retained.check();
     println!(
-        "ORBITTE_CLEANUP_PROOF {{\"kind\":\"{kind}\",\"code\":{},\"attempts\":{},\"retained_endpoints\":{},\"retained_channels\":{},\"backing_retained\":{backing_retained},\"native_probe_after_drop\":true,\"syscall_fault_injection\":{}}}",
+        "ORBITE_CLEANUP_PROOF {{\"kind\":\"{kind}\",\"code\":{},\"attempts\":{},\"retained_endpoints\":{},\"retained_channels\":{},\"backing_retained\":{backing_retained},\"native_probe_after_drop\":true,\"syscall_fault_injection\":{}}}",
         retained.error,
         retained.attempts,
         stats.retained_endpoints,
@@ -170,7 +170,7 @@ pub(in super::super) fn retained(
         kind == "qp"
     );
     println!(
-        "ORBITTE_NATIVE_RETENTION {{\"kind\":\"{kind}\",\"requester\":{},\"native_error\":{},\"native_attempts\":{},\"native_blocker_qp\":{},\"native_blocker_mw\":{},\"native_pd\":{},\"native_cq\":{},\"registered_mrs\":{},\"deregistered_mrs\":{},\"retained_cqs\":{},\"retained_devices\":{},\"retained_endpoints\":{},\"retained_grants\":{},\"sq_debt\":{},\"rq_debt\":{},\"rq_credits\":{},\"inflight_batches\":{},\"source_operations\":{},\"backing_retained\":{backing_retained},\"observer_owners_removed\":true,\"post_drop_native_blocker_alive\":true,\"drained\":false}}",
+        "ORBITE_NATIVE_RETENTION {{\"kind\":\"{kind}\",\"requester\":{},\"native_error\":{},\"native_attempts\":{},\"native_blocker_qp\":{},\"native_blocker_mw\":{},\"native_pd\":{},\"native_cq\":{},\"registered_mrs\":{},\"deregistered_mrs\":{},\"retained_cqs\":{},\"retained_devices\":{},\"retained_endpoints\":{},\"retained_grants\":{},\"sq_debt\":{},\"rq_debt\":{},\"rq_credits\":{},\"inflight_batches\":{},\"source_operations\":{},\"backing_retained\":{backing_retained},\"observer_owners_removed\":true,\"post_drop_native_blocker_alive\":true,\"drained\":false}}",
         trace.requester,
         retained.error,
         retained.attempts,

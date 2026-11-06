@@ -1,4 +1,4 @@
-"""Read-only host inventory, independent of OrbitTE's discovery implementation."""
+"""Read-only host inventory, independent of OrbiTE's discovery implementation."""
 import ipaddress
 import json
 import os

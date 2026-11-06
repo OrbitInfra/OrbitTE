@@ -59,7 +59,7 @@ fn connections(engine: &TransferEngine, round: usize) -> Vec<Observation> {
         });
         format!("{{\"tag\":{},\"connection\":\"{id}\",\"qpn\":{},\"psn\":{},\"remote_qpn\":{},\"remote_psn\":{},\"qp_handle\":{},\"permission\":{}}}", row.0,row.2,row.3,row.4,row.5,row.6,row.7)
     }).collect::<Vec<_>>().join(",");
-    println!("ORBITTE_CONNECTION_SNAPSHOT {{\"round\":{round},\"connections\":[{json}]}}");
+    println!("ORBITE_CONNECTION_SNAPSHOT {{\"round\":{round},\"connections\":[{json}]}}");
     rows
 }
 
@@ -105,16 +105,16 @@ pub(super) fn barrier(stream: &mut TcpStream, phase: u8) {
 #[ignore = "requires two selected RNIC hosts and original NIC locks; uses the public v13 protocol"]
 fn connected_endpoint_peer() {
     println!();
-    let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
+    let role = env::var("ORBITE_SHARED_ROLE").unwrap();
     let source = role == "source";
     assert!(source || role == "requester");
-    let payload: usize = env::var("ORBITTE_SHARED_PAYLOAD").unwrap().parse().unwrap();
+    let payload: usize = env::var("ORBITE_SHARED_PAYLOAD").unwrap().parse().unwrap();
     assert!((4096..=8 << 20).contains(&payload));
-    let capacity: usize = env::var("ORBITTE_SHARED_CQES").unwrap().parse().unwrap();
-    let seed: u64 = env::var("ORBITTE_SHARED_SEED").unwrap().parse().unwrap();
+    let capacity: usize = env::var("ORBITE_SHARED_CQES").unwrap().parse().unwrap();
+    let seed: u64 = env::var("ORBITE_SHARED_SEED").unwrap().parse().unwrap();
     let length = 2 * payload + 3 * GUARD;
     let destination = payload + 2 * GUARD;
-    let bind: std::net::SocketAddr = env::var("ORBITTE_SHARED_BIND").unwrap().parse().unwrap();
+    let bind: std::net::SocketAddr = env::var("ORBITE_SHARED_BIND").unwrap().parse().unwrap();
     let mut config = super::rdma_config();
     config.max_endpoints = 4;
     config.max_cached_mrs = 2;
@@ -137,7 +137,7 @@ fn connected_endpoint_peer() {
     let mut stream = if source {
         let listener = TcpListener::bind(bind).unwrap();
         listener.set_nonblocking(true).unwrap();
-        println!("ORBITTE_READY {}", listener.local_addr().unwrap());
+        println!("ORBITE_READY {}", listener.local_addr().unwrap());
         std::io::stdout().flush().unwrap();
         let end = Instant::now() + TIMEOUT;
         loop {
@@ -152,7 +152,7 @@ fn connected_endpoint_peer() {
         }
     } else {
         TcpStream::connect_timeout(
-            &env::var("ORBITTE_SHARED_PEER").unwrap().parse().unwrap(),
+            &env::var("ORBITE_SHARED_PEER").unwrap().parse().unwrap(),
             Duration::from_secs(5),
         )
         .unwrap()
@@ -324,7 +324,7 @@ fn connected_endpoint_peer() {
     );
     assert!((1..=capacity).contains(&idle.peak_work_requests));
     assert!((1..=capacity).contains(&idle.peak_receive_work_requests));
-    if let Ok(path) = env::var("ORBITTE_SHARED_MAPS") {
+    if let Ok(path) = env::var("ORBITE_SHARED_MAPS") {
         std::fs::write(path, std::fs::read_to_string("/proc/self/maps").unwrap()).unwrap();
     }
     barrier(&mut stream, 0x7f);
@@ -363,17 +363,17 @@ fn connected_endpoint_peer() {
         (4, 4)
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        "ORBITE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
         idle.async_event_sources, closed.async_event_sources, closed.acknowledged_async_events
     );
     println!(
-        "ORBITTE_OWNER_STATS {{\"idle_connections\":4,\"idle_grants\":0,\"connections\":0,\"grants\":0,\"retained_connections\":0,\"retained_grants\":0}}"
+        "ORBITE_OWNER_STATS {{\"idle_connections\":4,\"idle_grants\":0,\"connections\":0,\"grants\":0,\"retained_connections\":0,\"retained_grants\":0}}"
     );
     println!(
-        "ORBITTE_SOURCE_MR_STATS {{\"idle_parents\":1,\"parents\":0,\"opened\":2,\"reused\":6,\"retained\":0}}"
+        "ORBITE_SOURCE_MR_STATS {{\"idle_parents\":1,\"parents\":0,\"opened\":2,\"reused\":6,\"retained\":0}}"
     );
     println!(
-        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":0,\"burned_keys\":8,\"exhaustions\":0}}",
+        "ORBITE_KEY_STATS {{\"idle_indices\":{},\"indices\":0,\"burned_keys\":8,\"exhaustions\":0}}",
         idle.window_key_indices
     );
     receive_stats(&closed);

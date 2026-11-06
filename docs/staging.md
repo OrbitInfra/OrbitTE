@@ -150,7 +150,7 @@ A Delegate receipt confirms acceptance, not CUDA completion. WRITE becomes
 ### Session progress and completion
 
 The requester reserves its ring and GPU range loan, then queues the session on a
-shared worker pool: at most eight `orbitte-staging-{id}` threads per
+shared worker pool: at most eight `orbite-staging-{id}` threads per
 `ProxyManager`, each running one session at a time with up to 64 queued sessions.
 Full queues return `ResourceExhausted`. Queue time consumes the request deadline,
 and a cancelled queued session is destroyed before Pin.
@@ -178,11 +178,11 @@ only there and replies pending or complete for exactly that scope; early,
 duplicate or mismatched queries fail before another CUDA call. The requester
 holds at most one pending Delegate per remote slot, queries it once per sweep and
 defers reuse of that slot while other CROSS owners progress. TENT uses
-asynchronous RPC callbacks (`RemoteStageOperation::tryTakeResult`); OrbitTE uses
+asynchronous RPC callbacks (`RemoteStageOperation::tryTakeResult`); OrbiTE uses
 scoped query exchanges on its single session connection.
 
 TENT runs Delegate on the RPC blocking executor so unrelated control requests
-can finish. With incoming remote staging enabled, OrbitTE gives each admitted
+can finish. With incoming remote staging enabled, OrbiTE gives each admitted
 Pin connection one source session worker through Unpin or disconnect.
 The control worker reads the full Pin hello, checks the epoch, range and
 permissions, and hands over the original socket, deadline, registration and
@@ -210,7 +210,7 @@ Pin carries a sender-session binding for
 [owner credits](async-batches.md#staging-and-consumer-owner-credits). The single
 socket never interleaves two exchanges, and a local failure closes the session
 instead of appending Unpin to a partial frame. TENT's ordinary TCP workers are
-synchronous; this progress is an OrbitTE choice, not wire compatibility.
+synchronous; this progress is an OrbiTE choice, not wire compatibility.
 
 ### Connection and Pin lifetime
 
@@ -245,7 +245,7 @@ reusable grants, READY, keeping partial frames across polls. Other CROSS payload
 are still queried meanwhile, and a completed chunk's POST or next PRE goes first.
 This follows TENT's `transferEventLoop`, which leaves pending batches queued
 while other owners advance; the grant-specific completion protocol is
-OrbitTE's own. See [qualification](qualification.md#native-rdma-finish-progress).
+OrbiTE's own. See [qualification](qualification.md#native-rdma-finish-progress).
 
 ### Cold RDMA connection acquisition
 
@@ -254,7 +254,7 @@ charge. If another builder holds every unpublished QP slot, it returns pending
 without creating a QP, so the session can query other CROSS payloads and check
 its deadline. Publication makes the pair shareable; a waiter can never release
 another builder's slot. Synchronous callers drive the same states. TENT's
-bootstrap is synchronous; only OrbitTE's slot wait is pollable. See
+bootstrap is synchronous; only OrbiTE's slot wait is pollable. See
 [qualification](qualification.md#cold-rdma-connection-acquisition).
 
 ### Persistent MR publication progress
@@ -281,11 +281,11 @@ native failure only after the lane finishes. TENT's
 
 ## TENT correspondence
 
-| OrbitTE owner | Frozen TENT owner |
+| OrbiTE owner | Frozen TENT owner |
 | --- | --- |
-| `ProxyManager` chunk pool | `allocateStageBuffers`, `pinStageBuffer`, `unpinStageBuffer`, `freeStageBuffers`. OrbitTE claims a slot under the pool lock and runs native calls outside it. Concurrent locations share the engine-wide physical budget. |
+| `ProxyManager` chunk pool | `allocateStageBuffers`, `pinStageBuffer`, `unpinStageBuffer`, `freeStageBuffers`. OrbiTE claims a slot under the pool lock and runs native calls outside it. Concurrent locations share the engine-wide physical budget. |
 | `cuda/staging.rs`, `cuda/stream.rs` | Local staged copy and stream completion |
-| `control_plane/source_sessions.rs`, `source_task.rs` | `ControlService::onPinStageBuffer` / `onUnpinStageBuffer` run inline in TENT, while `onDelegate` is offloaded. OrbitTE moves the scoped connection to a bounded source worker so blocking source work leaves control RPCs serviceable. |
+| `control_plane/source_sessions.rs`, `source_task.rs` | `ControlService::onPinStageBuffer` / `onUnpinStageBuffer` run inline in TENT, while `onDelegate` is offloaded. OrbiTE moves the scoped connection to a bounded source worker so blocking source work leaves control RPCs serviceable. |
 | `remote_stage_operation.rs` and the source slot drain | `RemoteStageOperation::tryTakeResult`, `abandonForCleanup` and `flushPendingCleanups`. Disconnect ends admission for the session. Only a native completion or confirmed recovery drain can release its bytes. |
 | `source_task.rs`, `requester_task.rs` | `transferEventLoop` rings of up to 16 stage buffers |
 | `staging_task.rs::StagingTask`, `worker_shard.rs` | Eight shared worker shards |
@@ -296,7 +296,7 @@ Requester shards start lazily. Control socket exchanges, setup and finish,
 connection acquisition, MR publication waits and QP retirement can yield.
 Pin allocation, provider calls, copyback and failure drain stay synchronous on
 their owning worker. Private stage registrations remain outside Describe.
-TENT uses location pools and raw addresses for Pin/Unpin. OrbitTE checks the
+TENT uses location pools and raw addresses for Pin/Unpin. OrbiTE checks the
 session, range, generation and phase before a slot can be reused.
 
 ## Validation

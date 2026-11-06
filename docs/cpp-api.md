@@ -1,6 +1,6 @@
 # C++ API
 
-OrbitTE installs source adapters for `mooncake::tent::TransferEngine` and
+OrbiTE installs source adapters for `mooncake::tent::TransferEngine` and
 the TENT-backed classic `mooncake::TransferEngine`. Both use the same Rust
 engine, registrations, workers and batch receipts as the [C API](c-api.md).
 Recompile clients against the installed headers. Classic and native TENT
@@ -58,7 +58,7 @@ t::Status read_block(t::TransferEngine& engine, t::SegmentID peer,
 
 A request can bind a compiled selector rule by setting `r.policy_name`.
 The adapter passes the name, all seven intent values, and the absolute
-monotonic deadline across the versioned `orbitte_submit_v1` boundary. The
+monotonic deadline across the versioned `orbite_submit_v1` boundary. The
 frozen C request layout is unchanged. A submit validates all records before
 publication. `progressBatch` advances one bounded owner step. Scalar, list
 and overall `getTransferStatus` overloads retain their ordinary poll
@@ -69,7 +69,7 @@ Both helpers use capped backoff and are also available on
 `<tent/runtime/transfer_engine_impl.h>`. Inspect terminal evidence separately when
 deciding what to do with a failed logical operation.
 
-Both peers must run the same OrbitTE build. The first metadata lookup binds a
+Both peers must run the same OrbiTE build. The first metadata lookup binds a
 P2P handle to a source epoch. `probePeerAliveByID` checks the live peer at
 that epoch. Topology queries snapshot the registered RDMA runtime and its
 ranked NICs. Before verbs initialization they report verified host NUMA nodes

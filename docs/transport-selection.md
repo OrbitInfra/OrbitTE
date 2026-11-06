@@ -9,7 +9,7 @@ fixed through queueing, execution and drain.
 ## Configuration
 
 ```rust
-use orbit_te::{EngineConfig, TransportSelectorConfig};
+use orbite::{EngineConfig, TransportSelectorConfig};
 
 let selector = TransportSelectorConfig::from_json(r#"{
   "policy": [
@@ -21,13 +21,13 @@ let selector = TransportSelectorConfig::from_json(r#"{
   ]
 }"#)?;
 let config = EngineConfig { selector: Some(selector), ..Default::default() };
-# Ok::<(), orbit_te::Error>(())
+# Ok::<(), orbite::Error>(())
 ```
 
 Pass `Transport::Unspec` to the request constructor to use candidate order.
 
 ```rust
-use orbit_te::{IntentType, TransferRequest, Transport};
+use orbite::{IntentType, TransferRequest, Transport};
 
 let request = TransferRequest::new(
     Transport::Unspec,
@@ -152,7 +152,7 @@ The reference is frozen TENT commit
 `e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`, specifically
 `runtime/transport_selector.h` and `runtime/transport_selector.cpp`.
 
-| TENT owner/behavior | OrbitTE implementation |
+| TENT owner/behavior | OrbiTE implementation |
 | --- | --- |
 | Ordered and named policies, request intent | `runtime/transport_selector/config.rs` and `TransferRequest`. An invalid intent rejects the config. A named request keeps its binding in legacy mode |
 | `SelectionContext`, owner capability checks | Original memory types and both segment descriptors, including boot identity and IPC consent |
@@ -162,10 +162,10 @@ The reference is frozen TENT commit
 | `canMergeRequests` policy boundary | Physical merging compares the complete preselected route, including its policy, intent, mask and QP pool, along with hint, priority, QoS and registration authority. A larger physical span keeps its members’ selected route |
 
 TENT's automatic memory order follows the buffer's registered transport list.
-OrbitTE registrations advertise capabilities without an insertion order, so
+OrbiTE registrations advertise capabilities without an insertion order, so
 automatic memory selection tries MNNVL, NVLink, RDMA, SHM, then the configured socket payload (TCP or HP-TCP). A policy can reverse
 that order. TENT documents GDS → io_uring → RDMA for files. Its frozen
-`getDefaultPolicies` lists GDS and io_uring. OrbitTE supports these two local
+`getDefaultPolicies` lists GDS and io_uring. OrbiTE supports these two local
 owners. RDMA-to-file needs a remote file segment. SHM merges respect the physical registration and segment transfer limits. Overlapping allocation offsets retain their public order. The smaller HP-TCP endpoint frame limit caps merging. The selected rule retains its bounded candidate order. Only the engine’s
 physical retry owner advances that index. A rejected initial hint still fails
 selection. An eligible hint moves to the front of the rule and its later

@@ -6,9 +6,9 @@ impl Process {
     fn start(role: &str, dir: &Path, mount: &Path) -> Self {
         let c = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", CHILD, "--ignored", "--nocapture"])
-            .env("ORBITTE_SHM_ROLE", role)
-            .env("ORBITTE_SHM_CONTROL", dir)
-            .env("ORBITTE_SHM_MOUNT", mount)
+            .env("ORBITE_SHM_ROLE", role)
+            .env("ORBITE_SHM_CONTROL", dir)
+            .env("ORBITE_SHM_MOUNT", mount)
             .stdin(Stdio::null())
             .spawn()
             .unwrap();
@@ -67,7 +67,7 @@ fn config_path(cxl: bool, d: &Dir) -> &Path {
 fn paused(fd: &fs::File, start: i64, len: i64, write: bool) -> io::Result<()> {
     (NATIVE.lock)(fd, start, len, write)?;
     if start < GATES {
-        let dir = PathBuf::from(std::env::var_os("ORBITTE_SHM_CONTROL").unwrap());
+        let dir = PathBuf::from(std::env::var_os("ORBITE_SHM_CONTROL").unwrap());
         put(&dir.join("inside"), b"");
         wait(&dir.join("resume"));
     }
@@ -91,9 +91,9 @@ static UNCERTAIN: Sys = Sys {
 #[test]
 #[ignore = "spawned by the cross-process SHM lifetime controls"]
 fn shm_child() -> Result<()> {
-    let role = std::env::var("ORBITTE_SHM_ROLE").unwrap();
-    let dir = PathBuf::from(std::env::var_os("ORBITTE_SHM_CONTROL").unwrap());
-    let mount = PathBuf::from(std::env::var_os("ORBITTE_SHM_MOUNT").unwrap());
+    let role = std::env::var("ORBITE_SHM_ROLE").unwrap();
+    let dir = PathBuf::from(std::env::var_os("ORBITE_SHM_CONTROL").unwrap());
+    let mount = PathBuf::from(std::env::var_os("ORBITE_SHM_MOUNT").unwrap());
     let mut cfg = config(&mount);
     cfg.tcp = false;
     if role == "source" {

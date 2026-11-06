@@ -12,7 +12,7 @@ static PAUSED: AtomicBool = AtomicBool::new(true);
 fn discover(config: &RdmaConfig) -> Result<(crate::Topology, Vec<RdmaAddress>)> {
     let mut initial = config.clone();
     initial.gid_index = Some(
-        std::env::var("ORBITTE_INITIAL_GID")
+        std::env::var("ORBITE_INITIAL_GID")
             .unwrap()
             .parse()
             .unwrap(),
@@ -61,7 +61,7 @@ fn native_context_recovery_preserves_pd_mrs_and_strict_gid_selection() {
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(std::env::var("ORBITTE_RDMA_LOCK").unwrap())
+        .open(std::env::var("ORBITE_RDMA_LOCK").unwrap())
         .unwrap();
     assert_eq!(
         // SAFETY: The fixture File owns this descriptor while the kernel acquires its lock.
@@ -69,12 +69,12 @@ fn native_context_recovery_preserves_pd_mrs_and_strict_gid_selection() {
         0,
         "the selected RNIC lock must be held through native close"
     );
-    let device = std::env::var("ORBITTE_SHARED_DEVICE").unwrap();
-    let port: u8 = std::env::var("ORBITTE_SHARED_PORT")
+    let device = std::env::var("ORBITE_SHARED_DEVICE").unwrap();
+    let port: u8 = std::env::var("ORBITE_SHARED_PORT")
         .unwrap()
         .parse()
         .unwrap();
-    let initial: u8 = std::env::var("ORBITTE_INITIAL_GID")
+    let initial: u8 = std::env::var("ORBITE_INITIAL_GID")
         .unwrap()
         .parse()
         .unwrap();
@@ -188,7 +188,7 @@ fn native_context_recovery_preserves_pd_mrs_and_strict_gid_selection() {
             (0, 0, 0, 0, 0, 0)
         );
         println!(
-            "ORBITTE_CONTEXT_RECOVERY {{\"automatic\":{},\"initial_gid\":{initial},\"selected_gid\":{selected},\"recoveries\":2,\"native_pd\":{},\"persistent_mrs\":2,\"physical_port_fault\":false,\"payload_tested\":false}}",
+            "ORBITE_CONTEXT_RECOVERY {{\"automatic\":{},\"initial_gid\":{initial},\"selected_gid\":{selected},\"recoveries\":2,\"native_pd\":{},\"persistent_mrs\":2,\"physical_port_fault\":false,\"payload_tested\":false}}",
             pin.is_none(),
             original.1
         );

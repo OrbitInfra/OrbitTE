@@ -16,7 +16,7 @@ char *la_objsearch(const char *name, uintptr_t *cookie, unsigned int flag) {
     base = base ? base + 1 : name;
     if (flag == LA_SER_ORIG && strncmp(base, "libcufile.so", sizeof("libcufile.so") - 1) == 0) {
         write(2, "cuFile lookup\n", sizeof("cuFile lookup\n") - 1);
-        return getenv("ORBITTE_TEST_CUFILE"); /* NULL makes the SONAME unavailable. */
+        return getenv("ORBITE_TEST_CUFILE"); /* NULL makes the SONAME unavailable. */
     }
     if (flag == LA_SER_ORIG && strncmp(base, "liburing.so", sizeof("liburing.so") - 1) == 0)
         write(2, "liburing lookup\n", sizeof("liburing lookup\n") - 1);

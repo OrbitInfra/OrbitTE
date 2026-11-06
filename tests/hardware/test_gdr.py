@@ -33,8 +33,8 @@ class GpuDirectEvidence(unittest.TestCase):
                                           dict(kind='gdr_post', opcode=2, code=0)]
         evidence = {}
         for role, native in rows.items():
-            public = [('ORBITTE_MEMORY ', dict(base=1000, length=4096, cuda=True)),
-                      ('ORBITTE_GPU_MR_STATS ', dict(opened_private_pds=12 if role == 'source' else 0,
+            public = [('ORBITE_MEMORY ', dict(base=1000, length=4096, cuda=True)),
+                      ('ORBITE_GPU_MR_STATS ', dict(opened_private_pds=12 if role == 'source' else 0,
                                                    closed_private_pds=12 if role == 'source' else 0,
                                                    active_private_pds=0))]
             evidence[role] = {'stdout.log': '\n'.join(prefix + json.dumps(row) for prefix, row in public),
@@ -59,7 +59,7 @@ class GpuDirectEvidence(unittest.TestCase):
             kept.append(dict(pid=123, kind='gdr_invalidation', context=mr['context'],
                              qpn=90+mr['context'], rkey=mr['rkey']))
         source['cq-fault-0.jsonl'] = '\n'.join(map(json.dumps, kept))
-        source['stdout.log'] = source['stdout.log'].splitlines()[0] + '\nORBITTE_GPU_MR_STATS ' + json.dumps(
+        source['stdout.log'] = source['stdout.log'].splitlines()[0] + '\nORBITE_GPU_MR_STATS ' + json.dumps(
             dict(active_private_pds=0, opened_private_pds=0, closed_private_pds=0,
                  opened_keys=12, invalidated_keys=12, reused_connections=8))
         requester = evidence['requester']

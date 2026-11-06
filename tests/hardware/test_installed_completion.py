@@ -20,11 +20,11 @@ def fixture(killed, operation, generations):
         rows.append(row)
         return row['seq']
     def receipt(role, kind, **fields):
-        evidence[role]['stdout.log'] += 'ORBITTE_INSTALLED_' + kind + ' ' + json.dumps(fields) + '\n'
+        evidence[role]['stdout.log'] += 'ORBITE_INSTALLED_' + kind + ' ' + json.dumps(fields) + '\n'
     for g in range(len(phases)):
         for context in range(2):
             event(g, 0, 'context', context=context, provider='/lib/libmlx5.so.1')
-        evidence['requester']['maps-' + str(g) + '.txt'] = '/lib/libmlx5.so.1\n/tmp/liborbitte_cq_fault.so\n'
+        evidence['requester']['maps-' + str(g) + '.txt'] = '/lib/libmlx5.so.1\n/tmp/liborbite_cq_fault.so\n'
     for phase in range(generations):
         g = phase if target else 0
         for role, address in [('source', 10000), ('requester', 100000)]:

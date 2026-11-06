@@ -18,7 +18,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
     std::unordered_map<std::string, SegmentID> peers_;
     std::vector<Callback> callbacks_;
     std::vector<Fragment> tasks_;
-    std::vector<orbitte_task_v1> snapshot_;
+    std::vector<orbite_task_v1> snapshot_;
     std::vector<bool> delivered_;
     bool abort_requested_ = false;
     BatchID batch_ = 0;
@@ -63,7 +63,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
         : engine_(std::move(engine)), handle_(handle) {}
     void start(const std::vector<ScatterTransferRange> &ranges) {
         size_t limit = 0;
-        if (!engine_ || orbitte_limits_v1(handle_, &limit)) {
+        if (!engine_ || orbite_limits_v1(handle_, &limit)) {
             outcome_ = Status::Context("engine is unavailable");
             return;
         }
@@ -140,7 +140,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
                 }
                 auto [p, fresh] = peers_.try_emplace(r.remote_segment, 0);
                 if (fresh) {
-                    auto rc = orbitte_scatter_peer_v1(handle_, p->first.c_str(), &p->second);
+                    auto rc = orbite_scatter_peer_v1(handle_, p->first.c_str(), &p->second);
                     if (rc) {
                         peers_.erase(p);
                         complete(ri, i,
@@ -163,7 +163,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
         }
         if (requests.empty()) {
             if (batch_)
-                (void)orbitte_abandon_v1(handle_, batch_);
+                (void)orbite_abandon_v1(handle_, batch_);
             batch_ = 0;
             close();
             return;
@@ -175,7 +175,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
             s = TransferEngine::submit(engine_, batch_, requests, nullptr, true);
         } catch (...) {
             // The C++ marshaller allocates before entering the Rust submit call.
-            (void)orbitte_abandon_v1(handle_, batch_);
+            (void)orbite_abandon_v1(handle_, batch_);
             batch_ = 0;
             throw;
         }
@@ -195,7 +195,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
     bool uncertain() const { return uncertain_; }
     Status wait(std::chrono::steady_clock::time_point end) {
         if (!submitted_ && batch_ && !uncertain_) {
-            (void)orbitte_abandon_v1(handle_, batch_);
+            (void)orbite_abandon_v1(handle_, batch_);
             batch_ = 0;
         }
         if (uncertain_ || !batch_)
@@ -208,7 +208,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
                 uncertain_ = true;
                 return outcome_ = Status::BatchCleanupDeferred(progress.ToString());
             }
-            if (orbitte_tasks_v1(handle_, batch_, snapshot_.data(), snapshot_.size()) != 0) {
+            if (orbite_tasks_v1(handle_, batch_, snapshot_.data(), snapshot_.size()) != 0) {
                 uncertain_ = true;
                 return outcome_ = Status::BatchCleanupDeferred("cannot inspect scatter owners");
             }
@@ -240,7 +240,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
             }
             if (overall.s != tent::INITIAL && overall.s != tent::PENDING &&
                 std::all_of(delivered_.begin(), delivered_.end(), [](bool v) { return v; })) {
-                auto rc = orbitte_reap_v1(handle_, batch_);
+                auto rc = orbite_reap_v1(handle_, batch_);
                 if (!rc) {
                     batch_ = 0;
                     tasks_.clear();

@@ -4,8 +4,8 @@ use std::env;
 use std::sync::Arc;
 use std::thread;
 
-use orbit_te::cuda::{CudaMemory, retained_resources};
-use orbit_te::{Error, Result};
+use orbite::cuda::{CudaMemory, retained_resources};
+use orbite::{Error, Result};
 
 const GUARD: usize = 67;
 const WORKERS: usize = 8;

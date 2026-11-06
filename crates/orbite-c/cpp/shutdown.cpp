@@ -59,7 +59,7 @@ void child_fork() {
 void drain(std::vector<Watcher::Peer> &peers) {
     for (const auto &p : peers)
         if (auto live = p.owner.lock())
-            (void)orbitte_close_v1(p.handle);
+            (void)orbite_close_v1(p.handle);
 }
 void stop() {
     std::unique_ptr<Watcher> w;

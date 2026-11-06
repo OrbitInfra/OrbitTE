@@ -1,17 +1,17 @@
 //! Guarded release measurements for CPU submission and same-host memory transports.
-use orbit_te::EngineConfig;
-use orbit_te::{Error, Permission, Result, TransferEngine, TransferOp, TransferRequest, Transport};
+use orbite::EngineConfig;
+use orbite::{Error, Permission, Result, TransferEngine, TransferOp, TransferRequest, Transport};
 use std::time::{Duration, Instant};
 
 fn engine(_enabled: bool, transport: Transport) -> Result<TransferEngine> {
     let hp = transport == Transport::HpTcp;
     let base = EngineConfig {
         tcp: !hp,
-        shm: orbit_te::ShmConfig {
+        shm: orbite::ShmConfig {
             enable: transport == Transport::Shm,
             ..Default::default()
         },
-        hp_tcp: orbit_te::HpTcpConfig {
+        hp_tcp: orbite::HpTcpConfig {
             enable: hp,
             ..Default::default()
         },
@@ -24,7 +24,7 @@ fn engine(_enabled: bool, transport: Transport) -> Result<TransferEngine> {
                 .local_addr()?
                 .port();
             let config = EngineConfig {
-                metrics: orbit_te::metrics::MetricsConfig {
+                metrics: orbite::metrics::MetricsConfig {
                     enabled: _enabled,
                     http_host: "127.0.0.1".into(),
                     http_port: port,

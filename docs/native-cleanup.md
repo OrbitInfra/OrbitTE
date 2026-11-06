@@ -32,7 +32,7 @@ device loss and provider-specific teardown behavior remain separate gates.
 
 ## Execute the profile
 
-Use `runner: "orbitte-multirail"` with the identity-pinned two-node profile,
+Use `runner: "orbite-multirail"` with the identity-pinned two-node profile,
 two physical `rails`, port 1/GID selection and one resource lock per RNIC.
 Select `large-qp-cleanup-error` or `large-channel-busy`, an explicit
 `fault_role` (`source` or `requester`), `fault_rail`, READ/WRITE and lane count.
@@ -85,7 +85,7 @@ fails. This is the same endpoint/context ownership boundary used here.
 
 In v0.3.14 an explicit endpoint teardown or context disable can be retried.
 The native destructors fail stop if teardown still reports live resources.
-OrbitTE reports `Unquiesced` and quarantines the remaining native owners after
+OrbiTE reports `Unquiesced` and quarantines the remaining native owners after
 an ambiguous destroy. The grant and device teardown controls check exact
 retention across explicit close, repeated close and Drop.
 It also preserves unresolved grant loans and quota until a native receipt
@@ -94,7 +94,7 @@ identical error policy or native wire compatibility.
 
 TENT's `LocalBufferManager::removeBuffer` removes context-keyed registration
 entries after calling `RdmaContext::unregisterMemReg`; that method reports an
-MR deregistration error after removing its tracking entry. OrbitTE retains the
+MR deregistration error after removing its tracking entry. OrbiTE retains the
 failed MR and backing instead. Its per-request Type-2 MW authority and retained
 key/grant charges are deliberate Rust ownership contracts, not features copied
 from TENT's buffer registry.

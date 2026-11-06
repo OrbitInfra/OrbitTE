@@ -18,9 +18,9 @@ class InstalledDiscovery(unittest.TestCase):
         for role, record in self.evidence.items():
             node = self.profile['nodes'][self.case[role]]
             inventory = dict(**node, numa_nodes=[0, 1], allowed_cpus=[0, 1], devices=[])
-            rows = [('ORBITTE_INSTALLED_DISCOVERY_CONFIG ', dict(device=None, port=None, gid_index=None,
+            rows = [('ORBITE_INSTALLED_DISCOVERY_CONFIG ', dict(device=None, port=None, gid_index=None,
                      whitelist=self.profile['rails'], blacklist=self.profile['rails'])),
-                    ('ORBITTE_INSTALLED_DISCOVERY_PIN ', dict(gid_index=255, unavailable=True))]
+                    ('ORBITE_INSTALLED_DISCOVERY_PIN ', dict(gid_index=255, unavailable=True))]
             text = record['stdout.log']
             for i, name in enumerate(self.profile['rails']):
                 gid = dict(index=3, address='::ffff:10.0.0.' + str(i + 1), kind='RoCE v2',
@@ -30,11 +30,11 @@ class InstalledDiscovery(unittest.TestCase):
                 attrs = {'rdma.selected': 'true', 'rdma.port': '1', 'rdma.gid_index': '3',
                          'rdma.gid': gid['address'], 'rdma.gid_type': 'RoCE v2', 'rdma.net_device': gid['netdev'],
                          'rdma.net_device_index': str(gid['ifindex']), 'rdma.lid': '0', 'rdma.link_layer': '2'}
-                rows.append(('ORBITTE_INSTALLED_TOPOLOGY_NIC ', dict(id=i, name=name, pci=str(i), numa=1, attrs=attrs)))
-                old = 'ORBITTE_INSTALLED_NIC ' + json.dumps(dict(name=name, pci=str(i)))
-                text = text.replace(old, 'ORBITTE_INSTALLED_NIC ' + json.dumps(dict(name=name,pci=str(i),gid=gid['address'],gid_type='RoCE v2')))
+                rows.append(('ORBITE_INSTALLED_TOPOLOGY_NIC ', dict(id=i, name=name, pci=str(i), numa=1, attrs=attrs)))
+                old = 'ORBITE_INSTALLED_NIC ' + json.dumps(dict(name=name, pci=str(i)))
+                text = text.replace(old, 'ORBITE_INSTALLED_NIC ' + json.dumps(dict(name=name,pci=str(i),gid=gid['address'],gid_type='RoCE v2')))
             for numa, ranks in [(0, [[], [], [0, 1]]), (1, [[0, 1], [], []]), (None, [[], [], [0, 1]])]:
-                rows.append(('ORBITTE_INSTALLED_TOPOLOGY_MEMORY ', dict(name='*' if numa is None else 'cpu:' + str(numa), numa=numa, ranks=ranks)))
+                rows.append(('ORBITE_INSTALLED_TOPOLOGY_MEMORY ', dict(name='*' if numa is None else 'cpu:' + str(numa), numa=numa, ranks=ranks)))
             record['stdout.log'] = text + '\n' + '\n'.join(prefix + json.dumps(row) for prefix, row in rows)
             record['inventory-before.json'] = record['inventory-after.json'] = json.dumps(inventory)
             result = json.loads(record['result.json']); result['inventory_tool_sha256'] = 'b' * 64
@@ -44,8 +44,8 @@ class InstalledDiscovery(unittest.TestCase):
         installed.verify(self.profile, self.case, self.evidence)
         profile = {**self.profile, 'gid_index': 3, 'nodes': {**self.profile['nodes'], 'a': {**self.profile['nodes']['a'], 'bind': '127.0.0.1:0'}}}
         _, environment = installed.command(profile, self.case, 'a', 'source', '/tmp/unused')
-        self.assertNotIn('ORBITTE_SHARED_GID', environment)
-        self.assertEqual(environment['ORBITTE_HOST_DISCOVERY'], 'auto')
+        self.assertNotIn('ORBITE_SHARED_GID', environment)
+        self.assertEqual(environment['ORBITE_HOST_DISCOVERY'], 'auto')
         for value in ('pinned', True, None):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 installed.validate({**self.case, 'discovery': value})

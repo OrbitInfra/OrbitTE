@@ -245,7 +245,7 @@ unsafe extern "C" fn create(
         sys::CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED
     );
     // SAFETY: the static C string names a new anonymous fd owned by the fixture.
-    let fd = unsafe { libc::memfd_create(c"orbitte-vmm".as_ptr(), libc::MFD_CLOEXEC) };
+    let fd = unsafe { libc::memfd_create(c"orbite-vmm".as_ptr(), libc::MFD_CLOEXEC) };
     assert!(fd >= 0);
     // SAFETY: a successful memfd_create returns exactly one owned descriptor.
     let file = unsafe { File::from_raw_fd(fd) };

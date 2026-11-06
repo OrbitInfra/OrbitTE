@@ -37,7 +37,7 @@ int main() {
     uint64_t length, base, cap;
     while (std::cin >> length >> base >> cap) {
         const auto plan = mooncake::tent::planRdmaSlices(length, base, cap);
-        std::cout << "ORBITTE_RDMA_GEOMETRY " << length << ' ' << base << ' ' << cap
+        std::cout << "ORBITE_RDMA_GEOMETRY " << length << ' ' << base << ' ' << cap
                   << ' ' << plan.block_size << ' ' << plan.count << '\n';
     }
     return std::cin.eof() ? 0 : 1;
@@ -69,7 +69,7 @@ int main() {
         command = ([str(args.binary.resolve()), TEST] if args.binary else
                    ["cargo", "test", "--locked", "--features", "rdma", "--lib", TEST, "--"])
         rust = run("rust-plans", command + ["--exact", "--nocapture"])
-        expected = re.findall(r"^ORBITTE_RDMA_GEOMETRY [0-9 ]+$", rust, re.M)
+        expected = re.findall(r"^ORBITE_RDMA_GEOMETRY [0-9 ]+$", rust, re.M)
         if len(expected) != 16 or len(set(expected)) != 16 or "test result: ok. 1 passed;" not in rust:
             raise ValueError("geometry selector must execute exactly one test and sixteen distinct plans")
         inputs = ("\n".join(" ".join(row.split()[1:4]) for row in expected) + "\n").encode()

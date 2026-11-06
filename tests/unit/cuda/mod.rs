@@ -594,7 +594,7 @@ fn peer_gpu_tcp_stages_both_directions_for_a_host_requester() {
         .register_cuda_memory_batch(&[(memory(&owner), 0, 12)], Permission::RemoteReadWrite)
         .unwrap();
     // CI supplies the no-default-features test executable for an actual CPU-only requester.
-    let binary = std::env::var_os("ORBITTE_TEST_CPU_BINARY")
+    let binary = std::env::var_os("ORBITE_TEST_CPU_BINARY")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::current_exe().unwrap());
     let result = std::process::Command::new(binary)
@@ -603,8 +603,8 @@ fn peer_gpu_tcp_stages_both_directions_for_a_host_requester() {
             "--ignored",
             "runtime::transport_selector::tests::peer_gpu_tcp_host_child",
         ])
-        .env("ORBITTE_TEST_PEER", source.endpoint().to_string())
-        .env("ORBITTE_TEST_EPOCH", source.source_epoch().to_string())
+        .env("ORBITE_TEST_PEER", source.endpoint().to_string())
+        .env("ORBITE_TEST_EPOCH", source.source_epoch().to_string())
         .output()
         .unwrap();
     assert!(

@@ -378,7 +378,7 @@ class NativeEvidence(unittest.TestCase):
             flags = ['gcc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread']
             subprocess.run([*flags, '-fPIC', '-shared', str(root/'nvlink_observer.c'), '-ldl', '-o', str(library)], check=True, capture_output=True)
             subprocess.run([*flags, '-rdynamic', str(root/'test_nvlink_observer.c'), '-ldl', '-o', str(control)], check=True, capture_output=True)
-            result = subprocess.run([str(control)], env={**os.environ, 'LD_PRELOAD': str(library), 'ORBITTE_IPC_LOG': str(log)}, capture_output=True, timeout=10)
+            result = subprocess.run([str(control)], env={**os.environ, 'LD_PRELOAD': str(library), 'ORBITE_IPC_LOG': str(log)}, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             rows = [json.loads(line) for line in log.read_text().splitlines()]
             sync, rows = rows[-3:], rows[:-3]
@@ -407,7 +407,7 @@ class NativeEvidence(unittest.TestCase):
             self.assertEqual(rows[-1]['address'], 0x123456789abc)
             staged_log = tmp/'staged.jsonl'
             staged = subprocess.run([str(control)], env={**os.environ, 'LD_PRELOAD': str(library),
-                'ORBITTE_IPC_LOG': str(staged_log), 'ORBITTE_STAGING_OBSERVE': '1'}, capture_output=True, timeout=10)
+                'ORBITE_IPC_LOG': str(staged_log), 'ORBITE_STAGING_OBSERVE': '1'}, capture_output=True, timeout=10)
             self.assertEqual(staged.returncode, 0, staged.stderr)
             staged_rows = [json.loads(line) for line in staged_log.read_text().splitlines()]
             returns = [r for r in staged_rows if not r['kind'].endswith('_begin')]

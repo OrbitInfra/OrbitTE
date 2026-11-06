@@ -1,6 +1,6 @@
 /* OrbitInfra/Mooncake extensions outside the Mooncake v0.3.14 C ABI. */
-#ifndef ORBITTE_TENT_EXTENSIONS_H
-#define ORBITTE_TENT_EXTENSIONS_H
+#ifndef ORBITE_TENT_EXTENSIONS_H
+#define ORBITE_TENT_EXTENSIONS_H
 #include "tent/transfer_engine.h"
 #ifdef __cplusplus
 extern "C" {

@@ -207,7 +207,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbit-te"
+name = "orbite"
 version = "0.1.0-alpha.1"
 dependencies = [
  "bindgen",
@@ -228,12 +228,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbit-te-c"
+name = "orbite-c"
 version = "0.1.0-alpha.1"
 dependencies = [
  "libc",
  "log",
- "orbit-te",
+ "orbite",
  "serde_json",
 ]
 

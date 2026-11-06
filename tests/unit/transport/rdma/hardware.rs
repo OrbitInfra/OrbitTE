@@ -85,26 +85,26 @@ static VERBS: sys::Verbs = sys::Verbs {
 mod worker_pool;
 
 fn rdma_config() -> RdmaConfig {
-    let name = env::var("ORBITTE_SHARED_DEVICE").unwrap();
-    let mut config = if env::var("ORBITTE_RDMA_DISCOVERY").as_deref() == Ok("1") {
+    let name = env::var("ORBITE_SHARED_DEVICE").unwrap();
+    let mut config = if env::var("ORBITE_RDMA_DISCOVERY").as_deref() == Ok("1") {
         RdmaConfig {
             rdma_whitelist: vec![name],
             ..Default::default()
         }
     } else {
         let mut config = RdmaConfig::new(name);
-        config.gid_index = Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap());
+        config.gid_index = Some(env::var("ORBITE_SHARED_GID").unwrap().parse().unwrap());
         config
     };
     config.hop_limit = 64;
-    if env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1") {
+    if env::var("ORBITE_RDMA_EVENTS").as_deref() == Ok("1") {
         config.progress_mode = super::super::super::RdmaProgressMode::EventDriven;
     }
     config
 }
 
 fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile: bool) {
-    let enabled = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
+    let enabled = env::var("ORBITE_RDMA_EVENTS").as_deref() == Ok("1");
     let aborted = idle.progress_failures != 0;
     assert!(
         !aborted || fault_profile,
@@ -145,7 +145,7 @@ fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile:
         }
     }
     println!(
-        "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_sources\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"sources\":0}}",
+        "ORBITE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_sources\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"sources\":0}}",
         closed.opened_completion_channels,
         idle.completion_event_sources,
         closed.completion_events,
@@ -164,15 +164,15 @@ fn record_topology(engine: &crate::TransferEngine) {
     assert_eq!(selected.len(), 1);
     let nic = selected[0];
     let attrs = &nic.device_attrs;
-    assert_eq!(nic.name, env::var("ORBITTE_SHARED_DEVICE").unwrap());
+    assert_eq!(nic.name, env::var("ORBITE_SHARED_DEVICE").unwrap());
     assert_eq!(attrs["rdma.port"], "1");
     assert_eq!(
         attrs["rdma.gid_index"],
-        env::var("ORBITTE_SHARED_GID").unwrap()
+        env::var("ORBITE_SHARED_GID").unwrap()
     );
     assert_eq!(attrs["rdma.gid_type"], "RoCE v2");
     assert_ne!(attrs["rdma.net_device_index"], "0");
-    if env::var("ORBITTE_RDMA_DISCOVERY").as_deref() == Ok("1") {
+    if env::var("ORBITE_RDMA_DISCOVERY").as_deref() == Ok("1") {
         assert_eq!(
             topology.nic_list.len(),
             1,
@@ -180,7 +180,7 @@ fn record_topology(engine: &crate::TransferEngine) {
         );
     }
     println!(
-        "ORBITTE_TOPOLOGY {{\"device\":\"{}\",\"port\":{},\"gid_index\":{},\"gid\":\"{}\",\"gid_type\":\"{}\",\"net_device_index\":{}}}",
+        "ORBITE_TOPOLOGY {{\"device\":\"{}\",\"port\":{},\"gid_index\":{},\"gid\":\"{}\",\"gid_type\":\"{}\",\"net_device_index\":{}}}",
         nic.name,
         attrs["rdma.port"],
         attrs["rdma.gid_index"],
@@ -213,28 +213,28 @@ fn verify(memory: &crate::RegisteredMemory, expected: &[u8]) {
 #[test]
 #[ignore = "requires an explicitly selected two-host RNIC profile and original resource locks"]
 fn shared_cq_peer() {
-    if env::var("ORBITTE_SHARED_QP").is_ok() {
+    if env::var("ORBITE_SHARED_QP").is_ok() {
         shared_qp::run();
         return;
     }
-    if env::var("ORBITTE_SHARED_DUPLEX").as_deref() == Ok("1") {
+    if env::var("ORBITE_SHARED_DUPLEX").as_deref() == Ok("1") {
         duplex_completion_peer();
         return;
     }
-    if env::var("ORBITTE_RDMA_MULTI_CONTEXT").as_deref() == Ok("1") {
+    if env::var("ORBITE_RDMA_MULTI_CONTEXT").as_deref() == Ok("1") {
         multi_context::registration();
     }
     // Keep readiness and JSON on their own lines after libtest's name prefix.
     println!();
-    let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
+    let role = env::var("ORBITE_SHARED_ROLE").unwrap();
     assert!(matches!(role.as_str(), "source" | "requester"));
     let source = role == "source";
-    let payload: usize = env::var("ORBITTE_SHARED_PAYLOAD").unwrap().parse().unwrap();
+    let payload: usize = env::var("ORBITE_SHARED_PAYLOAD").unwrap().parse().unwrap();
     assert!((4096..=8 << 20).contains(&payload));
-    let capacity: usize = env::var("ORBITTE_SHARED_CQES").unwrap().parse().unwrap();
-    let window: usize = env::var("ORBITTE_SHARED_WINDOW").unwrap().parse().unwrap();
+    let capacity: usize = env::var("ORBITE_SHARED_CQES").unwrap().parse().unwrap();
+    let window: usize = env::var("ORBITE_SHARED_WINDOW").unwrap().parse().unwrap();
     assert!((1..=COUNT).contains(&capacity) && (1..=2).contains(&window));
-    let seed: u64 = env::var("ORBITTE_SHARED_SEED").unwrap().parse().unwrap();
+    let seed: u64 = env::var("ORBITE_SHARED_SEED").unwrap().parse().unwrap();
     let stride = payload + 2 * GUARD;
     let length = COUNT * stride;
     let mut config = rdma_config();
@@ -282,9 +282,9 @@ fn shared_cq_peer() {
         .register_host(Arc::clone(&backing), 0, length, Permission::RemoteReadWrite)
         .unwrap();
     let mut stream = if source {
-        let listener = TcpListener::bind(env::var("ORBITTE_SHARED_BIND").unwrap()).unwrap();
+        let listener = TcpListener::bind(env::var("ORBITE_SHARED_BIND").unwrap()).unwrap();
         listener.set_nonblocking(true).unwrap();
-        println!("ORBITTE_READY {}", listener.local_addr().unwrap());
+        println!("ORBITE_READY {}", listener.local_addr().unwrap());
         std::io::stdout().flush().unwrap();
         let end = Instant::now() + TIMEOUT;
         loop {
@@ -299,7 +299,7 @@ fn shared_cq_peer() {
         }
     } else {
         TcpStream::connect_timeout(
-            &env::var("ORBITTE_SHARED_PEER").unwrap().parse().unwrap(),
+            &env::var("ORBITE_SHARED_PEER").unwrap().parse().unwrap(),
             Duration::from_secs(5),
         )
         .unwrap()
@@ -461,7 +461,7 @@ fn shared_cq_peer() {
         }
     }
     std::fs::write(
-        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        env::var("ORBITE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
     )
     .unwrap();
@@ -543,7 +543,7 @@ fn shared_cq_peer() {
     receive_stats(&closed);
     assert_eq!(closed.window_key_indices, 0);
     println!(
-        "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
+        "ORBITE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
         idle.active_endpoints,
         idle.active_grants,
         closed.active_endpoints,
@@ -552,14 +552,14 @@ fn shared_cq_peer() {
         closed.retained_grants
     );
     println!(
-        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        "ORBITE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
         idle.window_key_indices,
         closed.window_key_indices,
         closed.burned_window_keys,
         closed.window_key_exhaustions
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        "ORBITE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
         idle.async_event_sources, closed.async_event_sources, closed.acknowledged_async_events
     );
     assert_eq!(
@@ -603,10 +603,10 @@ fn shared_cq_peer() {
 #[ignore = "requires selected physical RNIC hosts and original resource locks; intentional provider/completion error"]
 fn source_window_peer() {
     println!();
-    let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
+    let role = env::var("ORBITE_SHARED_ROLE").unwrap();
     assert!(matches!(role.as_str(), "source" | "requester"));
     let source = role == "source";
-    let probe = env::var("ORBITTE_WINDOW_PROBE").unwrap();
+    let probe = env::var("ORBITE_WINDOW_PROBE").unwrap();
     assert!(matches!(
         probe.as_str(),
         "revoked"
@@ -647,9 +647,9 @@ fn source_window_peer() {
         .register_host(Arc::clone(&backing), 0, length, Permission::RemoteReadWrite)
         .unwrap();
     let mut stream = if source {
-        let listener = TcpListener::bind(env::var("ORBITTE_SHARED_BIND").unwrap()).unwrap();
+        let listener = TcpListener::bind(env::var("ORBITE_SHARED_BIND").unwrap()).unwrap();
         listener.set_nonblocking(true).unwrap();
-        println!("ORBITTE_READY {}", listener.local_addr().unwrap());
+        println!("ORBITE_READY {}", listener.local_addr().unwrap());
         std::io::stdout().flush().unwrap();
         let end = Instant::now() + TIMEOUT;
         loop {
@@ -664,7 +664,7 @@ fn source_window_peer() {
         }
     } else {
         TcpStream::connect_timeout(
-            &env::var("ORBITTE_SHARED_PEER").unwrap().parse().unwrap(),
+            &env::var("ORBITE_SHARED_PEER").unwrap().parse().unwrap(),
             Duration::from_secs(5),
         )
         .unwrap()
@@ -705,7 +705,7 @@ fn source_window_peer() {
     }
     endpoint.connect(&connection).unwrap();
     std::fs::write(
-        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        env::var("ORBITE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
     )
     .unwrap();
@@ -839,7 +839,7 @@ fn source_window_peer() {
     // Join the lane before observing its retired channels and consumers.
     progress.close(Instant::now() + TIMEOUT).unwrap();
     std::fs::write(
-        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        env::var("ORBITE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
     )
     .unwrap();
@@ -897,7 +897,7 @@ fn source_window_peer() {
     receive_stats(&closed);
     assert_eq!(closed.window_key_indices, 0);
     println!(
-        "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
+        "ORBITE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
         idle.active_endpoints,
         idle.active_grants,
         closed.active_endpoints,
@@ -906,14 +906,14 @@ fn source_window_peer() {
         closed.retained_grants
     );
     println!(
-        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        "ORBITE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
         idle.window_key_indices,
         closed.window_key_indices,
         closed.burned_window_keys,
         closed.window_key_exhaustions
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        "ORBITE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
         idle.async_event_sources, closed.async_event_sources, closed.acknowledged_async_events
     );
     assert_eq!(
@@ -955,7 +955,7 @@ fn source_mr_stats(idle: &RdmaStats, closed: &RdmaStats) {
         (0, 0)
     );
     println!(
-        "ORBITTE_SOURCE_MR_STATS {{\"idle_parents\":{},\"parents\":{},\"opened\":{},\"reused\":{},\"retained\":{}}}",
+        "ORBITE_SOURCE_MR_STATS {{\"idle_parents\":{},\"parents\":{},\"opened\":{},\"reused\":{},\"retained\":{}}}",
         idle.persistent_source_mrs,
         closed.persistent_source_mrs,
         closed.opened_source_mrs,
@@ -977,7 +977,7 @@ fn receive_stats(stats: &RdmaStats) {
         (0, 0, 0, 0, 0, 0)
     );
     println!(
-        "ORBITTE_RECEIVE_STATS {{\"completed_sends\":{},\"completed_receives\":{},\"receive_post_calls\":{},\"peak_receive_work_requests\":{},\"receive_work_requests\":{},\"retained_receive_work_requests\":{},\"message_mrs\":{},\"retained_message_mrs\":{},\"message_bytes\":{},\"retained_message_bytes\":{}}}",
+        "ORBITE_RECEIVE_STATS {{\"completed_sends\":{},\"completed_receives\":{},\"receive_post_calls\":{},\"peak_receive_work_requests\":{},\"receive_work_requests\":{},\"retained_receive_work_requests\":{},\"message_mrs\":{},\"retained_message_mrs\":{},\"message_bytes\":{},\"retained_message_bytes\":{}}}",
         stats.completed_sends,
         stats.completed_receives,
         stats.receive_post_calls,
@@ -1007,14 +1007,14 @@ fn duplex_binding(
 
 fn duplex_completion_peer() {
     println!();
-    let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
+    let role = env::var("ORBITE_SHARED_ROLE").unwrap();
     assert!(matches!(role.as_str(), "source" | "requester"));
     let source = role == "source";
-    let payload: usize = env::var("ORBITTE_SHARED_PAYLOAD").unwrap().parse().unwrap();
+    let payload: usize = env::var("ORBITE_SHARED_PAYLOAD").unwrap().parse().unwrap();
     assert!((4096..=8 << 20).contains(&payload));
-    let capacity: usize = env::var("ORBITTE_SHARED_CQES").unwrap().parse().unwrap();
+    let capacity: usize = env::var("ORBITE_SHARED_CQES").unwrap().parse().unwrap();
     assert!((1..=4).contains(&capacity));
-    let seed: u64 = env::var("ORBITTE_SHARED_SEED").unwrap().parse().unwrap();
+    let seed: u64 = env::var("ORBITE_SHARED_SEED").unwrap().parse().unwrap();
     let stride = payload + 2 * GUARD;
     let bank = COUNT * stride;
     let length = 2 * bank;
@@ -1049,9 +1049,9 @@ fn duplex_completion_peer() {
         .register_host(Arc::clone(&backing), 0, length, Permission::RemoteReadWrite)
         .unwrap();
     let mut stream = if source {
-        let listener = TcpListener::bind(env::var("ORBITTE_SHARED_BIND").unwrap()).unwrap();
+        let listener = TcpListener::bind(env::var("ORBITE_SHARED_BIND").unwrap()).unwrap();
         listener.set_nonblocking(true).unwrap();
-        println!("ORBITTE_READY {}", listener.local_addr().unwrap());
+        println!("ORBITE_READY {}", listener.local_addr().unwrap());
         std::io::stdout().flush().unwrap();
         let end = Instant::now() + TIMEOUT;
         loop {
@@ -1066,7 +1066,7 @@ fn duplex_completion_peer() {
         }
     } else {
         TcpStream::connect_timeout(
-            &env::var("ORBITTE_SHARED_PEER").unwrap().parse().unwrap(),
+            &env::var("ORBITE_SHARED_PEER").unwrap().parse().unwrap(),
             Duration::from_secs(5),
         )
         .unwrap()
@@ -1129,7 +1129,7 @@ fn duplex_completion_peer() {
             endpoint.connect(&peer_connections[slot]).unwrap();
         }
         std::fs::write(
-            env::var("ORBITTE_SHARED_MAPS").unwrap(),
+            env::var("ORBITE_SHARED_MAPS").unwrap(),
             std::fs::read("/proc/self/maps").unwrap(),
         )
         .unwrap();
@@ -1303,7 +1303,7 @@ fn duplex_completion_peer() {
         (0, 0, 0, 0, 0, 0)
     );
     println!(
-        "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
+        "ORBITE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
         idle.active_endpoints,
         idle.active_grants,
         closed.active_endpoints,
@@ -1312,14 +1312,14 @@ fn duplex_completion_peer() {
         closed.retained_grants
     );
     println!(
-        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        "ORBITE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
         idle.window_key_indices,
         closed.window_key_indices,
         closed.burned_window_keys,
         closed.window_key_exhaustions
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        "ORBITE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
         idle.async_event_sources, closed.async_event_sources, closed.acknowledged_async_events
     );
     println!(

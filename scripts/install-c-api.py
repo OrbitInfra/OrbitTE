@@ -24,7 +24,7 @@ def main():
     )
     p.add_argument("--debug", action="store_true", help="install a debug build")
     p.add_argument(
-        "--manifest-path", type=Path, default=ROOT / "crates/orbit-te-c/Cargo.toml"
+        "--manifest-path", type=Path, default=ROOT / "crates/orbite-c/Cargo.toml"
     )
     p.add_argument(
         "--engine-source", type=Path, help="use the matching unpublished engine package"
@@ -37,7 +37,7 @@ def main():
         "build",
         "--locked",
         "-p",
-        "orbit-te-c",
+        "orbite-c",
         "--features",
         args.features,
         "--message-format=json-render-diagnostics",
@@ -47,7 +47,7 @@ def main():
         cmd.extend(
             [
                 "--config",
-                "patch.crates-io.orbit-te.path="
+                "patch.crates-io.orbite.path="
                 + json.dumps(str(args.engine_source.resolve())),
             ]
         )
@@ -125,7 +125,7 @@ def main():
             )
         )
         version = next(
-            x["version"] for x in package["packages"] if x["name"] == "orbit-te-c"
+            x["version"] for x in package["packages"] if x["name"] == "orbite-c"
         )
         pc = lib / "pkgconfig/tent.pc"
         pc.parent.mkdir(exist_ok=True)
@@ -134,7 +134,7 @@ libdir=${{prefix}}/lib
 includedir=${{prefix}}/include
 
 Name: tent
-Description: OrbitTE TENT C transfer-engine ABI
+Description: OrbiTE TENT C transfer-engine ABI
 Version: {version}
 Libs: -L"${{libdir}}" -ltent
 Libs.private: {private}
@@ -145,7 +145,7 @@ Cflags: -I"${{includedir}}"
             (pc.parent / "tent-cpp.pc").write_text(f"""prefix=${{pcfiledir}}/../..
 libdir=${{prefix}}/lib
 Name: tent-cpp
-Description: OrbitTE native TENT and classic TE source adapters
+Description: OrbiTE native TENT and classic TE source adapters
 Version: {version}
 Requires: tent
 Libs: -L"${{libdir}}" -ltent_cpp

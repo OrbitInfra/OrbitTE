@@ -1,7 +1,7 @@
 """Two-host mixed GPU profiles for the installed peer supervisor."""
 from pathlib import Path
 
-PROTOCOL = 'orbitte-installed-mixed-gpu'
+PROTOCOL = 'orbite-installed-mixed-gpu'
 LEGS = {'tcp-local', 'tcp-pin', 'rdma-pin'}
 
 
@@ -35,7 +35,7 @@ def command(profile, case, node, role, root, ready=None):
         raise ValueError('expected the ready source endpoint and epoch')
     args = [role, profile['nodes'][node]['bind'], profile['rnic'], str(profile['gid_index']),
             case['staged_leg'], *(ready or [])]
-    return args, {'ORBITTE_HARDWARE_MAPS': root + '/maps.txt'}
+    return args, {'ORBITE_HARDWARE_MAPS': root + '/maps.txt'}
 
 
 def verify(case, evidence):
@@ -45,7 +45,7 @@ def verify(case, evidence):
     native = 27 if leg == 'rdma-pin' else 14
     for role, record in evidence.items():
         # The consumer checks all guards, task aliases and physical drain before emitting this line.
-        prefix = f'ORBITTE_MIXED_OK {role} {leg} '
+        prefix = f'ORBITE_MIXED_OK {role} {leg} '
         lines = [line for line in record['stdout.log'].splitlines() if line.startswith(prefix)]
         if len(lines) != 1:
             raise ValueError(f'missing or duplicate {role} mixed GPU receipt')

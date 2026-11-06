@@ -22,20 +22,20 @@ class InstalledInterruptionEvidence(unittest.TestCase):
                 for line in record['stdout.log'].splitlines():
                     prefix, raw = line.split(' ', 1)
                     row = json.loads(raw)
-                    if prefix == 'ORBITTE_INSTALLED_KILL':
+                    if prefix == 'ORBITE_INSTALLED_KILL':
                         row['rq_debt'] = case['parents'] if source else 0
                     rows.append((prefix, row))
                 for phase in range(case['generations'] - 1):
-                    start = next(r for p, r in rows if p == 'ORBITTE_INSTALLED_PHASE' and r['phase'] == phase)
-                    baseline = next(r for p, r in rows if p == 'ORBITTE_INSTALLED_ROUND' and r['phase'] == phase and r['round'] == 2)
+                    start = next(r for p, r in rows if p == 'ORBITE_INSTALLED_PHASE' and r['phase'] == phase)
+                    baseline = next(r for p, r in rows if p == 'ORBITE_INSTALLED_ROUND' and r['phase'] == phase and r['round'] == 2)
                     pending = dict(phase=phase, pid=start['pid'], held_grants=case['parents'], active_grants=case['parents'],
                                    sq_debt=0, rq_debt=case['parents'] if source else 0,
                                    windows=case['parents'] if source else 0, batches=0 if source else case['parents'],
                                    memory_busy=True, batch_busy=not source, progress_failures=0, progress_recoveries=0,
                                    **{k: baseline[k] for k in ('opened_qps', 'read_bytes', 'write_bytes')})
-                    rows.append(('ORBITTE_INSTALLED_PENDING', pending))
+                    rows.append(('ORBITE_INSTALLED_PENDING', pending))
                     if role != killed:
-                        rows.append(('ORBITTE_INSTALLED_DRAIN', dict(phase=phase, pid=start['pid'],
+                        rows.append(('ORBITE_INSTALLED_DRAIN', dict(phase=phase, pid=start['pid'],
                                      failed_batches=0 if source else case['parents'], sq_debt=0, rq_debt=0,
                                      grants=0, windows=0, batches=0, persistent_mrs=4,
                                      read_bytes=baseline['read_bytes'], write_bytes=baseline['write_bytes'],
@@ -57,7 +57,7 @@ class InstalledInterruptionEvidence(unittest.TestCase):
             for role, kind, key, value in controls:
                 broken = copy.deepcopy(evidence)
                 lines = broken[role]['stdout.log'].splitlines()
-                index = next(i for i, line in enumerate(lines) if line.startswith('ORBITTE_INSTALLED_' + kind + ' '))
+                index = next(i for i, line in enumerate(lines) if line.startswith('ORBITE_INSTALLED_' + kind + ' '))
                 prefix, raw = lines[index].split(' ', 1)
                 row = json.loads(raw)
                 row[key] = value

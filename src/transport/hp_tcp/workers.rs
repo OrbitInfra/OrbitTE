@@ -39,7 +39,7 @@ impl Workers {
             let handle = runtime.handle().clone();
             let (stop, stopped) = oneshot::channel();
             let thread = thread::Builder::new()
-                .name(format!("orbitte-hp-tcp-{i}"))
+                .name(format!("orbite-hp-tcp-{i}"))
                 .spawn(move || {
                     let _ = runtime.block_on(stopped);
                     // Dropping the reactor closes sockets and drops their loans on this worker.

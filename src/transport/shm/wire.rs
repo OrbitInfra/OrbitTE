@@ -15,12 +15,12 @@ pub(super) struct Name {
 impl Name {
     pub(super) fn basename(self) -> String {
         format!(
-            "orbitte-shm-{:016x}-{:08x}-{}",
+            "orbite-shm-{:016x}-{:08x}-{}",
             self.ns, self.pid, self.nonce
         )
     }
     pub(super) fn parse(s: &str) -> Option<Self> {
-        let mut fields = s.strip_prefix("orbitte-shm-")?.split('-');
+        let mut fields = s.strip_prefix("orbite-shm-")?.split('-');
         let ns = u64::from_str_radix(fields.next()?, 16).ok()?;
         let pid = u32::from_str_radix(fields.next()?, 16).ok()?;
         let nonce = fields.next()?.parse().ok()?;

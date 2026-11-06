@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn sparse_nodes_intersect_the_inherited_cpuset_before_round_robin() {
-    let root = std::env::temp_dir().join(format!("orbitte-affinity-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("orbite-affinity-{}", std::process::id()));
     let nodes = root.join("devices/system/node");
     for (node, cpus) in [(0, "0-3"), (2, "4-7"), (7, "8,10-12")] {
         let dir = nodes.join(format!("node{node}"));

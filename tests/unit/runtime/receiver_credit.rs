@@ -673,18 +673,18 @@ fn credit_metrics_scrape_the_real_sender_and_receiver_owners() {
         ("available_consumer_slots", 1),
         ("active_owners", 0),
     ] {
-        assert_eq!(metrics[format!("orbitte_receiver_credit_{name}")], value);
+        assert_eq!(metrics[format!("orbite_receiver_credit_{name}")], value);
     }
     engine.deactivate_receiver_credit(&peer, 1).unwrap();
     engine.connect_receiver_credit(&peer, 7, TIMEOUT).unwrap();
     let issued = source.metrics().unwrap().json();
-    assert_eq!(issued["orbitte_receiver_active_senders"], 1);
+    assert_eq!(issued["orbite_receiver_active_senders"], 1);
     assert_eq!(
-        issued["orbitte_receiver_reserved_requests"],
+        issued["orbite_receiver_reserved_requests"],
         crate::ReceiverCreditConfig::default().requests_per_sender
     );
     engine.disconnect_receiver_credit(&peer, TIMEOUT).unwrap();
     let closed = source.metrics().unwrap().json();
-    assert_eq!(closed["orbitte_receiver_active_senders"], 0);
-    assert_eq!(closed["orbitte_receiver_retired_senders_total"], 1);
+    assert_eq!(closed["orbite_receiver_active_senders"], 0);
+    assert_eq!(closed["orbite_receiver_retired_senders_total"], 1);
 }

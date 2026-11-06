@@ -37,9 +37,9 @@ int main(void) {
     }
     struct snapshot output;
     assert(sizeof(output) == 72);
-    assert(orbitte_cq_fault(1, 0, 2, 1, &output) == 0);
-    assert(orbitte_cq_fault(1, 0, 2, 1, &output) == EINVAL);
-    assert(orbitte_cq_fault(2, 0, 0, 0, &output) == EINVAL);
+    assert(orbite_cq_fault(1, 0, 2, 1, &output) == 0);
+    assert(orbite_cq_fault(1, 0, 2, 1, &output) == EINVAL);
+    assert(orbite_cq_fault(2, 0, 0, 0, &output) == EINVAL);
     struct ibv_cq cq = {.context = &context[0]};
     struct ibv_qp qp = {.context = &context[0], .send_cq = &cq, .qp_num = 7};
     struct ibv_sge sge = {.addr = 1024, .length = 64};
@@ -55,16 +55,16 @@ int main(void) {
     assert(received[0].wr_id == 3 && received[1].wr_id == 5 && received[1].status == IBV_WC_WR_FLUSH_ERR);
     poll_code = -5;
     assert(context[0].ops.poll_cq(&cq, 3, received) == -5 && polls == 2);
-    assert(orbitte_cq_fault(0, 0, 0, 0, &output) == 0 && output.posts == 1 && output.lost == 1 && output.errors == 0);
-    assert(orbitte_cq_fault(2, 0, 0, 0, &output) == 0 && output.armed == 0);
+    assert(orbite_cq_fault(0, 0, 0, 0, &output) == 0 && output.posts == 1 && output.lost == 1 && output.errors == 0);
+    assert(orbite_cq_fault(2, 0, 0, 0, &output) == 0 && output.armed == 0);
     poll_code = 3;
     assert(context[0].ops.poll_cq(&cq, 3, received) == 3 && received[1].wr_id == 9);
-    assert(orbitte_cq_fault(1, 1, 1, 1, &output) == 0 && output.posts == 0 && output.lost == 0);
+    assert(orbite_cq_fault(1, 1, 1, 1, &output) == 0 && output.posts == 0 && output.lost == 0);
     assert(context[0].ops.poll_cq(&cq, 3, received) == 3);
     struct cleanup_snapshot cleanup_output;
     assert(sizeof(cleanup_output) == 56);
-    assert(orbitte_cleanup_fault(1, &cleanup_output) == EINVAL);
-    assert(orbitte_cleanup_fault(2, &cleanup_output) == EINVAL);
+    assert(orbite_cleanup_fault(1, &cleanup_output) == EINVAL);
+    assert(orbite_cleanup_fault(2, &cleanup_output) == EINVAL);
     int blocked[2], other[2];
     assert(pipe(blocked) == 0 && pipe(other) == 0);
     context[0].cmd_fd = blocked[1];

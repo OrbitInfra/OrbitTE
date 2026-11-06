@@ -1,10 +1,10 @@
-#ifndef ORBITTE_RDMA_PORT_H
-#define ORBITTE_RDMA_PORT_H
+#ifndef ORBITE_RDMA_PORT_H
+#define ORBITE_RDMA_PORT_H
 
 #include <stdint.h>
 
 /* Only these values cross the shim boundary; provider structs stay in C. */
-struct orbitte_port_attr {
+struct orbite_port_attr {
     uint32_t state;
     uint32_t active_mtu;
     int32_t gid_tbl_len;
@@ -14,7 +14,7 @@ struct orbitte_port_attr {
     uint8_t active_width;
 };
 
-int orbitte_query_port(void *context, uint8_t port,
-                      struct orbitte_port_attr *result);
+int orbite_query_port(void *context, uint8_t port,
+                      struct orbite_port_attr *result);
 
 #endif

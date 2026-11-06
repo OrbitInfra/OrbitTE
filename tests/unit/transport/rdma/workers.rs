@@ -333,10 +333,10 @@ pub(super) fn observe_affinity(affinity: &crate::platform::cpu_probe::CpuAffinit
         actual, affinity.cpus,
         "RDMA data worker ignored its NUMA CPU mask"
     );
-    if std::env::var_os("ORBITTE_SHARED_RAILS").is_some() {
+    if std::env::var_os("ORBITE_SHARED_RAILS").is_some() {
         let node = affinity.node.map_or("null".into(), |node| node.to_string());
         println!(
-            "ORBITTE_WORKER_AFFINITY {{\"worker\":\"{}\",\"thread\":\"{:?}\",\"node\":{node},\"cpus\":{actual:?}}}",
+            "ORBITE_WORKER_AFFINITY {{\"worker\":\"{}\",\"thread\":\"{:?}\",\"node\":{node},\"cpus\":{actual:?}}}",
             thread::current().name().unwrap(),
             thread::current().id()
         );

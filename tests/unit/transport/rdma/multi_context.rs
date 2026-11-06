@@ -200,7 +200,7 @@ pub(super) fn registration() {
     );
     assert!(native.active.is_empty());
     println!(
-        "ORBITTE_MULTI_CONTEXT_MR {{\"contexts\":2,\"protection_domains\":2,\"registered_mrs\":7,\"published_mrs\":4,\"rolled_back_mrs\":3,\"reused_mrs\":8,\"peak_mr_bytes\":{},\"retired_idle_mrs\":2,\"retired_borrowed_mrs\":2,\"native_deregistration_receipts\":7,\"closed_contexts\":2,\"retained_mrs\":0,\"allocation_released\":true,\"same_rnic\":true}}",
+        "ORBITE_MULTI_CONTEXT_MR {{\"contexts\":2,\"protection_domains\":2,\"registered_mrs\":7,\"published_mrs\":4,\"rolled_back_mrs\":3,\"reused_mrs\":8,\"peak_mr_bytes\":{},\"retired_idle_mrs\":2,\"retired_borrowed_mrs\":2,\"native_deregistration_receipts\":7,\"closed_contexts\":2,\"retained_mrs\":0,\"allocation_released\":true,\"same_rnic\":true}}",
         4 * length
     );
 }

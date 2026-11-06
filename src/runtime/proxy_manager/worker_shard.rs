@@ -102,7 +102,7 @@ impl Workers {
             });
             let worker = Arc::clone(&shard);
             let handle = thread::Builder::new()
-                .name(format!("orbitte-staging-{id}"))
+                .name(format!("orbite-staging-{id}"))
                 .spawn(move || worker.run())?;
             // Publication follows successful spawn. Existing shards survive an
             // allocation/thread failure and no task has been admitted yet.

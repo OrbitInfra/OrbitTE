@@ -179,7 +179,7 @@ int TransferEngine::registerLocalMemoryBatch(const std::vector<BufferEntry> &lis
     if (!e)
         return ERR_CONTEXT;
     size_t limit = 0;
-    if (orbitte_limits_v1(e->owner_, &limit) || list.size() > limit)
+    if (orbite_limits_v1(e->owner_, &limit) || list.size() > limit)
         return ERR_TOO_MANY_REQUESTS;
     std::vector<void *> addr;
     std::vector<size_t> sizes;
@@ -215,7 +215,7 @@ Status TransferEngine::submit(const std::shared_ptr<tent::TransferEngine> &e, Ba
     if (!e)
         return closed();
     size_t limit = 0;
-    if (orbitte_limits_v1(e->owner_, &limit) || list.size() > limit)
+    if (orbite_limits_v1(e->owner_, &limit) || list.size() > limit)
         return Status::TooManyRequests("request limit");
     std::vector<tent::Request> requests;
     requests.reserve(list.size());

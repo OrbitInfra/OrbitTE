@@ -40,7 +40,7 @@ def verify(profile, case, evidence):
             maps = record.get('maps-' + str(index) + '.txt') or ''
             if 'libibverbs' not in maps or 'libmlx5' not in maps or 'libcuda' in maps:
                 raise ValueError('missing native provider evidence for a process generation')
-        nics = records(record, 'ORBITTE_INSTALLED_NIC ')
+        nics = records(record, 'ORBITE_INSTALLED_NIC ')
         if len(nics) != expected_count * 2:
             raise ValueError('missing installed RNIC inventory')
         for index in range(expected_count):
@@ -48,7 +48,7 @@ def verify(profile, case, evidence):
             if ({row['name'] for row in pair} != set(profile['rails'])
                     or len({row['pci'] for row in pair}) != 2):
                 raise ValueError('installed process escaped locked RNICs')
-        history = records(record, 'ORBITTE_INSTALLED_PHASE ')
+        history = records(record, 'ORBITE_INSTALLED_PHASE ')
         peer_phases[role] = history
         if len(history) != count or [r['phase'] for r in history] != list(range(count)):
             raise ValueError('missing or duplicate connection generation')
@@ -60,7 +60,7 @@ def verify(profile, case, evidence):
                 raise ValueError('replacement did not reuse its address with fresh authority')
         elif len({identity(row) for row in history}) != 1:
             raise ValueError('survivor replaced its engine, process or registration')
-        rounds = records(record, 'ORBITTE_INSTALLED_ROUND ')
+        rounds = records(record, 'ORBITE_INSTALLED_ROUND ')
         if [(row['phase'], row['round']) for row in rounds] != [
                 (phase, index) for phase in range(count) for index in range(3)]:
             raise ValueError('incomplete installed restart rounds')
@@ -91,7 +91,7 @@ def verify(profile, case, evidence):
                         raise ValueError('restarted native byte ledger disagrees')
                 previous = row
             last = previous
-        kills = records(record, 'ORBITTE_INSTALLED_KILL ')
+        kills = records(record, 'ORBITE_INSTALLED_KILL ')
         if len(kills) != (count - 1 if target else 0):
             raise ValueError('missing exact-child kill point')
         for phase, row in enumerate(kills):
@@ -104,12 +104,12 @@ def verify(profile, case, evidence):
                     or row['rq_debt'] != (case['parents'] if interrupted and role == 'source' else 0)
                     or row['orderly_close'] is not False):
                 raise ValueError('kill point did not retain idle native resources')
-        exits = records(record, 'ORBITTE_INSTALLED_PEER_EXIT ')
+        exits = records(record, 'ORBITE_INSTALLED_PEER_EXIT ')
         expected_exits = [] if target else [dict(phase=g, survivor_pid=phases[0]['native_pid'], locally_idle=True)
                                           for g in range(count - 1)]
         if exits != expected_exits:
             raise ValueError('surviving engine did not observe each peer death')
-        stale = records(record, 'ORBITTE_INSTALLED_STALE ')
+        stale = records(record, 'ORBITE_INSTALLED_STALE ')
         expected_stale = [] if target else [(g, old) for g in range(1, count) for old in range(g)]
         if [(r['phase'], r['previous']) for r in stale] != expected_stale:
             raise ValueError('an old authority generation was not rejected')
@@ -119,7 +119,7 @@ def verify(profile, case, evidence):
                     or row['old_epoch'] != history[row['previous']]['peer_epoch']
                     or row['new_epoch'] != history[row['phase']]['peer_epoch']):
                 raise ValueError('old authority crossed the transport fence')
-        if records(record, 'ORBITTE_INSTALLED_RESULT ') != [dict(
+        if records(record, 'ORBITE_INSTALLED_RESULT ') != [dict(
                 protocol=PROTOCOL, status='passed', role=role, operation=case['operation'],
                 parents=case['parents'], payload=case['payload'], rounds=3,
                 full_bytes_and_guards=True, locally_drained=True)]:

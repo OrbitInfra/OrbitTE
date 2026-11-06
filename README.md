@@ -1,24 +1,24 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/_static/orbitte-logo-dark.svg">
-    <img src="docs/_static/orbitte-logo.svg" width="60%" alt="OrbitTE">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/_static/orbite-logo-dark.svg">
+    <img src="docs/_static/orbite-logo.svg" width="60%" alt="OrbiTE">
   </picture>
   <h2>A Rust-native transfer engine for AI infrastructure</h2>
-  <a href="https://orbitinfra.github.io/OrbitTE/"><strong>Documentation</strong></a>
-  | <a href="https://orbitinfra.github.io/OrbitTE/getting-started.html"><strong>Quick Start</strong></a>
-  | <a href="https://orbitinfra.github.io/OrbitTE/architecture.html"><strong>Architecture</strong></a>
+  <a href="https://orbitinfra.github.io/OrbiTE/"><strong>Documentation</strong></a>
+  | <a href="https://orbitinfra.github.io/OrbiTE/getting-started.html"><strong>Quick Start</strong></a>
+  | <a href="https://orbitinfra.github.io/OrbiTE/architecture.html"><strong>Architecture</strong></a>
   | <a href="docs/tent-parity.md"><strong>TENT Reference</strong></a>
   <br><br>
 
-  [![CI](https://github.com/OrbitInfra/OrbitTE/actions/workflows/ci.yml/badge.svg)](https://github.com/OrbitInfra/OrbitTE/actions/workflows/ci.yml)
-  [![Crates.io](https://img.shields.io/crates/v/orbit-te.svg)](https://crates.io/crates/orbit-te)
+  [![CI](https://github.com/OrbitInfra/OrbiTE/actions/workflows/ci.yml/badge.svg)](https://github.com/OrbitInfra/OrbiTE/actions/workflows/ci.yml)
+  [![Crates.io](https://img.shields.io/crates/v/orbite.svg)](https://crates.io/crates/orbite)
   [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
   [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 </div>
 
 ## Overview
 
-OrbitTE is the transfer engine for [OrbitKV](https://github.com/OrbitInfra/OrbitKV)'s
+OrbiTE is the transfer engine for [OrbitKV](https://github.com/OrbitInfra/OrbitKV)'s
 KV cache, replacing its earlier Mooncake TENT dependency. It moves bytes between
 CPU memory, NVIDIA GPUs and local SSDs, within and across machines, so every
 end-to-end cache path, including GPU↔DRAM and GPU↔SSD, runs through one engine.
@@ -26,7 +26,7 @@ The design follows Mooncake TENT's engine, transport, context, buffer, endpoint
 and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 <div align="center">
-  <img src="docs/_static/architecture.svg" width="95%" alt="OrbitTE network transports and the implemented DRAM and GPU paths to local SSD">
+  <img src="docs/_static/architecture.svg" width="95%" alt="OrbiTE network transports and the implemented DRAM and GPU paths to local SSD">
 </div>
 
 ## Updates
@@ -83,15 +83,15 @@ TENT's C, C++ and Python APIs and wire compatibility are planned in P9.
 On Linux with Rust 1.85 or later:
 
 ```sh
-git clone https://github.com/OrbitInfra/OrbitTE.git
-cd OrbitTE
+git clone https://github.com/OrbitInfra/OrbiTE.git
+cd OrbiTE
 cargo run --locked --example tcp_roundtrip
 ```
 
 Expected output:
 
 ```text
-18 bytes: hello from OrbitTE
+17 bytes: hello from OrbiTE
 ```
 
 The CPU/TCP example needs no CUDA or RDMA SDK. Enable the `rdma` and `cuda`
@@ -100,12 +100,12 @@ features with the [build guide](docs/build.md), then continue with the
 
 ## Status
 
-OrbitTE is in alpha. The bounded host RDMA, GPUDirect RDMA, CUDA IPC and
+OrbiTE is in alpha. The bounded host RDMA, GPUDirect RDMA, CUDA IPC and
 staging profiles above passed installed tests on H20/RoCE hosts and
 independent review; newer source has CPU controls and awaits its hardware pass.
 [Qualification](docs/qualification.md) records the evidence, and the
-[completion plan](docs/completion-plan.md) is the work queue. The `orbit-te`
-crate on crates.io only reserves the name; build from source.
+[completion plan](docs/completion-plan.md) is the work queue. The historical
+`orbit-te` crate on crates.io only reserved the old name; build `orbite` from source.
 
 ## Documentation
 
@@ -125,6 +125,6 @@ follow [AGENTS.md](AGENTS.md).
 
 ## License
 
-OrbitTE is an independent [OrbitInfra](https://github.com/OrbitInfra) project,
+OrbiTE is an independent [OrbitInfra](https://github.com/OrbitInfra) project,
 licensed under [Apache-2.0](LICENSE). [Mooncake TENT](https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent)
 is its frozen capability and architecture reference.

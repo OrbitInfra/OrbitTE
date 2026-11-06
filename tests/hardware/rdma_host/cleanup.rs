@@ -5,7 +5,7 @@ use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
 use std::sync::{Arc, Weak};
 
-use orbit_te::{Batch, BatchState, Error, HostMemory, Permission, RemoteEffect};
+use orbite::{Batch, BatchState, Error, HostMemory, Permission, RemoteEffect};
 
 use super::*;
 
@@ -62,14 +62,14 @@ enum NativeFault {
 pub(super) struct CleanupFault(NativeFault);
 impl CleanupFault {
     pub(super) fn arm(case: &Case) -> Result<Self> {
-        let kind = env::var("ORBITTE_CLEANUP_KIND").unwrap_or_else(|_| "qp".into());
+        let kind = env::var("ORBITE_CLEANUP_KIND").unwrap_or_else(|_| "qp".into());
         if kind != "qp" {
             return Ok(Self(NativeFault::Dependency(
                 dependency::DependencyFault::arm(case, &kind)?,
             )));
         }
         // SAFETY: the supervisor pins the test library, which exports this ABI.
-        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbitte_cleanup_fault".as_ptr()) };
+        let symbol = unsafe { dlsym(std::ptr::null_mut(), c"orbite_cleanup_fault".as_ptr()) };
         if symbol.is_null() {
             return Err("missing native cleanup control".into());
         }
@@ -215,7 +215,7 @@ pub(super) fn retain(
     }
     let native = fault.retained()?;
     println!(
-        "ORBITTE_INSTALLED_CLEANUP {{\"phase\":0,\"pid\":{},\"qpn\":{},\"attempts\":{},\"code\":{},\"sequence\":{},\"retained_grants\":{},\"retained_endpoints\":{},\"sq_debt\":{},\"direct_bytes\":{},\"inflight_bytes\":{},\"batches\":{},\"unregistered\":true,\"resource\":{resource},\"retained_cqs\":{},\"retained_channels\":{},\"retained_devices\":{},\"persistent_mrs\":{},\"backing_retained\":{debt},\"post_drop_native_query\":true,\"fixture_owners_dropped\":true,\"batch_busy\":{debt},\"memory_busy\":{debt},\"close_attempts\":2,\"locally_drained\":false}}",
+        "ORBITE_INSTALLED_CLEANUP {{\"phase\":0,\"pid\":{},\"qpn\":{},\"attempts\":{},\"code\":{},\"sequence\":{},\"retained_grants\":{},\"retained_endpoints\":{},\"sq_debt\":{},\"direct_bytes\":{},\"inflight_bytes\":{},\"batches\":{},\"unregistered\":true,\"resource\":{resource},\"retained_cqs\":{},\"retained_channels\":{},\"retained_devices\":{},\"persistent_mrs\":{},\"backing_retained\":{debt},\"post_drop_native_query\":true,\"fixture_owners_dropped\":true,\"batch_busy\":{debt},\"memory_busy\":{debt},\"close_attempts\":2,\"locally_drained\":false}}",
         std::process::id(),
         native.qpn,
         native.attempts,
@@ -233,7 +233,7 @@ pub(super) fn retain(
         rdma.persistent_mrs,
     );
     println!(
-        "ORBITTE_INSTALLED_KILL {{\"phase\":0,\"pid\":{},\"cached_qps\":{},\"persistent_mrs\":{},\"sq_debt\":{},\"rq_debt\":{},\"orderly_close\":false}}",
+        "ORBITE_INSTALLED_KILL {{\"phase\":0,\"pid\":{},\"cached_qps\":{},\"persistent_mrs\":{},\"sq_debt\":{},\"rq_debt\":{},\"orderly_close\":false}}",
         std::process::id(),
         rdma.active_endpoints,
         rdma.persistent_mrs,

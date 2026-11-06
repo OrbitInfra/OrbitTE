@@ -81,56 +81,56 @@ impl TransferEngine {
             let mut snapshot = Owners::default();
             if let Ok((active, _, workers, deferred, _)) = allocations.usage() {
                 snapshot.gauges.extend([
-                    ("orbitte_allocated_batches", active as u64),
-                    ("orbitte_requester_workers", workers as u64),
-                    ("orbitte_deferred_batches", deferred as u64),
+                    ("orbite_allocated_batches", active as u64),
+                    ("orbite_requester_workers", workers as u64),
+                    ("orbite_deferred_batches", deferred as u64),
                 ]);
             }
             let usage = batches.usage.lock().unwrap_or_else(|p| p.into_inner());
             snapshot.gauges.extend([
-                ("orbitte_inflight_batches", usage.count as u64),
-                ("orbitte_inflight_bytes", usage.bytes as u64),
+                ("orbite_inflight_batches", usage.count as u64),
+                ("orbite_inflight_bytes", usage.bytes as u64),
             ]);
             drop(usage);
             if let Some(q) = &queue {
                 let s = q.stats();
                 snapshot.gauges.extend([
-                    ("orbitte_queue_owners", s.queued_owners as u64),
-                    ("orbitte_queue_bytes", s.queued_bytes as u64),
-                    ("orbitte_dispatching_owners", s.dispatching_owners as u64),
-                    ("orbitte_dispatching_bytes", s.dispatching_bytes as u64),
+                    ("orbite_queue_owners", s.queued_owners as u64),
+                    ("orbite_queue_bytes", s.queued_bytes as u64),
+                    ("orbite_dispatching_owners", s.dispatching_owners as u64),
+                    ("orbite_dispatching_bytes", s.dispatching_bytes as u64),
                 ]);
                 snapshot.counters.push((
-                    "orbitte_queue_deadline_drops_total",
+                    "orbite_queue_deadline_drops_total",
                     s.deadline_infeasible_drops,
                 ));
             }
             if let Some(q) = &qos {
                 let u = q();
                 snapshot.gauges.extend([
-                    ("orbitte_qos_owners", u.owners as u64),
-                    ("orbitte_qos_inflight_bytes", u.inflight_bytes as u64),
-                    ("orbitte_qos_inflight_requests", u.inflight_requests as u64),
+                    ("orbite_qos_owners", u.owners as u64),
+                    ("orbite_qos_inflight_bytes", u.inflight_bytes as u64),
+                    ("orbite_qos_inflight_requests", u.inflight_requests as u64),
                 ]);
             }
             if let Some(c) = &credits {
                 let (a, r, balances) = c.metric_usage();
                 for ((available, consumed), balance) in [
                     (
-                        "orbitte_receiver_credit_available_bytes",
-                        "orbitte_receiver_credit_consumed_bytes",
+                        "orbite_receiver_credit_available_bytes",
+                        "orbite_receiver_credit_consumed_bytes",
                     ),
                     (
-                        "orbitte_receiver_credit_available_requests",
-                        "orbitte_receiver_credit_consumed_requests",
+                        "orbite_receiver_credit_available_requests",
+                        "orbite_receiver_credit_consumed_requests",
                     ),
                     (
-                        "orbitte_receiver_credit_available_staging_slots",
-                        "orbitte_receiver_credit_consumed_staging_slots",
+                        "orbite_receiver_credit_available_staging_slots",
+                        "orbite_receiver_credit_consumed_staging_slots",
                     ),
                     (
-                        "orbitte_receiver_credit_available_consumer_slots",
-                        "orbitte_receiver_credit_consumed_consumer_slots",
+                        "orbite_receiver_credit_available_consumer_slots",
+                        "orbite_receiver_credit_consumed_consumer_slots",
                     ),
                 ]
                 .into_iter()
@@ -141,43 +141,43 @@ impl TransferEngine {
                         .extend([(available, balance.available), (consumed, balance.consumed)]);
                 }
                 snapshot.gauges.extend([
-                    ("orbitte_receiver_credit_active_owners", a as u64),
-                    ("orbitte_receiver_credit_reserved_owners", r as u64),
+                    ("orbite_receiver_credit_active_owners", a as u64),
+                    ("orbite_receiver_credit_reserved_owners", r as u64),
                 ]);
             }
             if let Some(issuer) = &issuer {
                 let s = issuer.stats();
                 snapshot.gauges.extend([
-                    ("orbitte_receiver_active_senders", s.active_senders as u64),
-                    ("orbitte_receiver_reserved_bytes", s.reserved_bytes),
-                    ("orbitte_receiver_reserved_requests", s.reserved_requests),
+                    ("orbite_receiver_active_senders", s.active_senders as u64),
+                    ("orbite_receiver_reserved_bytes", s.reserved_bytes),
+                    ("orbite_receiver_reserved_requests", s.reserved_requests),
                     (
-                        "orbitte_receiver_reserved_staging_slots",
+                        "orbite_receiver_reserved_staging_slots",
                         s.reserved_staging_slots,
                     ),
                     (
-                        "orbitte_receiver_reserved_consumer_slots",
+                        "orbite_receiver_reserved_consumer_slots",
                         s.reserved_consumer_slots,
                     ),
                     (
-                        "orbitte_receiver_active_staging_slots",
+                        "orbite_receiver_active_staging_slots",
                         s.active_staging_slots,
                     ),
                     (
-                        "orbitte_receiver_active_consumer_slots",
+                        "orbite_receiver_active_consumer_slots",
                         s.active_consumer_slots,
                     ),
                     (
-                        "orbitte_receiver_retained_staging_slots",
+                        "orbite_receiver_retained_staging_slots",
                         s.retained_staging_slots,
                     ),
                     (
-                        "orbitte_receiver_retained_consumer_slots",
+                        "orbite_receiver_retained_consumer_slots",
                         s.retained_consumer_slots,
                     ),
                 ]);
                 snapshot.counters.push((
-                    "orbitte_receiver_retired_senders_total",
+                    "orbite_receiver_retired_senders_total",
                     s.retired_senders as u64,
                 ));
             }
@@ -186,18 +186,18 @@ impl TransferEngine {
                 let (inflight, allocated) = r.quota_totals();
                 snapshot
                     .gauges
-                    .push(("orbitte_rdma_inflight_bytes", inflight));
+                    .push(("orbite_rdma_inflight_bytes", inflight));
                 snapshot
                     .counters
-                    .push(("orbitte_rdma_allocated_bytes_total", allocated));
+                    .push(("orbite_rdma_allocated_bytes_total", allocated));
                 let s = r.rail_health_stats();
                 snapshot
                     .gauges
-                    .push(("orbitte_rdma_open_rails", s.open_rails as u64));
+                    .push(("orbite_rdma_open_rails", s.open_rails as u64));
                 snapshot.counters.extend([
-                    ("orbitte_rdma_rail_errors_total", s.rail_errors),
-                    ("orbitte_rdma_rail_probes_total", s.rail_probes),
-                    ("orbitte_rdma_rail_recoveries_total", s.rail_recoveries),
+                    ("orbite_rdma_rail_errors_total", s.rail_errors),
+                    ("orbite_rdma_rail_probes_total", s.rail_probes),
+                    ("orbite_rdma_rail_recoveries_total", s.rail_recoveries),
                 ]);
             }
             snapshot

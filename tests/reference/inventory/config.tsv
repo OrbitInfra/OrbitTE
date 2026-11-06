@@ -182,7 +182,7 @@ transports/rdma/rail_error_window_secs	10	config.rdma	include/tent/transport/rdm
 transports/rdma/rail_probe_interval_secs	1	config.rdma	include/tent/transport/rdma/rail_monitor.h:47	bootstrap	merged config	rdma	2
 transports/rdma/score_epsilon	1e-12	config.rdma	src/transport/rdma/workers.cpp:172	runtime candidate	merged config	rdma	3e-05
 transports/rdma/score_jitter_range	1e-9	config.rdma	src/transport/rdma/workers.cpp:169	runtime candidate	merged config	unsupported:no configurable RDMA owner	2
-transports/rdma/shared_quota_shm_path	""	config.rdma	src/transport/rdma/workers.cpp:262	bootstrap	merged config	rdma	"/orbitte-test-s17"
+transports/rdma/shared_quota_shm_path	""	config.rdma	src/transport/rdma/workers.cpp:262	bootstrap	merged config	rdma	"/orbite-test-s17"
 transports/rdma/slot_rotation_interval_ms	2	config.rdma	src/transport/rdma/workers.cpp:210	runtime candidate	merged config	rdma	2
 transports/rdma/strict_local_numa	false	config.rdma	src/transport/rdma/workers.cpp:133	runtime candidate	merged config	rdma	true
 transports/rdma/transmit_bandwidth_learning_rate	0.9	config.rdma	src/transport/rdma/workers.cpp:145	bootstrap	merged config	rdma	0.7

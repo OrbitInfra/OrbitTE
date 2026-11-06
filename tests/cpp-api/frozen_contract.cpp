@@ -1,4 +1,4 @@
-// Compile the same source against v0.3.14 and the installed OrbitTE headers.
+// Compile the same source against v0.3.14 and the installed OrbiTE headers.
 #include <transfer_engine.h>
 #include <tent/transfer_engine.h>
 #include <tent/common/config.h>

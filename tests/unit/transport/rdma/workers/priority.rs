@@ -461,7 +461,7 @@ fn event_worker_wakes_for_promotion_and_shared_slots_without_a_cqe() {
     };
     for promotion in [true, false] {
         let name = std::ffi::CString::new(format!(
-            "/orbitte-worker-slots-{}-{promotion}",
+            "/orbite-worker-slots-{}-{promotion}",
             std::process::id()
         ))
         .unwrap();

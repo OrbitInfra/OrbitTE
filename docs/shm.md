@@ -7,9 +7,9 @@ SHM copies registered CPU bytes between processes on the same Linux host. The re
 Both engines enable SHM. The default leaves it off. The source can register multiple ranges of one allocation, including ranges that begin between page boundaries.
 
 ```rust
-use orbit_te::{EngineConfig, Permission, ShmConfig, TransferEngine};
+use orbite::{EngineConfig, Permission, ShmConfig, TransferEngine};
 
-fn main() -> orbit_te::Result<()> {
+fn main() -> orbite::Result<()> {
     let source = TransferEngine::new(EngineConfig {
         shm: ShmConfig { enable: true, ..Default::default() },
         ..Default::default()

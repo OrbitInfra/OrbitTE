@@ -112,7 +112,7 @@ single request; nothing else is retried. With the default
 `nvlink_async_memcpy_threshold_kb` defaults to 2048. One legacy NVLink task
 strictly below that size uses `cuMemcpy` on the caller or batch worker.
 Pinned-host transfers complete on the calling thread. A device-to-device
-copy can return before DMA completes, so OrbitTE drains the legacy stream
+copy can return before DMA completes, so OrbiTE drains the legacy stream
 before releasing its import. A failed drain or context restoration keeps the
 loan, mapping and admission. The stream/event path handles groups and copies
 at or above the threshold. Setting it to zero disables the fast path. MNNVL
@@ -124,7 +124,7 @@ uses its existing async path for every size.
 Groups with at least two independent copies can use `cuMemcpyBatchAsync_v2`
 (Driver API 13000+, exact v2 symbol; CUDA 12.8's different signature is never
 called). `cuda/ipc/batch.rs::CopyBatch` builds the destination, source and length
-arrays. CUDA does not order members inside a batch, so OrbitTE sorts the actual
+arrays. CUDA does not order members inside a batch, so OrbiTE sorts the actual
 address intervals in O(n log n) and sends any group with overlapping destinations
 or a source/destination dependency through ordered enqueue instead.
 
@@ -148,7 +148,7 @@ quarantined pool returns `ResourceExhausted`.
 
 `EngineStats.nvlink` reports `stream_slots`, `active_streams`,
 `retained_streams`, `pending_groups` and `progress_workers`. TENT's
-`getStreamFromPool` returns the same move-only handle; OrbitTE adds the
+`getStreamFromPool` returns the same move-only handle; OrbiTE adds the
 cross-context bound and quarantine. See
 [qualification](qualification.md#cuda-ipc-stream-pool).
 
@@ -198,7 +198,7 @@ cached imports, then stops completion progress and the stream pool. `close()`
 releases outgoing imports before waiting for incoming exports, so two peers can
 close together. Dropping an engine does not prove remote closure. TENT's cache
 closes in `uninstall`; the explicit receipts, LRU and continuing flush are
-OrbitTE extensions. See
+OrbiTE extensions. See
 [qualification](qualification.md#cuda-ipc-cache-reclamation).
 
 ## Completion and shutdown
@@ -222,11 +222,11 @@ receipt does not prove an import closed, so the allocation stays retained.
 Inspect `EngineStats.nvlink` and `cuda::retained_resources()`.
 
 Boot and process identities and epochs detect stale peers; they are not
-authentication. The protocol is OrbitTE's own, not TENT wire compatibility.
+authentication. The protocol is OrbiTE's own, not TENT wire compatibility.
 
 ## Correspondence to TENT
 
-| OrbitTE owner | Frozen TENT counterpart |
+| OrbiTE owner | Frozen TENT counterpart |
 | --- | --- |
 | `transport/nvlink.rs`, `cuda/ipc.rs` | `NVLinkTransport` export, relocation and copies |
 | `transport/nvlink/cache.rs::RelocationCache` | `relocateSharedMemoryAddress` relocation map |
@@ -235,7 +235,7 @@ authentication. The protocol is OrbitTE's own, not TENT wire compatibility.
 | `transport/nvlink/export.rs::ExportCache` | No counterpart; explicit source lifetime |
 
 TENT optionally registers local host buffers (`transports/nvlink/host_register`)
-but relocates only CUDA buffers remotely; OrbitTE keeps that split, so remote
+but relocates only CUDA buffers remotely; OrbiTE keeps that split, so remote
 grants are GPU-only. Remote host-NUMA exports use MNNVL/EGM. The cooperative
 profile requires exporters to keep the allocation alive until every importer
 has closed it. An unconfirmed close retains the export. Recovery after abrupt
@@ -248,7 +248,7 @@ Build an independent public-API consumer from the packaged crate:
 
 ```sh
 CC=gcc CXX=g++ python3 tests/hardware/build_installed.py \
-  --consumer nvlink --toolchain stable --output /var/tmp/orbitte-ipc-install
+  --consumer nvlink --toolchain stable --output /var/tmp/orbite-ipc-install
 ```
 
 It needs no RDMA libraries or CUDA toolkit; runtime needs the CUDA driver. On an

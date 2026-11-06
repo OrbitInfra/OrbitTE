@@ -43,7 +43,7 @@ def inventory(directory, gpu):
 def installed_case(args, consumer, profile, driver):
     artifact = args.artifact.resolve()
     package = json.loads((artifact / 'manifest.json').read_text())
-    binary = artifact / 'installed/bin' / ('orbitte-' + consumer)
+    binary = artifact / 'installed/bin' / ('orbite-' + consumer)
     directory = args.directory.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=False)
     evidence = dict(status='failed', profile=profile, host=socket.gethostname(),
@@ -66,7 +66,7 @@ def installed_case(args, consumer, profile, driver):
                 lock = owners.enter_context(path.open('r+'))
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             evidence.update(locks=[str(p) for p in locks], inventory=inventory(directory, args.gpu))
-            scratch = owners.enter_context(tempfile.TemporaryDirectory(dir=directory, prefix='orbitte-' + consumer + '-'))
+            scratch = owners.enter_context(tempfile.TemporaryDirectory(dir=directory, prefix='orbite-' + consumer + '-'))
             command = [str(binary), '--exercise', str(Path(scratch) / 'payload')]
             evidence['command'] = command
             yield command, evidence

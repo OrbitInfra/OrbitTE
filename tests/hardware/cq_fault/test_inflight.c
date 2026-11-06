@@ -27,12 +27,12 @@ int main(void) {
     struct ibv_send_wr *bad = NULL;
     struct inflight_snapshot snapshot;
     assert(sizeof(snapshot) == 88);
-    assert(orbitte_inflight_fault(1, 0, &snapshot) == EINVAL);
-    assert(orbitte_inflight_fault(1, 1, &snapshot) == 0);
-    assert(orbitte_inflight_fault(1, 1, &snapshot) == EINVAL);
-    assert(orbitte_inflight_fault(2, 0, &snapshot) == EINVAL);
+    assert(orbite_inflight_fault(1, 0, &snapshot) == EINVAL);
+    assert(orbite_inflight_fault(1, 1, &snapshot) == 0);
+    assert(orbite_inflight_fault(1, 1, &snapshot) == EINVAL);
+    assert(orbite_inflight_fault(2, 0, &snapshot) == EINVAL);
     struct snapshot other;
-    assert(orbitte_cq_fault(1, 0, 1, 1, &other) == EINVAL);
+    assert(orbite_cq_fault(1, 0, 1, 1, &other) == EINVAL);
     assert(post(&qp, &wr, &bad) == 0 && post_calls == 1 && modify_calls == 1);
     struct ibv_wc received;
     completion = (struct ibv_wc){.wr_id = 8, .qp_num = 7, .status = IBV_WC_WR_FLUSH_ERR};
@@ -42,12 +42,12 @@ int main(void) {
     /* A failed WC with an invalid opcode still joins its WR. */
     completion.qp_num = 7; completion.opcode = (enum ibv_wc_opcode)0x7fffffff;
     assert(poll(&cq, 1, &received) == 1 && received.status == IBV_WC_WR_FLUSH_ERR);
-    assert(orbitte_inflight_fault(0, 0, &snapshot) == 0 && snapshot.failed == 1 && snapshot.completed == 0);
-    assert(orbitte_inflight_fault(2, 0, &snapshot) == EINVAL); /* destruction still absent */
+    assert(orbite_inflight_fault(0, 0, &snapshot) == 0 && snapshot.failed == 1 && snapshot.completed == 0);
+    assert(orbite_inflight_fault(2, 0, &snapshot) == EINVAL); /* destruction still absent */
     inflight_destroyed(&cq, 6, 0);
-    assert(orbitte_inflight_fault(2, 0, &snapshot) == EINVAL);
+    assert(orbite_inflight_fault(2, 0, &snapshot) == EINVAL);
     inflight_destroyed(&cq, 7, 0);
-    assert(orbitte_inflight_fault(2, 0, &snapshot) == 0 && snapshot.armed == 0 && snapshot.destroyed == 1);
+    assert(orbite_inflight_fault(2, 0, &snapshot) == 0 && snapshot.armed == 0 && snapshot.destroyed == 1);
     assert(poll_calls == 3 && state.lost == 0);
     puts("In-flight controls passed: exact WR/QP, real callback once, unchanged WC, destruction fence");
 }

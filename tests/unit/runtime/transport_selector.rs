@@ -834,11 +834,8 @@ fn peer_gpu_tcp_host_child() {
     let wait = crate::test_support::EVENTUAL_PROGRESS;
     let peer = engine
         .open_segment(
-            std::env::var("ORBITTE_TEST_PEER").unwrap().parse().unwrap(),
-            std::env::var("ORBITTE_TEST_EPOCH")
-                .unwrap()
-                .parse()
-                .unwrap(),
+            std::env::var("ORBITE_TEST_PEER").unwrap().parse().unwrap(),
+            std::env::var("ORBITE_TEST_EPOCH").unwrap().parse().unwrap(),
             wait,
         )
         .unwrap();

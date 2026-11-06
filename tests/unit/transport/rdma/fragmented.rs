@@ -104,11 +104,11 @@ pub(super) fn finish(stats: &RdmaStats) {
     assert_eq!((stats.work_requests, stats.retained_work_requests), (0, 0));
     if probe.partial {
         println!(
-            "ORBITTE_PARTIAL_DRAIN {{\"pending_wr_before_cq\":[1,1],\"native_cq_receipts\":2,\"qp_destroyed_before_cqs\":true,\"mr_and_loan_held_until_native_drain\":true,\"post_calls\":1}}"
+            "ORBITE_PARTIAL_DRAIN {{\"pending_wr_before_cq\":[1,1],\"native_cq_receipts\":2,\"qp_destroyed_before_cqs\":true,\"mr_and_loan_held_until_native_drain\":true,\"post_calls\":1}}"
         );
         return;
     }
     println!(
-        "ORBITTE_FRAGMENT_DRAIN {{\"posted_wr\":3,\"completed_prefix_bytes\":4096,\"pending_wr_before_cq\":[1,1],\"native_cq_receipts\":2,\"post_calls\":1,\"qp_destroyed_before_cqs\":true,\"mr_and_loan_held_until_native_drain\":true}}"
+        "ORBITE_FRAGMENT_DRAIN {{\"posted_wr\":3,\"completed_prefix_bytes\":4096,\"pending_wr_before_cq\":[1,1],\"native_cq_receipts\":2,\"post_calls\":1,\"qp_destroyed_before_cqs\":true,\"mr_and_loan_held_until_native_drain\":true}}"
     );
 }

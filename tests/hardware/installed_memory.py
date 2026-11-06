@@ -6,7 +6,7 @@ from installed_restart import records
 
 
 def one(record, suffix):
-    rows = records(record, 'ORBITTE_INSTALLED_MEMORY_' + suffix + ' ')
+    rows = records(record, 'ORBITE_INSTALLED_MEMORY_' + suffix + ' ')
     if len(rows) != 1:
         raise ValueError('missing or duplicate memory ' + suffix)
     return rows[0]
@@ -29,12 +29,12 @@ def verify(profile, case, evidence):
         digest = supervisor.get('fault_library_sha256', '')
         if target:
             if (len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)
-                    or 'liborbitte_cq_fault.so' not in maps):
+                    or 'liborbite_cq_fault.so' not in maps):
                 raise ValueError('memory target lacks its pinned native observer')
-        elif (digest or 'liborbitte_cq_fault.so' in maps
+        elif (digest or 'liborbite_cq_fault.so' in maps
               or any(record.get('cq-fault-' + str(g) + '.jsonl') for g in range(3))):
             raise ValueError('memory fault escaped its declared process')
-        nics = records(record, 'ORBITTE_INSTALLED_NIC ')
+        nics = records(record, 'ORBITE_INSTALLED_NIC ')
         for group in (nics[:2], nics[2:]):
             if len(group) != 2 or {r['name'] for r in group} != set(profile['rails']) or len({r['pci'] for r in group}) != 2:
                 raise ValueError('memory fixture lacks both old and new locked contexts')
@@ -52,7 +52,7 @@ def verify(profile, case, evidence):
                         fresh_backing_released=True, old_backing_retained=target)
         if result != expected:
             raise ValueError('memory cleanup lacks exact final ownership and byte proof')
-        rounds = records(record, 'ORBITTE_INSTALLED_ROUND ')
+        rounds = records(record, 'ORBITE_INSTALLED_ROUND ')
         if [(r['phase'], r['round']) for r in rounds] != [(p, n) for p in (0, 1) for n in range(3)]:
             raise ValueError('memory cleanup omitted old or replacement rounds')
         for index, row in enumerate(rounds):
@@ -65,11 +65,11 @@ def verify(profile, case, evidence):
                 value = count * case['payload'] if role == 'requester' and case['operation'] == operation else 0
                 if row[operation + '_bytes'] != value:
                     raise ValueError('memory cleanup byte ledger differs from declared workload')
-        request = records(record, 'ORBITTE_INSTALLED_MEMORY_REQUEST ')
+        request = records(record, 'ORBITE_INSTALLED_MEMORY_REQUEST ')
         if request != ([dict(pid=pid, failed=True, locally_drained=True)] if resource == 2 and role == 'requester' else []):
             raise ValueError('MW cleanup did not fail the requester with local drain')
         if not target:
-            if records(record, 'ORBITTE_INSTALLED_MEMORY_RETAINED '):
+            if records(record, 'ORBITE_INSTALLED_MEMORY_RETAINED '):
                 raise ValueError('healthy peer unexpectedly retained memory')
             continue
         proof = one(record, 'RETAINED')
