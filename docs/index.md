@@ -94,6 +94,7 @@ tent-parity
 rust-api
 c-api
 cpp-api
+python
 :::
 
 :::{toctree}

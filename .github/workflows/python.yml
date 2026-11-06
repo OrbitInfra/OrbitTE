@@ -1,0 +1,64 @@
+name: Python wheels
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        toolchain: [stable, '1.85.0']
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+      LIBCLANG_PATH: /usr/lib/llvm-18/lib
+      CLANG_PATH: /usr/bin/clang-18
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Rust and native build prerequisites
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy
+          .github/scripts/install-native-deps.sh g++ cmake pkg-config clang-18 libclang-18-dev libibverbs-dev
+          python -m pip install 'maturin==1.10.2' 'patchelf==0.17.2.4'
+      - name: Check the optional Python boundary on both feature profiles
+        if: matrix.python == '3.13'
+        run: |
+          for features in python python,rdma,cuda,io-uring,gds,metrics,rdma-adaptive; do
+            cargo clippy --locked -p orbite-c --features "$features" --all-targets -- -D warnings
+            cargo test --locked -p orbite-c --features "$features"
+          done
+      - name: Build and test the installed CPU wheel
+        run: bash .github/scripts/check-installed-python.sh "$RUNNER_TEMP/wheel-cpu"
+      - name: Build and test the installed combined-feature wheel
+        run: bash .github/scripts/check-installed-python.sh "$RUNNER_TEMP/wheel-combined" rdma,cuda,io-uring,gds,metrics,rdma-adaptive
+      - name: Repeat installed-wheel lifetime and GIL controls
+        if: matrix.toolchain == 'stable' && matrix.python == '3.13'
+        run: bash .github/scripts/repeat-python.sh "$RUNNER_TEMP/python-repeats"
+      - name: Check source distribution contents
+        if: matrix.runner == 'ubuntu-24.04' && matrix.toolchain == 'stable' && matrix.python == '3.13'
+        run: |
+          python -m maturin sdist --out "$RUNNER_TEMP/sdist"
+          python -m pip wheel --no-deps --no-build-isolation "$RUNNER_TEMP/sdist"/*.tar.gz --wheel-dir "$RUNNER_TEMP/sdist-wheel"
+          python -m pip install --force-reinstall "$RUNNER_TEMP/sdist-wheel"/*.whl
+          python -I tests/python/test_installed.py -v
+      - name: Save installable wheels for review (no publication)
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: orbite-${{ matrix.runner }}-${{ matrix.python }}-${{ matrix.toolchain }}
+          path: |
+            ${{ runner.temp }}/wheel-cpu/*.whl
+            ${{ runner.temp }}/wheel-combined/*.whl
+          if-no-files-found: error

@@ -53,6 +53,24 @@ NVLink and MNNVL retirement remain **Implemented; installed profile unqualified*
 The C/C++ same-epoch reopen controls preserve frozen segment-handle close;
 it is not a drain receipt.
 
+## Python wheels
+
+The `Python wheels` workflow builds and installs CPU and combined-feature
+wheels for CPython 3.10–3.14 on Linux x86_64 and aarch64, with stable and Rust
+1.85. `tests/python/test_installed.py` checks all three S16 Python binding rows
+and 128 detailed surface rows. Its real loopback and two-process transfers
+check both directions, payload guards, notifications, policy/intent/deadline
+routing, exceptions and context exits. Held TCP replies prove GIL release,
+early-drop ownership, queued cancellation and timeout retention. Four timing
+controls repeat 50 times. The source-distribution job rebuilds and installs its
+wheel before repeating the same consumer controls.
+
+This evidence covers the CPU/TCP wheel profile only. Combined-feature builds
+exercise that same CPU profile and do not qualify Python GPU, RDMA, GDS or
+fabric paths. The native transports retain their installed verification queue.
+The wheels and source archive are review artifacts; no PyPI publication is part
+of CI. See [Python packaging](python.md#packaging-and-evidence).
+
 ## Installed C ABI on Linux
 
 The `Install both C libraries and run the independent C consumer` CI step builds both libraries from

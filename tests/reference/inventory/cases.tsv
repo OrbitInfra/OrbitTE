@@ -31,5 +31,5 @@ wire.mpcomm	S25	src/transport	Run native peer address codec without an MPComm de
 cap.select	S6/S23	src/runtime/transport_selector.rs	Inspect registered provider and select each local/target pair	eligibility vector plus unavailable hints; actual execution needs its own gate
 cap.excluded	S19/S23	src/runtime/transport_selector.rs	Select an excluded transport constant	explicit unavailable and no SDK load
 binding.cpp	S20	src/engine.rs	Compile independent public C++ and TENT-backed classic-TE clients	method result, referenced handle and retained transfer status
-binding.python	S21	src/engine.rs	Install a wheel and exercise the frozen Python types, buffers and guard paths	exporter lifetime, GIL release and terminal receipt
+binding.python	S21	crates/orbite-c/src/python.rs	Install a wheel and exercise the frozen Python types, buffers and guard paths	exporter lifetime, GIL release and terminal receipt
 binding.plugin	S22	src/cuda/driver.rs	Load a public plugin table including missing and failed callbacks	ABI layout, typed unsupported/handled-error outcome and retained owners

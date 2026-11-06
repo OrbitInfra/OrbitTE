@@ -45,6 +45,36 @@ rejected RDMA owner never falls back to TCP. An opt-in process watcher invokes
 Rust close outside the signal handler. It holds at most one weak reference per
 engine and joins on normal exit.
 
+## Python boundary
+
+The optional PyO3 feature of `orbite-c` builds `orbite._native`; it reuses the
+existing bounded memory, segment and batch tables directly. No Python dependency
+or interpreter is loaded by an ordinary Rust or C build. Shared PyO3 has a
+compatible minimum of 0.27.2 and the lockfile fixes its MSRV-tested graph. Maturin
+builds one wheel per CPython version because the 3.10 stable ABI lacks the buffer
+API needed to retain exporters. Mooncake's `mooncake.tent` and standalone `tent`
+imports remain untouched; consumers explicitly import `orbite`.
+
+Python argument conversion captures a writable, contiguous memoryview. Its
+owner follows the shared `HostMemory` through aliases, worker loans, unregister
+and native quarantine. External integer addresses without an exporter are
+rejected before dereference. The installed negative controls reject bare pointers,
+resize while registered and out-of-exporter ranges; a held TCP reply keeps the
+actual exporter alive after timeout, cancel and early guard drop. A memory guard
+whose allocation is registered defers free until unregister drains it, or engine
+close drains the table. A batch guard moves its receipt to the existing deferred
+retirement owner. Neither guard destruction waits for an unbounded transfer.
+
+Every native call detaches from the GIL and catches unwinding. Wait uses the
+existing bounded backoff, dropping the per-batch mutex between observations;
+physical drain is required independently of task state. A Python thread releases
+a held real TCP reply while another is blocked in wait. No Python objects enter
+the payload worker other than the retained exporter owner. Decrementing that
+owner uses PyO3's deferred reference pool; it never acquires the GIL beneath a
+native lock. If interpreter finalization prevents a safe detach, the bounded
+ABI slot remains retained. The [guide](python.md) records these deliberate
+lifetime differences from frozen `src/python/pybind.cpp` and its guard test.
+
 ## Peer retirement
 
 `runtime/segment_manager.rs` owns a bounded table of endpoint/epoch identities.

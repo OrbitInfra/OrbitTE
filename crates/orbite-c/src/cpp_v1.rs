@@ -40,7 +40,7 @@ unsafe extern "C" fn orbite_create_v1(source: u32, config: *const c_char) -> Han
 }
 
 // Sample once per submit so equal absolute deadlines remain equal for merging.
-fn clock_pair() -> Result<(Instant, u64)> {
+pub(crate) fn clock_pair() -> Result<(Instant, u64)> {
     let now = Instant::now();
     let mut stamp = libc::timespec {
         tv_sec: 0,
@@ -276,7 +276,7 @@ unsafe extern "C" fn orbite_limits_v1(h: Handle, out: *mut usize) -> c_int {
 }
 
 #[cfg(target_os = "linux")]
-fn local_topology(e: &engine::Engine) -> Result<String> {
+pub(crate) fn local_topology(e: &engine::Engine) -> Result<String> {
     use serde_json::json;
     let t = e.core.local_topology_snapshot()?;
     if t.nic_list.is_empty() && t.mem_list.is_empty() {
@@ -292,7 +292,7 @@ fn local_topology(e: &engine::Engine) -> Result<String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn local_topology(_e: &engine::Engine) -> Result<String> {
+pub(crate) fn local_topology(_e: &engine::Engine) -> Result<String> {
     Ok("{}".into())
 }
 #[unsafe(no_mangle)]

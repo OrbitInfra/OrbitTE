@@ -16,6 +16,8 @@ crate-type = ["cdylib", "staticlib"]
 
 [features]
 default = []
+# Optional Python packaging reuses these Rust ABI owners; no Python in libtent builds.
+python = ["dep:pyo3"]
 rdma = ["orbite/rdma"]
 cuda = ["orbite/cuda"]
 io-uring = ["orbite/io-uring"]
@@ -24,6 +26,8 @@ metrics = ["orbite/metrics"]
 rdma-adaptive = ["rdma", "orbite/rdma-adaptive"]
 
 [dependencies]
+# Shared facade: compatible minimum; Cargo.lock fixes the tested MSRV resolution.
+pyo3 = { version = "0.27.2", optional = true }
 orbite = { version = "0.1.0-alpha.1", path = "../.." }
 libc = "0.2.191"
 log = "0.4.34"

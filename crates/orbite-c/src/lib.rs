@@ -9,6 +9,9 @@ mod boundary;
 mod engine;
 #[allow(unsafe_code)]
 mod memory;
+#[cfg(feature = "python")]
+#[allow(unsafe_code)]
+mod python;
 mod segments;
 
 // Only the ABI entry points and raw-storage adapters admit unsafe operations.

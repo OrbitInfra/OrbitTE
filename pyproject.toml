@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.10.2,<2"]
+build-backend = "maturin"
+
+[project]
+name = "orbite"
+dynamic = ["version"]
+description = "OrbiTE point-to-point transfer engine, with the TENT-compatible Python API"
+requires-python = ">=3.10,<3.15"
+license = "Apache-2.0"
+readme = "docs/python.md"
+classifiers = [
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Rust",
+  "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Repository = "https://github.com/OrbitInfra/OrbiTE"
+Documentation = "https://orbitinfra.github.io/OrbiTE/python.html"
+
+[tool.maturin]
+bindings = "pyo3"
+manifest-path = "crates/orbite-c/Cargo.toml"
+module-name = "orbite._native"
+python-source = "python"
+features = ["python", "pyo3/extension-module"]

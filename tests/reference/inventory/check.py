@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 
 from source import config_surface, lifecycle
+from python_surface import surface as python_surface
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
@@ -259,6 +260,15 @@ def check_metrics(tent):
                 raise ValueError(f"{name}: labels or histogram boundaries changed")
 
 
+def check_python(tent):
+    with (HERE / "python.tsv").open() as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    expected = [(r["surface"], r["member"], r["kind"], int(r["overloads"])) for r in rows]
+    if python_surface((tent / "src/python/pybind.cpp").read_text()) != expected:
+        raise ValueError("frozen Python classes, enums, properties or overloads changed")
+    print(f"Frozen Python declaration rows matched: {len(rows)}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--source", type=Path, required=True, help="clean frozen Mooncake checkout")
@@ -289,6 +299,7 @@ def main():
         check_capabilities,
         check_config,
         check_metrics,
+        check_python,
     ):
         check(root / TENT)
     print(

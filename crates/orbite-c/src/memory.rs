@@ -71,6 +71,31 @@ impl Default for Opt {
     }
 }
 impl Opt {
+    #[cfg(feature = "python")]
+    pub(crate) fn fields(
+        location: &str,
+        perm: i32,
+        route: i32,
+        path: String,
+        offset: usize,
+        internal: bool,
+    ) -> Result<Self> {
+        if location.len() >= 64
+            || path.len() >= 256
+            || location.contains('\0')
+            || path.contains('\0')
+        {
+            return Err(INVALID);
+        }
+        Ok(Self {
+            location: Location::parse(location)?,
+            perm: permission(perm)?,
+            route: transport(route)?,
+            shm_path: path,
+            shm_offset: offset,
+            internal,
+        })
+    }
     pub(crate) fn simple(s: &str) -> Result<Self> {
         Ok(Self {
             location: Location::parse(s)?,
@@ -127,6 +152,7 @@ struct Span {
     end: usize,
     owner: WeakBacking,
     foreign: Option<Weak<()>>,
+    retained: bool,
 }
 fn spans() -> &'static Mutex<BTreeMap<usize, Span>> {
     static SPANS: OnceLock<Mutex<BTreeMap<usize, Span>>> = OnceLock::new();
@@ -183,6 +209,8 @@ fn resolve(
     p: *mut c_void,
     n: usize,
     loc: Location,
+    owner: Option<Arc<dyn Send + Sync>>,
+    allow_unowned: bool,
 ) -> Result<(MemoryBacking, usize, Option<Weak<()>>)> {
     let (start, end) = bounds(p, n)?;
     let mut all = lock(spans())?;
@@ -197,6 +225,9 @@ fn resolve(
                 return Err(UNKNOWN);
             }
             if other <= start && end <= s.end {
+                if !allow_unowned && !s.retained {
+                    return Err(ADDRESS);
+                }
                 return Ok((
                     s.owner.upgrade().ok_or(UNKNOWN)?,
                     start - other,
@@ -209,9 +240,15 @@ fn resolve(
     if all.len() >= 65536 {
         return Err(FULL);
     }
+    if !allow_unowned && owner.is_none() {
+        return Err(ADDRESS);
+    }
+    let retained = owner.is_some();
     let lease = Arc::new(());
     let receipt = Arc::downgrade(&lease);
-    let m = foreign(p, n, loc, lease)?;
+    // Both the release receipt and the actual exporter follow the backing,
+    // including native quarantine after the language-level object is gone.
+    let m = foreign(p, n, loc, Arc::new((lease, owner)))?;
     all.insert(
         start,
         Span {
@@ -219,6 +256,7 @@ fn resolve(
             end,
             owner: WeakBacking::new(&m),
             foreign: Some(receipt.clone()),
+            retained,
         },
     );
     Ok((m, 0, Some(receipt)))
@@ -250,6 +288,8 @@ struct Reg {
 }
 #[derive(Default)]
 pub(crate) struct Memory {
+    #[cfg(feature = "python")]
+    deferred: std::collections::BTreeSet<usize>,
     quarantine: Vec<MemoryBacking>,
     alloc: BTreeMap<usize, Allocation>,
     regs: BTreeMap<(usize, usize), Reg>,
@@ -257,6 +297,26 @@ pub(crate) struct Memory {
 }
 
 impl Memory {
+    #[cfg(feature = "python")]
+    pub(crate) fn defer_free(&mut self, e: &TransferEngine, addr: usize) -> Result<()> {
+        match self.free(e, addr as *mut c_void) {
+            Ok(()) => Ok(()),
+            Err(c) if c == FULL => {
+                self.deferred.insert(addr); // bounded by the allocation table
+                Ok(())
+            }
+            Err(c) => Err(c),
+        }
+    }
+    #[cfg(feature = "python")]
+    pub(crate) fn reap_deferred(&mut self, e: &TransferEngine) {
+        let addresses: Vec<_> = self.deferred.iter().copied().collect();
+        for addr in addresses {
+            if self.free(e, addr as *mut c_void) != Err(FULL) {
+                self.deferred.remove(&addr);
+            }
+        }
+    }
     pub fn allocate(&mut self, e: &TransferEngine, n: usize, o: Opt) -> Result<*mut c_void> {
         if n == 0 || n > isize::MAX as usize {
             return Err(INVALID);
@@ -383,6 +443,7 @@ impl Memory {
                 end,
                 owner: WeakBacking::new(&m),
                 foreign: None,
+                retained: true,
             },
         );
         self.alloc.insert(
@@ -441,6 +502,8 @@ impl Memory {
         all.remove(&addr);
         self.bytes -= a.bytes;
         self.alloc.remove(&addr);
+        #[cfg(feature = "python")]
+        self.deferred.remove(&addr);
         Ok(())
     }
     pub fn register(
@@ -450,6 +513,23 @@ impl Memory {
         sizes: &[usize],
         o: Opt,
     ) -> Result<()> {
+        self.register_owned(e, addrs, sizes, o, &[], true)
+    }
+    pub(crate) fn register_owned(
+        &mut self,
+        e: &TransferEngine,
+        addrs: &[*mut c_void],
+        sizes: &[usize],
+        o: Opt,
+        owners: &[Option<Arc<dyn Send + Sync>>],
+        allow_unowned: bool,
+    ) -> Result<()> {
+        if addrs.len() != sizes.len()
+            || (!owners.is_empty() && owners.len() != addrs.len())
+            || addrs.len() > e.config().max_registered_regions
+        {
+            return Err(INVALID);
+        }
         if !e.transport_installed(o.route) {
             return Err(UNSUPPORTED);
         }
@@ -458,7 +538,7 @@ impl Memory {
         }
         let mut ranges = Vec::with_capacity(addrs.len());
         let mut witnesses = Vec::with_capacity(addrs.len());
-        for (&p, &n) in addrs.iter().zip(sizes) {
+        for (index, (&p, &n)) in addrs.iter().zip(sizes).enumerate() {
             let key = (p as usize, n);
             if let Some(r) = self.regs.get(&key) {
                 if r.error.is_some()
@@ -469,7 +549,13 @@ impl Memory {
                     return Err(INVALID);
                 }
             }
-            let (memory, offset, receipt) = resolve(p, n, o.location)?;
+            let (memory, offset, receipt) = resolve(
+                p,
+                n,
+                o.location,
+                owners.get(index).cloned().flatten(),
+                allow_unowned,
+            )?;
             let actual = match &memory {
                 MemoryBacking::Host(m) => m.location(offset, n)?.location,
                 #[cfg(feature = "cuda")]
