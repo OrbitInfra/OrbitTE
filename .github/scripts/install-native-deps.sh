@@ -7,15 +7,26 @@ set -euo pipefail
 sources="${RUNNER_TEMP:?RUNNER_TEMP must name the CI scratch directory}/orbite-ubuntu.sources"
 sourceparts="$RUNNER_TEMP/orbite-apt-sourceparts"
 mkdir -p "$sourceparts"
-cat > "$sources" <<'SOURCES'
+case "$(dpkg --print-architecture)" in
+    amd64)
+        archive_uri=https://archive.ubuntu.com/ubuntu
+        security_uri=https://security.ubuntu.com/ubuntu
+        ;;
+    arm64)
+        archive_uri=https://ports.ubuntu.com/ubuntu-ports
+        security_uri=$archive_uri
+        ;;
+    *) echo 'unsupported CI package architecture' >&2; exit 1 ;;
+esac
+cat > "$sources" <<SOURCES
 Types: deb
-URIs: https://archive.ubuntu.com/ubuntu
+URIs: $archive_uri
 Suites: noble noble-updates
 Components: main universe
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
 Types: deb
-URIs: https://security.ubuntu.com/ubuntu
+URIs: $security_uri
 Suites: noble-security
 Components: main universe
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
