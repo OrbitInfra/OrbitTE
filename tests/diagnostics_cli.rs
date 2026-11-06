@@ -67,6 +67,7 @@ fn packaged_cli_contract_and_compiled_feature_flags() {
                 ("cuda", cfg!(feature = "cuda")),
                 ("uring", cfg!(feature = "io-uring")),
                 ("metrics", cfg!(feature = "metrics")),
+                ("device-plugin", cfg!(feature = "device-plugin")),
                 ("rdma-adaptive", cfg!(feature = "rdma-adaptive")),
                 ("gds", cfg!(feature = "gds")),
             ] {

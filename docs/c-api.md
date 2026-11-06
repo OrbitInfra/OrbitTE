@@ -56,6 +56,10 @@ The classic adapter returns `ERR_METADATA`; native C++ status messages carry
 the same guidance. These APIs install no logger. See the
 [discovery boundary](rust-api.md#discovery-boundary).
 
+The optional [device plugin loader](device-plugins.md) supplies retained CPU or
+CUDA allocations through the same registration and batch owners. Its extension
+header is separate from the frozen declarations.
+
 ## Register and transfer
 
 The source registers a live allocation with `tent_register_memory` and passes

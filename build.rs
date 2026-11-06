@@ -8,7 +8,8 @@ fn main() {
         feature = "cuda",
         feature = "rdma",
         feature = "io-uring",
-        feature = "gds"
+        feature = "gds",
+        feature = "device-plugin"
     )) {
         println!("cargo:rustc-cfg=unsupported_native_target");
     }

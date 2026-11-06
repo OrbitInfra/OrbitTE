@@ -77,6 +77,17 @@ fabric paths. The native transports retain their installed verification queue.
 The wheels and source archive are review artifacts; no PyPI publication is part
 of CI. See [Python packaging](python.md#packaging-and-evidence).
 
+## Device plugin controls
+
+The `device-plugin` CI combinations compile CPU shared-library fixtures and run
+`tests/device-plugin/run.py` against the packaged C installation on stable and
+Rust 1.85. They check frozen LP64 layouts, missing/incompatible libraries,
+registration and callback failures, guarded TCP READ/WRITE, cross-engine aliases
+and a paused transfer through cancellation and drain. CUDA combinations also
+run `tests/device-plugin/cuda.py` against a Driver API shim. Stable repeats these
+controls 50 times. This is CPU evidence; the CUDA plugin remains **Implemented;
+installed profile unqualified**.
+
 ## Installed C ABI on Linux
 
 The `Install both C libraries and run the independent C consumer` CI step builds both libraries from
@@ -108,6 +119,7 @@ external output directory; failed runs are kept.
 
 | Profile | Current state | Gate | Earlier evidence |
 | --- | --- | --- | --- |
+| [CUDA device plugin]{#queue-device-plugin} | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer device-plugin --toolchain stable --output "$ART"`. Run `python3 "$ART/device_plugin_run.py" --artifact "$ART" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --output "$RUN"`. Repeat the build with 1.85.0 in a fresh directory. | Plugin allocation, guarded H2D/D2H and TCP READ/WRITE, exact context and physical cleanup; CPU shims only so far |
 | [Python retained CUDA exporters]{#queue-python-cuda} | Implemented; installed profile unqualified | Build with a wheel-compatible Python and maturin: `python3 tests/hardware/build_installed.py --consumer python-cuda --toolchain stable --output "$ART"`. With CUDA PyTorch installed for that interpreter, run `python3 "$ART/python_cuda_run.py" --artifact "$ART" --python "$PYTHON" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --output "$RUN"`. Repeat the build with 1.85.0 in a fresh directory. | CAI/DLPack, guarded GPU↔host TCP in both requester/source roles, exporter release; CI driver-shim controls only |
 | C++ classic scatter on RDMA and GPU Direct | Implemented; installed profile unqualified | [Packaged C++ scatter requester and Rust source](#native-c-scatter) | CPU loopback HP-TCP plus CUDA/verbs shim controls |
 | C ABI on GPU and two RNICs | Implemented; installed profile unqualified | Install the packaged libraries on each host, then run the [two-process C hardware gate](#native-c-transfer-engine) with TCP/CUDA or RDMA and two visible NICs. | Installed C loopback CPU controls |

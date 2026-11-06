@@ -73,6 +73,7 @@ transport-selection
 async-batches
 metrics
 diagnostics
+device-plugins
 rdma-cuda
 cuda-ipc
 local-copy

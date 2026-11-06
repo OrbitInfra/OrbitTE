@@ -123,6 +123,7 @@ pub fn version_snapshot() -> Snapshot {
                 ("uring", cfg!(feature = "io-uring")),
                 ("gds", cfg!(feature = "gds")),
                 ("metrics", cfg!(feature = "metrics")),
+                ("device-plugin", cfg!(feature = "device-plugin")),
                 ("rdma-adaptive", cfg!(feature = "rdma-adaptive")),
             ]
             .map(|(k, v)| (k.to_owned(), v))

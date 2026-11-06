@@ -43,7 +43,7 @@ impl Location {
                         i32::try_from(id.parse::<u32>().map_err(|_| INVALID)?)
                             .map_err(|_| INVALID)?,
                     )),
-                    "mlu" | "xpu" | "ascend" | "rocm" | "npu" | "tpu" => Err(UNSUPPORTED),
+                    "mlu" | "xpu" | "ascend" | "rocm" | "hip" | "npu" | "tpu" => Err(UNSUPPORTED),
                     _ => Err(INVALID),
                 }
             }
@@ -165,6 +165,8 @@ pub(crate) enum ExportKind {
     },
 }
 struct Span {
+    #[cfg(all(feature = "device-plugin", feature = "cuda"))]
+    plugin: bool,
     fenced: bool,
     end: usize,
     owner: WeakBacking,
@@ -282,6 +284,8 @@ fn resolve(
                 all.entry(*address)
                     .and_modify(|span| span.end = span.end.max(export_end))
                     .or_insert(Span {
+                        #[cfg(all(feature = "device-plugin", feature = "cuda"))]
+                        plugin: false,
                         fenced: true,
                         end: export_end,
                         owner: WeakBacking::Cuda(Weak::new()),
@@ -342,6 +346,8 @@ fn resolve(
     all.insert(
         span_start,
         Span {
+            #[cfg(all(feature = "device-plugin", feature = "cuda"))]
+            plugin: false,
             fenced: false,
             end: span_end,
             owner: WeakBacking::new(&m),
@@ -351,8 +357,10 @@ fn resolve(
     );
     Ok((m, start - span_start, Some(receipt)))
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Kind {
+    #[cfg(feature = "device-plugin")]
+    Plugin(Arc<crate::device_plugin::Allocation>),
     Ordinary,
     Shm,
     #[cfg(feature = "cuda")]
@@ -386,6 +394,8 @@ pub(crate) struct Memory {
     alloc: BTreeMap<usize, Allocation>,
     regs: BTreeMap<(usize, usize), Reg>,
     bytes: usize,
+    #[cfg(feature = "device-plugin")]
+    plugins: Vec<Arc<crate::device_plugin::Plugin>>,
 }
 
 impl Memory {
@@ -441,6 +451,122 @@ impl Memory {
         });
         if all.len() >= 65536 {
             return Err(FULL);
+        }
+        #[cfg(feature = "device-plugin")]
+        let plugin = self
+            .plugins
+            .iter()
+            .find(|p| {
+                p.class
+                    == match o.location {
+                        Location::Cuda(_) => "cuda",
+                        _ => "cpu",
+                    }
+            })
+            .cloned();
+        #[cfg(feature = "device-plugin")]
+        if let Some(plugin) = plugin {
+            if matches!(o.route, Transport::Shm | Transport::Mnnvl) {
+                return Err(UNSUPPORTED);
+            }
+            let location = match o.location {
+                Location::Cuda(id) => format!("cuda:{id}"),
+                Location::Cpu(Some(id)) => format!("cpu:{id}"),
+                _ => "cpu:0".into(),
+            };
+            let (owner, allocated) = plugin.allocate(n, &location);
+            let backing = allocated.and_then(|()| {
+                let actual = owner.location()?;
+                if actual != location {
+                    return Err(orbite::Error::Unavailable(
+                        "device plugin returned a different location",
+                    ));
+                }
+                match o.location {
+                    Location::Cuda(_) => {
+                        #[cfg(feature = "cuda")]
+                        {
+                            // SAFETY: this allocation's plugin owner pins it until
+                            // native drain. CUDA verifies the claimed type and extent.
+                            let gpu = unsafe {
+                                orbite::cuda::CudaMemory::from_raw_parts(
+                                    owner.address as u64,
+                                    n,
+                                    owner.clone(),
+                                )
+                            }?;
+                            if gpu.location(0, n)?.location.to_string() != location {
+                                return Err(orbite::Error::Unavailable(
+                                    "device plugin CUDA device mismatch",
+                                ));
+                            }
+                            Ok(MemoryBacking::Cuda(Arc::new(gpu)))
+                        }
+                        #[cfg(not(feature = "cuda"))]
+                        {
+                            Err(orbite::Error::Unavailable("CUDA feature disabled"))
+                        }
+                    }
+                    _ => {
+                        // SAFETY: the checked CPU plugin supplies writable stable
+                        // host storage. Its owner is held through every core loan.
+                        let host = unsafe {
+                            HostMemory::from_raw_parts(
+                                NonNull::new(owner.address as *mut u8)
+                                    .ok_or(orbite::Error::InvalidRange)?,
+                                n,
+                                owner.clone(),
+                            )
+                        }?;
+                        Ok(MemoryBacking::Host(Arc::new(host)))
+                    }
+                }
+            });
+            let memory = match backing {
+                Ok(memory) => memory,
+                Err(error) => {
+                    if matches!(error, orbite::Error::Unquiesced { .. }) || owner.close().is_err() {
+                        self.quarantine_owners.push(owner);
+                        self.bytes = total;
+                        return Err(UNKNOWN);
+                    }
+                    return Err(error.into());
+                }
+            };
+            let address = base(&memory);
+            let end = address.checked_add(n).ok_or(INVALID)?;
+            if let Some((_, prior)) = all.range_mut(..end).next_back() {
+                if prior.end > address {
+                    prior.fenced = true;
+                    self.quarantine.push(memory);
+                    self.quarantine_owners.push(owner);
+                    self.bytes = total;
+                    return Err(UNKNOWN);
+                }
+            }
+            all.insert(
+                address,
+                Span {
+                    #[cfg(all(feature = "device-plugin", feature = "cuda"))]
+                    plugin: true,
+                    fenced: false,
+                    end,
+                    owner: WeakBacking::new(&memory),
+                    foreign: None,
+                    retained: true,
+                },
+            );
+            self.alloc.insert(
+                address,
+                Allocation {
+                    memory: Some(memory),
+                    kind: Kind::Plugin(owner),
+                    bytes: n,
+                    error: None,
+                },
+            );
+            self.bytes = total;
+            return Ok(address as *mut c_void);
         }
         let (m, kind) = match o.location {
             Location::Cuda(id) => {
@@ -531,6 +657,8 @@ impl Memory {
         all.insert(
             address,
             Span {
+                #[cfg(all(feature = "device-plugin", feature = "cuda"))]
+                plugin: false,
                 fenced: false,
                 end,
                 owner: WeakBacking::new(&m),
@@ -571,7 +699,7 @@ impl Memory {
         }
         let m = a.memory.take().ok_or(INTERNAL)?;
         // Keep the address and budget charged on failed native retirement.
-        let result = match (m, a.kind) {
+        let result = match (m, a.kind.clone()) {
             (MemoryBacking::Host(h), Kind::Shm) => e.free_shm_memory(h),
             #[cfg(feature = "cuda")]
             (MemoryBacking::Host(h), Kind::Egm) => e.free_egm(h),
@@ -583,6 +711,14 @@ impl Memory {
             #[cfg(feature = "cuda")]
             (MemoryBacking::Cuda(g), _) => g.release_owned(),
         };
+        #[cfg(feature = "device-plugin")]
+        let result = result.and_then(|()| {
+            if let Kind::Plugin(owner) = &a.kind {
+                owner.close()
+            } else {
+                Ok(())
+            }
+        });
         if let Err(error) = result {
             if let Some(s) = all.get_mut(&addr) {
                 s.fenced = true;
@@ -845,7 +981,14 @@ impl Memory {
                         return Err(FULL);
                     }
                     #[cfg(feature = "cuda")]
-                    if r.foreign.is_some() {
+                    let external_backing = r.foreign.is_some();
+                    #[cfg(all(feature = "cuda", feature = "device-plugin"))]
+                    let external_backing = external_backing
+                        || lock(spans())?
+                            .get(&r.backing_base)
+                            .is_some_and(|span| span.plugin);
+                    #[cfg(feature = "cuda")]
+                    if external_backing {
                         let backing = lock(spans())?
                             .get(&r.backing_base)
                             .and_then(|s| s.owner.upgrade());
@@ -918,6 +1061,8 @@ impl Memory {
         for k in keys {
             self.free(e, k as *mut c_void)?;
         }
+        #[cfg(feature = "device-plugin")]
+        self.close_plugins()?;
         Ok(())
     }
 }
@@ -925,3 +1070,96 @@ impl Memory {
 #[cfg(all(test, feature = "python"))]
 #[path = "../tests/unit/python_memory.rs"]
 mod python_tests;
+
+#[cfg(feature = "device-plugin")]
+impl Memory {
+    pub fn load_plugins(&mut self, path: &std::path::Path) -> Result<()> {
+        if !self.alloc.is_empty()
+            || !self.regs.is_empty()
+            || !self.quarantine_owners.is_empty()
+            || !self.quarantine.is_empty()
+        {
+            return Err(FULL);
+        }
+        Ok(crate::device_plugin::load(&mut self.plugins, path)?)
+    }
+    pub fn close_plugins(&mut self) -> Result<()> {
+        if self.alloc.values().any(|a| a.error == Some(UNKNOWN))
+            || !self.quarantine_owners.is_empty()
+        {
+            return Err(UNKNOWN);
+        }
+        // Preflight every plugin first: no partial close while any allocation is
+        // still retained by this engine or by another engine's alias.
+        if self
+            .alloc
+            .values()
+            .any(|a| matches!(a.kind, Kind::Plugin(_)))
+            || !self.quarantine_owners.is_empty()
+        {
+            return Err(FULL);
+        }
+        let mut result = Ok(());
+        for plugin in &self.plugins {
+            if let Err(e) = plugin.close() {
+                result = Err(Code::from(e));
+            }
+        }
+        result?;
+        self.plugins.clear();
+        Ok(())
+    }
+    pub fn plugin_copy(&mut self, dst: *mut c_void, src: *mut c_void, size: usize) -> Result<()> {
+        let (dst, end) = bounds(dst, size)?;
+        let (src, src_end) = bounds(src, size)?;
+        if dst < src_end && src < end {
+            return Err(INVALID);
+        }
+        let resolve = |start, end| -> Result<_> {
+            let (&base, a) = self.alloc.range(..=start).next_back().ok_or(INVALID)?;
+            if base.checked_add(a.bytes).is_none_or(|n| end > n) {
+                return Err(INVALID);
+            }
+            if let Some(e) = a.error {
+                return Err(e);
+            }
+            let memory = a.memory.as_ref().ok_or(INTERNAL)?;
+            let (count, host) = match memory {
+                MemoryBacking::Host(v) => (Arc::strong_count(v), true),
+                #[cfg(feature = "cuda")]
+                MemoryBacking::Cuda(v) => (Arc::strong_count(v), false),
+            };
+            if count != 1 {
+                return Err(FULL);
+            } // aliases/registrations/native work
+            Ok((base, host))
+        };
+        let (db, dh) = resolve(dst, end)?;
+        let (sb, sh) = resolve(src, src_end)?;
+        for plugin in &self.plugins {
+            match plugin.copy(dst, src, size) {
+                Ok(true) => return Ok(()),
+                Ok(false) => (),
+                Err(e) => {
+                    let mut spans = lock(spans())?;
+                    for base in [db, sb] {
+                        if let Some(a) = self.alloc.get_mut(&base) {
+                            a.error = Some(UNKNOWN);
+                        }
+                        if let Some(s) = spans.get_mut(&base) {
+                            s.fenced = true;
+                        }
+                    }
+                    return Err(e.into());
+                }
+            }
+        }
+        if !dh || !sh {
+            return Err(UNSUPPORTED);
+        }
+        // SAFETY: both ranges are checked, disjoint CPU allocations held solely
+        // by this registry, with no registration, native loan or external alias.
+        unsafe { ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, size) };
+        Ok(())
+    }
+}

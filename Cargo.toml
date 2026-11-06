@@ -27,6 +27,8 @@ cuda = ["dep:cudarc", "dep:libloading", "dep:socket2"]
 io-uring = ["dep:io-uring"]
 gds = ["cuda"]
 metrics = []
+# C ABI plugin loader switch; the Rust core continues to own the backing.
+device-plugin = []
 rdma-adaptive = ["rdma"]
 
 [lints.clippy]
