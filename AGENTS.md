@@ -633,7 +633,8 @@ list below shows its scope.
    - S24 EFA;
    - S25 MPComm.
 4. **Release work:** the P10 fault matrix, P11 matched performance against
-   TENT, and installed OrbitKV integration.
+   TENT, and installed OrbitKV integration. Follow the
+   [release ladder](docs/completion-plan.md#release-ladder).
 
 ## 9. Do not
 

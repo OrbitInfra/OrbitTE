@@ -290,9 +290,10 @@ and prevent guard exit/destruction from freeing submitted work prematurely.
 
 OrbiTE uses wire version **1** throughout pre-release development. Both
 peers must run the same build. The header carries no build identifier, so
-it cannot detect a mismatched build. Wire versioning under an explicit
-compatibility policy starts at the first release. RDMA peers using endpoint QP
-pools must also share the same ordered pool layout, width and link-layer settings.
+it cannot detect a mismatched build. The explicit compatibility policy starts
+at `0.1.0`, as defined in the [release ladder](completion-plan.md#release-ladder).
+RDMA peers using endpoint QP pools must also share the same ordered pool layout,
+width and link-layer settings.
 The control-plane magic keeps its historical spelling, `ORBITTE\0`.
 
 The control RPC assigns IDs for descriptor lookup, RDMA bootstrap, SendData,
