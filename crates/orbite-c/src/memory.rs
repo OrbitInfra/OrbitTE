@@ -1115,8 +1115,15 @@ impl Memory {
         if dst < src_end && src < end {
             return Err(INVALID);
         }
+        // Alias registration upgrades the same span table under this lock.
+        // Keep it through completion, so a new alias cannot appear after the
+        // sole-backing check and race a raw synchronous plugin callback.
+        let mut spans = lock(spans())?;
         let resolve = |start, end| -> Result<_> {
             let (&base, a) = self.alloc.range(..=start).next_back().ok_or(INVALID)?;
+            if spans.get(&base).is_some_and(|s| s.fenced) {
+                return Err(UNKNOWN);
+            }
             if base.checked_add(a.bytes).is_none_or(|n| end > n) {
                 return Err(INVALID);
             }
@@ -1141,12 +1148,13 @@ impl Memory {
         };
         let (db, dh) = resolve(dst, end)?;
         let (sb, sh) = resolve(src, src_end)?;
+        #[cfg(test)]
+        plugin_tests::copy_entered();
         for plugin in &self.plugins {
             match plugin.copy(dst, src, size) {
                 Ok(true) => return Ok(()),
                 Ok(false) => (),
                 Err(e) => {
-                    let mut spans = lock(spans())?;
                     for base in [db, sb] {
                         if let Some(a) = self.alloc.get_mut(&base) {
                             a.error = Some(UNKNOWN);
@@ -1168,3 +1176,7 @@ impl Memory {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "device-plugin"))]
+#[path = "../tests/unit/plugin_memory.rs"]
+mod plugin_tests;
