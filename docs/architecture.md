@@ -71,6 +71,10 @@ allocation. Cross-engine aliases retain the same backing. Synchronous plugin
 copies hold the span-table lock through completion; the
 `synchronous_copy_excludes_concurrent_alias_publication` control proves that
 another engine cannot publish an alias after the exclusivity check.
+Unlike frozen `cudaMemcpy` dispatch, the CUDA provider drains the legacy stream
+before reporting success: [CUDA's synchronous API](https://docs.nvidia.com/cuda/cuda-driver-api/api-sync-behavior.html)
+can return before device-to-device or pageable-host-to-device DMA completes.
+CUDA shim modes 23 and 2 defer bytes until that drain and retain owners when it fails.
 The CUDA table refuses copies of foreign device allocations without a provider
 owner, returning the handled error before posting (`cuda.py` case 21). Its
 metadata query still checks foreign CUDA ranges through the native probe. The

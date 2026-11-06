@@ -14,6 +14,8 @@ struct allocation { uintptr_t p; size_t n; int device; };
 static struct allocation allocations[LIMIT];
 static _Thread_local void *stack[32];
 static _Thread_local int depth;
+static _Thread_local uintptr_t pending_dst, pending_src;
+static _Thread_local size_t pending_bytes;
 static int hold, entered, fault, destroyed, freed, probes, ranges, records, host_frees;
 static void *ctx(int d) { return (void *)(uintptr_t)(16 + d); }
 static struct allocation *find(uintptr_t p) {
@@ -85,7 +87,7 @@ int cuStreamCreate(void **out,unsigned int flags) { (void)flags;struct stream *s
 int cuStreamGetCtx(void *s,void **out) { *out=(uintptr_t)s<=2?(depth?stack[depth-1]:NULL):((struct stream *)s)->context;return *out?0:201; }
 int cuStreamIsCapturing(void *s,int *out) { (void)s;*out=0;return 0; }
 int cuStreamDestroy_v2(void *s) { if(failed(4))return 999;free(s);return 0; }
-int cuStreamSynchronize(void *s) { (void)s;return failed(2)?999:0; }
+int cuStreamSynchronize(void *s) { (void)s;if(failed(2))return 999;if(pending_bytes){memmove((void*)pending_dst,(void*)pending_src,pending_bytes);pending_bytes=0;}return 0; }
 int cuEventCreate(void **out,unsigned int flags) { (void)flags;*out=malloc(1);return *out?0:2; }
 int cuEventRecord(void *e,void *s) { (void)e;(void)s;pthread_mutex_lock(&mu);records++;pthread_mutex_unlock(&mu);return 0; }
 int cuEventSynchronize(void *e) {
@@ -98,7 +100,7 @@ int cuEventQuery(void *e) { (void)e;pthread_mutex_lock(&mu);int rc=hold?600:faul
 int cuEventDestroy_v2(void *e) { pthread_mutex_lock(&mu);destroyed++;int f=fault==4;pthread_mutex_unlock(&mu);if(f)return 999;free(e);return 0; }
 int cuStreamWaitEvent(void *s,void *e,unsigned int flags) { (void)s;(void)e;(void)flags;return 0; }
 #ifndef ORBITE_PLUGIN_MISSING_COPY
-int cuMemcpy(uint64_t d,uint64_t s,size_t n) { if(failed(6))return 999;memmove((void *)(uintptr_t)d,(void *)(uintptr_t)s,n);return 0; }
+int cuMemcpy(uint64_t d,uint64_t s,size_t n) { if(failed(6))return 999;if(failed(10)){if(pending_bytes)return 999;pending_dst=d;pending_src=s;pending_bytes=n;return 0;}memmove((void *)(uintptr_t)d,(void *)(uintptr_t)s,n);return 0; }
 #endif
 int cuMemcpyAsync(uint64_t d,uint64_t s,size_t n,void *stream) { (void)stream;memmove((void *)(uintptr_t)d,(void *)(uintptr_t)s,n);return 0; }
 int cuMemcpyDtoHAsync_v2(void *d,uint64_t s,size_t n,void *stream) { return cuMemcpyAsync((uintptr_t)d,s,n,stream); }

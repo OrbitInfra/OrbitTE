@@ -82,7 +82,9 @@ special SHM/fabric allocations whose access protocols cannot be delegated to a
 raw callback. Alias publication is excluded until the synchronous copy returns.
 A handled plugin error cannot fall through to host `memcpy`; host fallback is
 allowed only for two verified CPU allocations. CUDA copies restore the caller's
-exact context, including an absent context. The CUDA table can query external
+exact context, including an absent context. The provider also drains the legacy
+stream: a successful `cuMemcpy` alone is not a completion receipt for device
+copies or pageable host input. Failed drain retains both endpoints. The CUDA table can query external
 CUDA metadata, but device copies require allocations retained by its context;
 a foreign device address returns the handled error before copying, so TENT cannot fall through
 to a host copy. This is stricter than the frozen CUDA plugin. Raw table callers

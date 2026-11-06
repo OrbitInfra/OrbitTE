@@ -74,10 +74,15 @@ impl CudaMemory {
         };
         let result = context.current(|| {
             // SAFETY: both endpoints remain pinned by the native-plugin caller;
-            // the allocation's context is current and the call is synchronous.
-            check("cuMemcpy plugin", unsafe {
-                (context.driver.copy_sync)(dst, src, length)
-            })
+            // the allocation's exact context is current for the legacy stream.
+            let copied = unsafe { (context.driver.copy_sync)(dst, src, length) };
+            // cuMemcpy can return before DtoD/pageable HtoD completes. As for
+            // IPC's synchronous path, drain before returning a release receipt,
+            // including after a copy error that might have posted work.
+            // SAFETY: the unsuffixed copy uses this retained context's legacy stream.
+            let drained = unsafe { (context.driver.stream_synchronize)(std::ptr::null_mut()) };
+            check("cuMemcpy plugin", copied)?;
+            check("cuStreamSynchronize plugin", drained)
         });
         if result.is_err() {
             allocation.uncertain = true;

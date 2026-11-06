@@ -16,7 +16,7 @@ def main():
         shim=[cc,'-std=c11','-D_POSIX_C_SOURCE=200809L','-shared','-fPIC','-pthread',ROOT/'tests/python/cuda_shim.c','-o',tmp/'libcuda.so.1']
         subprocess.run(shim,check=True)
         for i in range(a.repeat):
-            for fault in (0,20,21,22,26,3,6,7,8,9):
+            for fault in (0,20,21,22,23,26,2,3,6,7,8,9):
                 subprocess.run([exe,prefix/'lib/libtent.so',str(fault)],env=env,check=True,timeout=60,stdout=subprocess.DEVNULL)
             print(f'CUDA plugin shim {i+1}/{a.repeat}: passed',flush=True)
         subprocess.run([*shim,'-DORBITE_PLUGIN_MISSING_COPY'],check=True)

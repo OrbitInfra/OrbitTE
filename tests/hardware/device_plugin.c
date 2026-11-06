@@ -53,10 +53,17 @@ int main(int argc,char **argv) {
         inject(8);assert(table.memcpy_sync(ctx,host,host,N)==-1);inject(0);
         assert(!table.destroy_plugin(ctx));assert(!release(address));assert(!tent_free_memory(a,gpu));assert(!tent_free_memory(a,host));assert(!orbite_close_device_plugins(a));tent_destroy_engine(a);tent_destroy_engine(b);dlclose(driver);return 0;
     }
-    if(inject && fault && fault!=20 && fault!=7)inject(fault==26?6:fault);
+    if(inject && fault && fault!=20 && fault!=7)inject(fault==26?6:fault==23?10:fault);
     int copied=orbite_plugin_memcpy_sync(a,gpu,host,N);
-    if(fault && fault!=20 && fault!=7){assert(copied==-135);inject(0);assert(!get(&after));assert(after==caller);assert(tent_free_memory(a,gpu)==-135);assert(tent_free_memory(a,host)==-135);assert(orbite_close_device_plugins(a)==-135);tent_destroy_engine(a);tent_destroy_engine(b);dlclose(driver);return 0;}
+    if(fault && fault!=20 && fault!=7 && fault!=23){assert(copied==-135);inject(0);assert(!get(&after));assert(after==caller);assert(tent_free_memory(a,gpu)==-135);assert(tent_free_memory(a,host)==-135);assert(orbite_close_device_plugins(a)==-135);tent_destroy_engine(a);tent_destroy_engine(b);dlclose(driver);return 0;}
     assert(!copied);assert(!get(&after));assert(after==caller);
+    if(fault==23){
+        void *second=NULL;assert(!tent_allocate_memory(a,&second,N,"cuda:0"));
+        assert(!orbite_plugin_memcpy_sync(a,second,gpu,N));memset(host,0,N);
+        assert(!orbite_plugin_memcpy_sync(a,host,second,N));
+        for(int i=0;i<N;i++)assert(((unsigned char*)host)[i]==(unsigned char)(i*31+7));
+        assert(!tent_free_memory(a,second));
+    }
     memset(host,0,N);assert(!orbite_plugin_memcpy_sync(a,host,gpu,N));
     for(int i=0;i<N;i++)assert(((unsigned char*)host)[i]==(unsigned char)(i*31+7));
     assert(!tent_register_memory(a,gpu,N));assert(tent_free_memory(a,gpu)==-2);
