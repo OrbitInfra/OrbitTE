@@ -17,7 +17,7 @@ documentation = "https://orbitinfra.github.io/OrbiTE/"
 readme = "README.md"
 keywords = ["rdma", "transfer", "distributed", "ai", "memory"]
 categories = ["network-programming"]
-include = ["build.rs", "src/**", "include/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
+include = ["build.rs", "src/**", "include/**", "tests/**", "examples/**", "docs/**", "python/**", "pyproject.toml", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
 publish = ["crates-io"]
 
 [features]

@@ -6,6 +6,52 @@ use pyo3::{
 };
 
 #[test]
+fn each_export_lease_is_charged_even_for_duplicate_registration_aliases() {
+    let e = TransferEngine::new(orbite::EngineConfig {
+        max_registered_regions: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut storage = Box::new([7u8; 16]);
+    let pointer = storage.as_mut_ptr().cast();
+    let owner = Owner {
+        keep: Arc::new(storage),
+        kind: ExportKind::Host,
+    };
+    let witness = Arc::downgrade(&owner.keep);
+    let mut memory = Memory::default();
+    for _ in 0..2 {
+        memory
+            .register_owned(
+                &e,
+                &[pointer],
+                &[16],
+                Opt::default(),
+                &[Some(owner.clone())],
+                false,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        memory.register_owned(
+            &e,
+            &[pointer],
+            &[16],
+            Opt::default(),
+            &[Some(owner.clone())],
+            false
+        ),
+        Err(FULL)
+    );
+    assert_eq!(memory.regs[&(pointer as usize, 16)].owners.len(), 2);
+    drop(owner);
+    memory.unregister(&e, &[pointer], Some(&[16])).unwrap();
+    assert!(witness.upgrade().is_some());
+    memory.unregister(&e, &[pointer], Some(&[16])).unwrap();
+    assert!(witness.upgrade().is_none());
+}
+
+#[test]
 fn uncertain_cleanup_keeps_the_real_python_exporter_and_closed_slot() {
     Python::initialize();
     Python::attach(|py| {
@@ -25,7 +71,10 @@ fn uncertain_cleanup_keeps_the_real_python_exporter_and_closed_slot() {
                     &[address as *mut c_void],
                     &[16],
                     Opt::default(),
-                    &[Some(owner)],
+                    &[Some(Owner {
+                        keep: owner,
+                        kind: ExportKind::Host,
+                    })],
                     false,
                 )?;
                 // Fault injection at the native-cleanup result boundary. Core

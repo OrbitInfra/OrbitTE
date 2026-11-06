@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import shlex
 import subprocess
+import sys
 import tarfile
 import time
 import tomllib
@@ -21,6 +22,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
+        "python-cuda": (["cuda"], "orbite-python-cuda", "orbite-installed-python-cuda", "tests/hardware/python_cuda.py"),
         "cpp-abi": (["rdma", "cuda"], "orbite-cpp-hardware", "libtent-cpp", "tests/hardware/cpp_abi.cpp"),
         "c-abi": (["rdma", "cuda"], "orbite-c-hardware", "libtent", "tests/hardware/c_abi.c"),
         "peer-retirement": (["rdma", "cuda"], "orbite-peer-retirement", "orbite-installed-peer-retirement", "tests/hardware/peer_retirement.rs"),
@@ -86,6 +88,44 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             raise ValueError('expected one package root')
         library = packages[0]
         fixture = library / fixture_relative
+        if consumer_kind == 'python-cuda':
+            patch = 'patch.crates-io.orbite.path=' + json.dumps(str(root))
+            run('ffi-package', [*package, '-p', 'orbite-c', '--config', patch])
+            ffi_archive, = (output / 'target/package').glob('orbite-c-*.crate')
+            with tarfile.open(ffi_archive) as bundle:
+                bundle.extractall(unpack, filter='data')
+            ffi, = unpack.glob('orbite-c-*')
+            project = output / 'python-project'
+            project.mkdir()
+            shutil.copytree(library / 'python', project / 'python')
+            shutil.copy2(library / 'docs/python.md', project / 'README.md')
+            shutil.copy2(library / 'LICENSE', project / 'LICENSE')
+            config = (library / 'pyproject.toml').read_text().replace(
+                '"crates/orbite-c/Cargo.toml"', json.dumps(str(ffi / 'Cargo.toml'))).replace(
+                '"docs/python.md"', '"README.md"')
+            (project / 'pyproject.toml').write_text(config)
+            # Maturin's metadata pass does not forward --config on every
+            # supported release; use Cargo's immutable per-project config.
+            (project / '.cargo').mkdir()
+            (project / '.cargo/config.toml').write_text(
+                '[patch.crates-io]\norbite = { path = ' + json.dumps(str(library)) + ' }\n')
+            wheels = output / 'wheels'
+            run('wheel', [sys.executable, '-m', 'maturin', 'build', '--locked', '--release',
+                          '--interpreter', sys.executable, '--features', 'python,pyo3/extension-module,cuda',
+                          '--out', str(wheels), '--config',
+                          'patch.crates-io.orbite.path=' + json.dumps(str(library))], cwd=project)
+            wheel, = wheels.glob('*.whl')
+            fixtures = {}
+            for name in ('python_cuda.py', 'python_cuda_run.py'):
+                src = library / 'tests/hardware' / name
+                if src.read_bytes() != (root / 'tests/hardware' / name).read_bytes():
+                    raise ValueError('packaged Python gate differs from source')
+                shutil.copy2(src, output / name)
+                fixtures[name] = digest(output / name)
+            manifest.update(status='built', protocol=protocol, package_sha256=digest(archive),
+                            ffi_package_sha256=digest(ffi_archive), wheel=str(wheel),
+                            wheel_sha256=digest(wheel), fixture_files_sha256=fixtures)
+            return
         if consumer_kind in ('c-abi', 'cpp-abi'):
             cpp = consumer_kind == 'cpp-abi'
             patch = 'patch.crates-io.orbite.path=' + json.dumps(str(root))
@@ -245,6 +285,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
+    parser.add_argument('--consumer', choices=('python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

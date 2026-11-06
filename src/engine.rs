@@ -1257,6 +1257,15 @@ impl TransferEngine {
         Ok(())
     }
 
+    /// Release currently idle CUDA staging buffers, including their retained
+    /// foreign context owners. Active borrowers are unchanged. This is not a
+    /// transfer drain receipt; callers still need their registration's release
+    /// receipt. A failed native cleanup retains the buffer and its pool charge.
+    #[cfg(feature = "cuda")]
+    pub fn trim_idle_staging_buffers(&self) -> Result<()> {
+        self.source.proxy.trim_idle()
+    }
+
     /// Establish an initial P2P identity for an address-only C segment name.
     /// The caller must trust the endpoint at first lookup and pin the result
     /// for the lifetime of the handle. Never call this to refresh a stale handle.

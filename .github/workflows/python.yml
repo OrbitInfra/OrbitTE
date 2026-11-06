@@ -42,8 +42,15 @@ jobs:
           done
       - name: Build and test the installed CPU wheel
         run: bash .github/scripts/check-installed-python.sh "$RUNNER_TEMP/wheel-cpu"
+      - name: CPU wheel rejects CUDA exports before requesting a capsule
+        run: python -I tests/python/test_cuda_exporters.py --cpu
       - name: Build and test the installed combined-feature wheel
         run: bash .github/scripts/check-installed-python.sh "$RUNNER_TEMP/wheel-combined" rdma,cuda,io-uring,gds,metrics,rdma-adaptive
+      - name: Drive installed CUDA-export owners through the fallible driver table
+        run: bash .github/scripts/check-python-cuda.sh "$RUNNER_TEMP/python-cuda-shim"
+      - name: Repeat CUDA-export alias, drain and cleanup controls 50 times
+        if: matrix.toolchain == 'stable' && matrix.python == '3.13'
+        run: bash .github/scripts/check-python-cuda.sh "$RUNNER_TEMP/python-cuda-repeat" 50
       - name: Repeat installed-wheel lifetime and GIL controls
         if: matrix.toolchain == 'stable' && matrix.python == '3.13'
         run: bash .github/scripts/repeat-python.sh "$RUNNER_TEMP/python-repeats"

@@ -55,9 +55,13 @@ builds one wheel per CPython version because the 3.10 stable ABI lacks the buffe
 API needed to retain exporters. Mooncake's `mooncake.tent` and standalone `tent`
 imports remain untouched; consumers explicitly import `orbite`.
 
-Python argument conversion captures a writable, contiguous memoryview. Its
-owner follows the shared `HostMemory` through aliases, worker loans, unregister
-and native quarantine. External integer addresses without an exporter are
+Python argument conversion captures a writable, contiguous memoryview or CUDA
+Array Interface/DLPack exporter. The CUDA path verifies the full export against
+driver allocation bounds and device attributes, consumes producer readiness in
+the exact allocation context, and retains each Python/capsule lease through
+aliases, worker loans, unregister and native quarantine. The capsule follows
+the published DLPack C layout without a new dependency; CPU wheels never request
+GPU capsules. External integer addresses without an exporter are
 rejected before dereference. The installed negative controls reject bare pointers,
 resize while registered and out-of-exporter ranges; a held TCP reply keeps the
 actual exporter alive after timeout, cancel and early guard drop. A memory guard
@@ -72,7 +76,17 @@ a held real TCP reply while another is blocked in wait. No Python objects enter
 the payload worker other than the retained exporter owner. Decrementing that
 owner uses PyO3's deferred reference pool; it never acquires the GIL beneath a
 native lock. A cleanup-result fault keeps a real Python exporter and its closed
-ABI slot; CUDA/verbs shims cover the actual failed native destroy. If interpreter finalization prevents a safe detach, the bounded
+ABI slot. Installed-wheel CUDA controls drive native range checks, exact context
+restoration, a blocked copy and failed pinned cleanup through a fallible driver
+shim. Export leases are bounded by the registration budget, including duplicates.
+`trim_idle_staging_buffers` reclaims only idle ProxyManager slots, with a bounded
+single pass and one-shot cleanup; active slots are untouched. The ABI adapter
+uses it together with `CudaMemory::trim_idle_copy_resources` before releasing
+foreign registrations, avoiding an idle context cache pinning a Python tensor
+indefinitely. Checked event/stream destruction reports `Unquiesced` before Drop;
+failed cleanup keeps the registration, slot charge and exporter (`test_failed_staging_cleanup_keeps_exporter_and_never_retries`).
+This retained interchange contract is an extension beyond TENT's raw integers.
+If interpreter finalization prevents a safe detach, the bounded
 ABI slot remains retained. The [guide](python.md) records these deliberate
 lifetime differences from frozen `src/python/pybind.cpp` and its guard test.
 

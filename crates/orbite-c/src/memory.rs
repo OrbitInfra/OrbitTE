@@ -147,6 +147,23 @@ impl WeakBacking {
         }
     }
 }
+#[derive(Clone)]
+pub(crate) struct Owner {
+    pub keep: Arc<dyn Send + Sync>,
+    pub kind: ExportKind,
+}
+#[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+pub(crate) enum ExportKind {
+    Host,
+    #[cfg(feature = "cuda")]
+    Cuda {
+        address: usize,
+        length: usize,
+        device: Option<i32>,
+        stream: Option<usize>,
+    },
+}
 struct Span {
     fenced: bool,
     end: usize,
@@ -209,16 +226,77 @@ fn resolve(
     p: *mut c_void,
     n: usize,
     loc: Location,
-    owner: Option<Arc<dyn Send + Sync>>,
+    owner: Option<Owner>,
     allow_unowned: bool,
 ) -> Result<(MemoryBacking, usize, Option<Weak<()>>)> {
     let (start, end) = bounds(p, n)?;
+    let lease = Arc::new(());
+    let receipt = Arc::downgrade(&lease);
+    let retained = owner.is_some();
+    let keep: Arc<dyn Send + Sync> = Arc::new((lease, owner.as_ref().map(|o| o.keep.clone())));
     let mut all = lock(spans())?;
     all.retain(|_, e| {
         e.fenced
             || e.owner.upgrade().is_some()
             || e.foreign.as_ref().is_some_and(|w| w.strong_count() != 0)
     });
+    if all.range(..end).any(|(_, s)| s.fenced && s.end > start) {
+        return Err(UNKNOWN);
+    }
+    if all.len() >= 65536 {
+        return Err(FULL);
+    }
+    // CUDA exporters take the strict device path. Validate the *exported* extent,
+    // not just the requested subrange, against native allocation metadata.
+    #[cfg(feature = "cuda")]
+    let candidate = if let Some(Owner {
+        kind:
+            ExportKind::Cuda {
+                address,
+                length,
+                device,
+                ..
+            },
+        ..
+    }) = &owner
+    {
+        if start < *address || end > address.checked_add(*length).ok_or(INVALID)? {
+            return Err(INVALID);
+        }
+        // SAFETY: the retained interchange owner pins writable device memory and
+        // its context. The core verifies kind, actual mapped extent and ordinal.
+        let probed = unsafe {
+            orbite::cuda::CudaMemory::from_raw_parts(*address as u64, *length, keep.clone())
+        };
+        let memory = match probed {
+            Ok(memory) => memory,
+            Err(error @ orbite::Error::Unquiesced { .. }) => {
+                // An uncertain context restore retains the native owner. Fence
+                // this address globally as well as the engine's Python lease.
+                let export_end = address.checked_add(*length).ok_or(INVALID)?;
+                for (&base, span) in all.iter_mut() {
+                    if base < export_end && span.end > *address {
+                        span.fenced = true;
+                    }
+                }
+                all.entry(*address)
+                    .and_modify(|span| span.end = span.end.max(export_end))
+                    .or_insert(Span {
+                        fenced: true,
+                        end: export_end,
+                        owner: WeakBacking::Cuda(Weak::new()),
+                        foreign: Some(receipt.clone()),
+                        retained: true,
+                    });
+                return Err(error.into());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if device.is_some_and(|expected| !matches!(memory.location(0, *length).map(|l| l.location), Ok(orbite::MemoryLocation::Cuda {device, ..}) if device == expected)) { return Err(INVALID); }
+        Some(MemoryBacking::Cuda(Arc::new(memory)))
+    } else {
+        None
+    };
     if let Some((&other, s)) = all.range(..end).next_back() {
         if s.end > start {
             if s.fenced {
@@ -237,29 +315,41 @@ fn resolve(
             return Err(INVALID); // partial overlap has no common allocation owner
         }
     }
-    if all.len() >= 65536 {
-        return Err(FULL);
-    }
     if !allow_unowned && owner.is_none() {
         return Err(ADDRESS);
     }
-    let retained = owner.is_some();
-    let lease = Arc::new(());
-    let receipt = Arc::downgrade(&lease);
-    // Both the release receipt and the actual exporter follow the backing,
-    // including native quarantine after the language-level object is gone.
-    let m = foreign(p, n, loc, Arc::new((lease, owner)))?;
+    #[cfg(feature = "cuda")]
+    let m = match candidate {
+        Some(m) => m,
+        None => foreign(p, n, loc, keep)?,
+    };
+    #[cfg(not(feature = "cuda"))]
+    let m = foreign(p, n, loc, keep)?;
+    let span_start = base(&m);
+    let span_end = match &m {
+        MemoryBacking::Host(v) => span_start.checked_add(v.len()),
+        #[cfg(feature = "cuda")]
+        MemoryBacking::Cuda(v) => span_start.checked_add(v.len()),
+    }
+    .ok_or(INVALID)?;
+    // Do not create partially overlapping native owners from different exports.
+    if all
+        .iter()
+        .any(|(&base, s)| base < span_end && s.end > span_start)
+    {
+        return Err(INVALID);
+    }
     all.insert(
-        start,
+        span_start,
         Span {
             fenced: false,
-            end,
+            end: span_end,
             owner: WeakBacking::new(&m),
             foreign: Some(receipt.clone()),
             retained,
         },
     );
-    Ok((m, 0, Some(receipt)))
+    Ok((m, start - span_start, Some(receipt)))
 }
 #[derive(Clone, Copy)]
 enum Kind {
@@ -277,6 +367,7 @@ struct Allocation {
     error: Option<Code>,
 }
 struct Reg {
+    owners: Vec<Arc<dyn Send + Sync>>,
     backing_base: usize,
     memory: Option<RegisteredMemory>,
     foreign: Option<Weak<()>>,
@@ -291,6 +382,7 @@ pub(crate) struct Memory {
     #[cfg(feature = "python")]
     deferred: std::collections::BTreeSet<usize>,
     quarantine: Vec<MemoryBacking>,
+    quarantine_owners: Vec<Arc<dyn Send + Sync>>,
     alloc: BTreeMap<usize, Allocation>,
     regs: BTreeMap<(usize, usize), Reg>,
     bytes: usize,
@@ -338,7 +430,7 @@ impl Memory {
         if (!o.shm_path.is_empty() || o.shm_offset != 0) && o.route != Transport::Shm {
             return Err(UNSUPPORTED);
         }
-        if !self.quarantine.is_empty() {
+        if !self.quarantine.is_empty() || !self.quarantine_owners.is_empty() {
             return Err(UNKNOWN);
         }
         let mut all = lock(spans())?;
@@ -521,7 +613,7 @@ impl Memory {
         addrs: &[*mut c_void],
         sizes: &[usize],
         o: Opt,
-        owners: &[Option<Arc<dyn Send + Sync>>],
+        owners: &[Option<Owner>],
         allow_unowned: bool,
     ) -> Result<()> {
         if addrs.len() != sizes.len()
@@ -530,11 +622,19 @@ impl Memory {
         {
             return Err(INVALID);
         }
+        if !self.quarantine.is_empty() || !self.quarantine_owners.is_empty() {
+            return Err(UNKNOWN);
+        }
+        let retained_count = self.quarantine_owners.len()
+            + self.regs.values().map(|r| r.owners.len()).sum::<usize>();
+        if retained_count
+            .checked_add(owners.iter().flatten().count())
+            .is_none_or(|n| n > e.config().max_registered_regions)
+        {
+            return Err(FULL);
+        }
         if !e.transport_installed(o.route) {
             return Err(UNSUPPORTED);
-        }
-        if !self.quarantine.is_empty() {
-            return Err(UNKNOWN);
         }
         let mut ranges = Vec::with_capacity(addrs.len());
         let mut witnesses = Vec::with_capacity(addrs.len());
@@ -549,13 +649,59 @@ impl Memory {
                     return Err(INVALID);
                 }
             }
-            let (memory, offset, receipt) = resolve(
+            let resolved = resolve(
                 p,
                 n,
                 o.location,
                 owners.get(index).cloned().flatten(),
                 allow_unowned,
-            )?;
+            );
+            let (memory, offset, receipt) = match resolved {
+                Ok(v) => v,
+                Err(error) => {
+                    if error == UNKNOWN {
+                        self.quarantine_owners
+                            .extend(owners.iter().flatten().map(|o| o.keep.clone()));
+                    }
+                    return Err(error);
+                }
+            };
+            if let Some(owner) = owners.get(index).and_then(Option::as_ref) {
+                #[cfg(feature = "cuda")]
+                if let ExportKind::Cuda { stream, device, .. } = owner.kind {
+                    let MemoryBacking::Cuda(gpu) = &memory else {
+                        return Err(INVALID);
+                    };
+                    if device.is_some_and(|expected| !matches!(gpu.location(offset, n).map(|l| l.location), Ok(orbite::MemoryLocation::Cuda {device, ..}) if device == expected)) { return Err(INVALID); }
+                    if let Some(stream) = stream {
+                        // SAFETY: CAI retains its producer stream; DLPack has
+                        // ordered its work on this device's legacy default stream.
+                        let result = unsafe {
+                            gpu.record_exported_producer_stream(
+                                stream as *mut c_void,
+                                owner.keep.clone(),
+                            )
+                        };
+                        if let Err(error) = result {
+                            if matches!(error, orbite::Error::Unquiesced { .. }) {
+                                if let Some(s) = lock(spans())?.get_mut(&base(&memory)) {
+                                    s.fenced = true;
+                                }
+                                self.quarantine.push(memory);
+                                self.quarantine_owners.push(owner.keep.clone());
+                            }
+                            return Err(error.into());
+                        }
+                    }
+                }
+                // A host exporter must never disguise a CUDA pointer, including
+                // when an alias already exists in the shared span table.
+                if matches!(owner.kind, ExportKind::Host)
+                    && !matches!(memory, MemoryBacking::Host(_))
+                {
+                    return Err(INVALID);
+                }
+            }
             let actual = match &memory {
                 MemoryBacking::Host(m) => m.location(offset, n)?.location,
                 #[cfg(feature = "cuda")]
@@ -604,14 +750,19 @@ impl Memory {
                     }
                     self.quarantine.push(memory);
                 }
+                self.quarantine_owners
+                    .extend(owners.iter().flatten().map(|o| o.keep.clone()));
                 return Err(err.into());
             }
             Err(err) => return Err(err.into()),
         };
-        for (memory, (receipt, backing_base)) in registered.into_iter().zip(witnesses) {
+        for (index, (memory, (receipt, backing_base))) in
+            registered.into_iter().zip(witnesses).enumerate()
+        {
             let key = (memory.base_address() as usize, memory.len());
             let r = self.regs.entry(key).or_insert(Reg {
                 backing_base,
+                owners: Vec::new(),
                 memory: Some(memory),
                 foreign: receipt,
                 removed: 0,
@@ -621,6 +772,9 @@ impl Memory {
                 error: None,
             });
             r.refs += 1;
+            if let Some(owner) = owners.get(index).and_then(Option::as_ref) {
+                r.owners.push(owner.keep.clone());
+            }
         }
         Ok(())
     }
@@ -690,6 +844,29 @@ impl Memory {
                     if r.memory.as_ref().is_some_and(|m| !m.exclusively_held()) {
                         return Err(FULL);
                     }
+                    #[cfg(feature = "cuda")]
+                    if r.foreign.is_some() {
+                        let backing = lock(spans())?
+                            .get(&r.backing_base)
+                            .and_then(|s| s.owner.upgrade());
+                        if let Some(MemoryBacking::Cuda(gpu)) = backing {
+                            // Do checked native cleanup while the registration
+                            // and its charge still exist. Drop is not a receipt.
+                            let closed = gpu
+                                .trim_idle_copy_resources()
+                                .and_then(|()| e.trim_idle_staging_buffers());
+                            if let Err(error) = closed {
+                                let code = Code::from(error);
+                                if code == UNKNOWN {
+                                    r.error = Some(code);
+                                    if let Some(span) = lock(spans())?.get_mut(&r.backing_base) {
+                                        span.fenced = true;
+                                    }
+                                }
+                                return Err(code);
+                            }
+                        }
+                    }
                     r.memory.take();
                 }
                 Ok(())
@@ -732,7 +909,7 @@ impl Memory {
             .collect()
     }
     pub fn close(&mut self, e: &TransferEngine) -> Result<()> {
-        if !self.quarantine.is_empty() {
+        if !self.quarantine.is_empty() || !self.quarantine_owners.is_empty() {
             return Err(UNKNOWN);
         }
         let refs = self.regs.iter().map(|(&k, r)| (k, r.refs)).collect();

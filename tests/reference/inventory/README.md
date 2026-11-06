@@ -21,6 +21,12 @@ C++20 declaration fixture compiles against both header trees. The remaining
 plugin rows retain their own step. The three Python rows are implemented by
 installed-wheel tests. [Python declarations](python.tsv) expand them into 128
 surface rows (132 declarations with overloads), checked against `pybind.cpp`.
+The four `register_local_memory*` rows and their unregister/guard lifetimes also
+have an additive retained-exporter contract in `tests/python/test_cuda_exporters.py`:
+CAI v2/v3, legacy/versioned DLPack, native range/device checks, writable contiguous
+storage, aliases, drain and sticky cleanup. These are OrbiTE ownership extensions,
+not changes to the 128 frozen rows. CPU-wheel rejection runs without CUDA; the
+CUDA wheel uses a driver shim. Installed GPU evidence remains pending.
 
 C declarations and semantics resolve to `include/tent/transfer_engine.h` and
 `src/transfer_engine_c.cpp`. RPC numbers, dispatcher and attachment semantics

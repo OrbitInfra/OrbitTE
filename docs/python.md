@@ -127,15 +127,65 @@ engine.register_local_memory_batch(addresses, sizes, owners=buffers)
 ```
 
 The `owner` argument is also available on `register_local_memory_ex`, and
-`owners` on its batch counterpart. The exporter must be writable and contiguous,
-and must contain the entire requested range. A retained memoryview prevents
-resizing and follows the actual native backing through aliases and quarantine.
-Bare foreign addresses and read-only exporters are rejected. Unlike frozen
-TENT's unchecked integer-pointer registration, dropping the caller's last buffer
+`owners` on its batch counterpart. The exporter must be writable, C-contiguous
+and nonempty, and must contain the entire requested range. A retained host
+memoryview prevents resizing and follows the actual backing through aliases and
+quarantine. Bare foreign addresses and read-only exporters are rejected. Unlike
+frozen TENT's unchecked integer-pointer registration, dropping the caller's last
 reference cannot free submitted storage. Do not read or mutate it concurrently
-with native I/O. Foreign device pointers without a retainable exporter are not
-a Python registration surface; engine-owned CUDA allocations remain available
-in a CUDA build, without claiming installed GPU qualification.
+with native I/O.
+
+### CUDA exporters
+
+A CUDA-feature wheel accepts retained CUDA Array Interface v2/v3 or DLPack
+exporters, including a PyTorch GPU KV-cache tensor:
+
+```python
+engine.register_local_memory(t.data_ptr(), t.nbytes, owner=t)
+engine.register_local_memory_batch(
+    [a.data_ptr(), b.data_ptr()], [a.nbytes, b.nbytes], owners=[a, b],
+)
+# Submit and drain using the same Request/BatchGuard API above.
+engine.unregister_local_memory(t.data_ptr())
+```
+
+This is the migration from raw `tensor.data_ptr()` registration. Retainable
+owners are mandatory for foreign addresses; engine-owned allocation addresses
+keep their existing API. `register_buffer(exporter)` also accepts these CUDA
+protocols and returns the checked base address. A CPU wheel raises a clear
+`NotImplementedError` before requesting a GPU capsule.
+
+The engine checks shape, byte extent, contiguity, writable access and the
+requested subrange, then uses CUDA pointer attributes and allocation bounds to
+verify the full export and actual device. A claimed device must match the driver.
+The [CUDA Array Interface](https://nvidia.github.io/numba-cuda/user/cuda_array_interface.html)
+read-only flag is honored. Masked, strided, empty and overflowing exports are
+rejected. Its producer stream is captured as an event in the allocation's context;
+the caller's exact context is restored. With v2 or `stream=None`, the producer
+must already have made the exported bytes ready, as that protocol requires.
+
+[DLPack](https://dmlc.github.io/dlpack/latest/python_spec.html) negotiates a
+zero-copy export with `max_version=(1, 0)` and the device's legacy default stream;
+older producers that lack that keyword use the legacy capsule protocol. The
+engine consumes each capsule once and retains its managed tensor, deleter and
+Python owner. Versioned read-only or copied exports, unsupported versions and
+sub-byte dtypes are rejected. The managed tensor's deleter runs once under the
+GIL only after its native owners release it. A producer must provide a valid
+interchange capsule and keep the exported allocation and context stable.
+
+Each retained export lease, including duplicate registrations, counts against
+`max_registered_regions`; aliases cannot create an unbounded capsule list. Idle
+staging buffers and idle private copy/producer events are released before
+unregister acknowledges a foreign export, while its registration charge remains
+held. Their context cache cannot indefinitely pin a retired tensor. Active copies
+and uncertain cleanup still keep the exporter and charges. Unregister can report
+resource exhaustion while another alias or admitted operation is draining; this
+is not permission to reuse the memory. CPU objects that also implement DLPack
+still use the writable buffer protocol. CPU tensor-only protocols are not added.
+
+CUDA export controls use a CPU driver shim through the installed wheel. Python
+GPU is **Implemented; installed profile unqualified** until the
+{ref}`packaged GPU gate <queue-python-cuda>` runs.
 
 Registrations and allocation charges outlive a busy memory guard. After
 unregister obtains physical drain, deferred guard frees are reaped; engine close

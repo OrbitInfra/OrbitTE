@@ -65,6 +65,12 @@ early-drop ownership, queued cancellation and timeout retention. Four timing
 controls repeat 50 times. The source-distribution job rebuilds and installs its
 wheel before repeating the same consumer controls.
 
+`test_cuda_exporters.py` adds CPU-wheel unavailable checks and seven installed
+CUDA-wheel controls through a CPU driver shim, including guarded TCP bytes,
+CAI/DLPack aliases, producer/context handling, early drop and sticky cleanup.
+All seven repeat 50 times on stable CPython 3.13 on both architectures. The
+Rust boundary checks the DLPack LP64 layout and bounded duplicate export leases.
+
 This evidence covers the CPU/TCP wheel profile only. Combined-feature builds
 exercise that same CPU profile and do not qualify Python GPU, RDMA, GDS or
 fabric paths. The native transports retain their installed verification queue.
@@ -102,6 +108,7 @@ external output directory; failed runs are kept.
 
 | Profile | Current state | Gate | Earlier evidence |
 | --- | --- | --- | --- |
+| [Python retained CUDA exporters]{#queue-python-cuda} | Implemented; installed profile unqualified | Build with a wheel-compatible Python and maturin: `python3 tests/hardware/build_installed.py --consumer python-cuda --toolchain stable --output "$ART"`. With CUDA PyTorch installed for that interpreter, run `python3 "$ART/python_cuda_run.py" --artifact "$ART" --python "$PYTHON" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --output "$RUN"`. Repeat the build with 1.85.0 in a fresh directory. | CAI/DLPack, guarded GPU↔host TCP in both requester/source roles, exporter release; CI driver-shim controls only |
 | C++ classic scatter on RDMA and GPU Direct | Implemented; installed profile unqualified | [Packaged C++ scatter requester and Rust source](#native-c-scatter) | CPU loopback HP-TCP plus CUDA/verbs shim controls |
 | C ABI on GPU and two RNICs | Implemented; installed profile unqualified | Install the packaged libraries on each host, then run the [two-process C hardware gate](#native-c-transfer-engine) with TCP/CUDA or RDMA and two visible NICs. | Installed C loopback CPU controls |
 | [Caller-stream local CUDA copy]{#queue-local-cuda-copy} | Implemented; installed profile unqualified | [Packaged comparison on one GPU](#caller-stream-local-cuda-copy) | Linux CUDA shim, byte guards, planning and event retention |
