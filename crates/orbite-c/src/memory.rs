@@ -744,3 +744,7 @@ impl Memory {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "python"))]
+#[path = "../tests/unit/python_memory.rs"]
+mod python_tests;

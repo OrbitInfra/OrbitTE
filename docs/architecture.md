@@ -71,7 +71,8 @@ physical drain is required independently of task state. A Python thread releases
 a held real TCP reply while another is blocked in wait. No Python objects enter
 the payload worker other than the retained exporter owner. Decrementing that
 owner uses PyO3's deferred reference pool; it never acquires the GIL beneath a
-native lock. If interpreter finalization prevents a safe detach, the bounded
+native lock. A cleanup-result fault keeps a real Python exporter and its closed
+ABI slot; CUDA/verbs shims cover the actual failed native destroy. If interpreter finalization prevents a safe detach, the bounded
 ABI slot remains retained. The [guide](python.md) records these deliberate
 lifetime differences from frozen `src/python/pybind.cpp` and its guard test.
 

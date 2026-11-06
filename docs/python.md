@@ -143,6 +143,7 @@ also drains them. A pending batch guard delegates to the existing batch owner.
 Neither a guard exit, cancellation, timeout nor terminal status is permission to
 free externally managed memory. Failed native cleanup retains the ABI slot,
 exporter, registrations and charges, and never retries an uncertain destroy.
+Repeated explicit close returns the saved cleanup error.
 At interpreter finalization, a slot that cannot safely enter Python is retained.
 
 Every native call releases the GIL before acquiring engine locks, waiting or
