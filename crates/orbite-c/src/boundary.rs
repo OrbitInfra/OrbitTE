@@ -49,7 +49,11 @@ impl From<&Error> for Code {
             | Error::BatchClosed
             | Error::FileSegmentClosed
             | Error::ForeignQosPolicy => INVALID,
-            Error::TentConfig { path, .. } if path == "metadata_type" => Code(6),
+            Error::TentConfig { path, .. }
+                if matches!(path.as_str(), "metadata_type" | "metadata_servers") =>
+            {
+                Code(6)
+            }
             Error::TentConfig { reason, .. } if reason.contains("JSON") => Code(133),
             Error::TentConfig { reason, .. } if reason.contains("unsupported") => UNSUPPORTED,
             Error::TentConfig { .. } => INVALID,

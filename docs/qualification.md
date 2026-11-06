@@ -32,6 +32,14 @@ subsystem settings and snapshot isolation in a child process. These CPU
 checks cover configuration loading. Installed transfer profiles are tracked
 separately below.
 
+P2P-only configuration controls reject external metadata types and server
+URIs through the Rust loaders, inline/file `MC_TENT_CONF`, legacy overrides,
+C setters and native/classic C++ constructors. The installed consumers check
+`InvalidMetadataType` (`-6`) and classic `ERR_METADATA`, unchanged output
+guards and migration guidance. No external store or discovery service is
+part of this profile. Per-peer physical retirement remains unimplemented;
+the existing segment-handle close is not a drain receipt.
+
 ## Installed C ABI on Linux
 
 The `Install both C libraries and run the independent C consumer` CI step builds both libraries from

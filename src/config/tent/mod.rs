@@ -15,7 +15,7 @@ use std::{ffi::OsString, net::ToSocketAddrs, path::Path, time::Duration};
 #[derive(Clone)]
 pub struct TentSettings {
     pub local_segment_name: String,
-    /// P2P retains this constructor value but does not contact a metadata store.
+    /// Inert P2P constructor identity. External metadata server URIs are rejected.
     pub metadata_servers: String,
     pub verbose: bool,
 }
@@ -28,6 +28,10 @@ impl std::fmt::Debug for TentSettings {
 }
 
 impl TentSettings {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_metadata_servers(&self.metadata_servers)
+    }
+
     pub(crate) fn log_startup(&self, config: &EngineConfig) {
         if self.verbose {
             // No metadata credentials, peer names or registration addresses.
@@ -47,6 +51,38 @@ fn invalid(path: &str, reason: &'static str) -> Error {
         path: path.to_owned(),
         reason,
     }
+}
+
+const P2P_ONLY: &str = "external metadata stores and cluster discovery are unsupported; publish endpoint() and source_epoch() in your own registry and pass the authoritative epoch to open_segment";
+
+fn metadata_error(path: &str) -> Error {
+    // Never include a server URI: it may contain credentials or tokens.
+    log::warn!("{path}: {P2P_ONLY}");
+    invalid(path, P2P_ONLY)
+}
+
+fn validate_metadata_servers(servers: &str) -> Result<()> {
+    if servers.split(',').any(|server| {
+        server
+            .trim()
+            .split_once("://")
+            .is_some_and(|(scheme, _)| !scheme.eq_ignore_ascii_case("p2p"))
+    }) {
+        return Err(metadata_error("metadata_servers"));
+    }
+    Ok(())
+}
+
+fn validate_metadata(root: &Value) -> Result<()> {
+    if let Some(value) = document::get(root, "metadata_type") {
+        if typed::<String>("metadata_type", value.clone())? != "p2p" {
+            return Err(metadata_error("metadata_type"));
+        }
+    }
+    if let Some(value) = document::get(root, "metadata_servers") {
+        validate_metadata_servers(&typed::<String>("metadata_servers", value.clone())?)?;
+    }
+    Ok(())
 }
 
 fn typed<T: DeserializeOwned>(path: &str, v: Value) -> Result<T> {
@@ -179,6 +215,9 @@ fn integer<T: TryFrom<i64>>(path: &str, value: Value) -> Result<T> {
 }
 
 fn materialize(root: Value, mnnvl: bool) -> Result<EngineConfig> {
+    // Validate the effective identity after constructor/environment precedence,
+    // before any provider configuration, hostname resolution or engine startup.
+    validate_metadata(&root)?;
     let mut c = EngineConfig::defaults();
     let mut settings = TentSettings {
         local_segment_name: String::new(),
@@ -233,11 +272,7 @@ fn materialize(root: Value, mnnvl: bool) -> Result<EngineConfig> {
             "enable_runtime_queue" => queue_on = typed(p, v)?,
             "merge_requests" => c.merge_requests = typed(p, v)?,
             "max_failover_attempts" => c.max_failover_attempts = typed(p, v)?,
-            "metadata_type" => {
-                if typed::<String>(p, v)? != "p2p" {
-                    return Err(invalid(p, "only P2P metadata is supported"));
-                }
-            }
+            "metadata_type" => {} // Checked before materializing any owner.
             "metadata_servers" => settings.metadata_servers = typed(p, v)?,
             "local_segment_name" => settings.local_segment_name = typed(p, v)?,
             "verbose" => settings.verbose = typed(p, v)?,

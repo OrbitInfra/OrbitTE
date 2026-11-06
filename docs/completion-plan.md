@@ -95,9 +95,10 @@ implements F01 against its configuration, environment and precedence cases.
 S19 implements the [installed C ABI](c-api.md) against the S16 declarations and
 LP64 fixtures. S20 implements the [native and classic C++ source adapters](cpp-api.md),
 including versioned requests, explicit progress and physically drained waits.
-S21 covers Python.
-S18's etcd/Redis/HTTP stores are optional until another consumer needs them.
-OrbitKV uses the existing P2P control plane. S21–S26 retain their order.
+The P2P-only discovery boundary precedes S21. External etcd/Redis/HTTP stores,
+cluster membership and KV indexes belong to the consumer; S18 is out of scope
+by design. Per-peer admission fencing and physical retirement remain a separate
+owner change before S21. S21–S26 retain their order.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -396,7 +397,8 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
   callbacks, named policies, deadlines and intent. Native hardware profiles remain queued.
 - [ ] Python classes, properties, overloads, context managers, error
   translation, GIL release and buffer lifetime.
-- [ ] Optional S18 for a non-OrbitKV consumer: etcd, Redis and HTTP metadata stores with auth and failure behavior.
+- [x] F06 P2P-only configuration boundary; S18 external stores and cluster discovery are out of scope by design.
+- [ ] Per-peer close: fence admissions and drain transport owners without closing other peers. Current C/C++ segment close removes a handle, not native owners.
 - [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
 - [ ] Device plugin ABI registration and real CUDA plugin loading.
 
@@ -475,7 +477,7 @@ safety in actual owners; avoid forwarding facades or a separate coordinator.
 | --- | --- | --- |
 | Source/CPU | Every implementation PR | Local contracts, property and concurrency tests, Rust checks |
 | Real process/TCP/SHM/file | Control, TCP, memory, storage or lifecycle changes | Real cross-process bytes, errors, protocol and owned shutdown |
-| Optional metadata services | S18 when a consumer requires an external store | Real etcd/Redis/HTTP behavior and schema interoperability |
+| P2P discovery boundary | F06 configuration or consumer API changes | External stores rejected; consumer-issued endpoint and epoch authority preserved |
 | RDMA/device/storage/provider | Corresponding implementation changes | Real backend bytes and hardware-specific completion and lifetime |
 | Cross-language/mixed-peer | API, wire or binding changes | Installed caller behavior and directional interoperability |
 | Matched performance | Hot-path, scheduling, metrics or release changes | Measured benefit or regression for the recorded profile only |

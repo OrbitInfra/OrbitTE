@@ -47,6 +47,16 @@ engine and joins on normal exit.
 
 ## Configuration ownership
 
+Discovery, membership, KV indexes and etcd/Redis/HTTP stores live in the
+consumer. The P2P control service describes an already identified peer's
+segments, capabilities, registration keys and epochs; it does not find peers
+or replace the consumer's authoritative epoch. This deliberately excludes
+TENT's external metastore plugins. The configuration and installed C/C++
+negative controls reject those types and server URIs, including through
+`MC_TENT_CONF` and legacy overrides, before binding an engine or resolving
+a hostname. Diagnostics name the endpoint/epoch migration without echoing
+server credentials.
+
 `EngineConfig::from_tent_env`, `from_tent_json` and `from_tent_file` resolve
 a bounded document into the typed owners before any engine starts. Metrics
 keeps its file-before-environment precedence. The selector, QoS, QP layout
@@ -63,6 +73,15 @@ retained native owners and has a ceiling of 4096. Unsupported verbs
 parameters and TCP retry knobs return configuration errors. The CPU controls
 exercise these differences and the captured environment without changing a
 process variable.
+
+TENT's `closeSegment` removes a name/ID mapping in `SegmentManager` and bumps
+its cache version; shared descriptors already in use survive. OrbiTE's Rust
+peer descriptor is a snapshot and the current C/C++ close removes its handle.
+Neither operation is a per-peer physical drain receipt. Admission fencing and
+retiring RDMA connections, HP-TCP lanes and imported mappings together require
+a separate owner change. Until then, a consumer stops dispatch to a departed
+peer and uses the existing requester-wide close when it needs a drain receipt;
+see [discovery boundary](rust-api.md#discovery-boundary).
 
 ## Engine and transport boundary
 

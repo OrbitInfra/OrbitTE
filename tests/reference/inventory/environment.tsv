@@ -36,9 +36,9 @@ MC_NUM_CQ_PER_CTX	transports/rdma/device/num_cq_list	setFromString over loaded c
 MC_NUM_QP_PER_EP	transports/rdma/endpoint/qp_mul_factor	setFromString over loaded config	config.rdma	src/common/config.cpp:222	alias:transports/rdma/endpoint/qp_mul_factor
 MC_PKEY_INDEX	transports/rdma/endpoint/pkey_index	setFromString over loaded config	config.rdma	src/common/config.cpp:230	unsupported:transports/rdma/endpoint/pkey_index
 MC_RDMA_BIND_ADDRESS	transports/rdma/bind_address	setFromString over loaded config	config.rdma	src/common/config.cpp:211	unsupported:transports/rdma/bind_address
-MC_REDIS_DB_INDEX	Redis database	environment selects database, otherwise default database	config.engine	src/runtime/metastore.cpp:56	inactive:provider is absent
-MC_REDIS_PASSWORD	Redis authentication	optional environment credential, no password by default	config.engine	src/runtime/metastore.cpp:43	inactive:provider is absent
-MC_REDIS_USERNAME	Redis authentication	optional environment credential, no username by default	config.engine	src/runtime/metastore.cpp:49	inactive:provider is absent
+MC_REDIS_DB_INDEX	Redis database	environment selects database, otherwise default database	config.engine	src/runtime/metastore.cpp:56	excluded:external metadata belongs to the consumer
+MC_REDIS_PASSWORD	Redis authentication	optional environment credential, no password by default	config.engine	src/runtime/metastore.cpp:43	excluded:external metadata belongs to the consumer
+MC_REDIS_USERNAME	Redis authentication	optional environment credential, no username by default	config.engine	src/runtime/metastore.cpp:49	excluded:external metadata belongs to the consumer
 MC_RETRY_CNT	transports/rdma/workers/max_retry_count	setFromString over loaded config	config.rdma	src/common/config.cpp:239	unsupported:transports/rdma/workers/max_retry_count
 MC_RPC_CLIENT_IO_THREADS	shared RPC client pool	positive integer; otherwise min(16,max(1,hardware_concurrency)); per-process snapshot	config.network	../../mooncake-common/src/rpc_client_io_context.cpp:34	unsupported:no shared RPC client pool
 MC_SLICE_SIZE	transports/rdma/workers/block_size	setFromString over loaded config	config.rdma	src/common/config.cpp:238	alias:transports/rdma/workers/block_size

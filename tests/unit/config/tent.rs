@@ -336,6 +336,123 @@ fn constructor_identity_and_legacy_corner_cases_reach_typed_fields() {
     assert!(cfg.rdma.is_none());
 }
 
+fn metadata_rejection(result: Result<EngineConfig>, path: &str) {
+    let err = result.unwrap_err();
+    assert!(matches!(&err, Error::TentConfig { path: actual, .. } if actual == path));
+    let message = err.to_string();
+    for part in [
+        "unsupported",
+        "endpoint()",
+        "source_epoch()",
+        "own registry",
+        "authoritative epoch",
+    ] {
+        assert!(message.contains(part), "{message}");
+    }
+    assert!(
+        !message.contains("private"),
+        "URI credentials must stay private"
+    );
+}
+
+#[test]
+fn external_metadata_is_rejected_after_legacy_precedence_before_resolution() {
+    for kind in ["etcd", "redis", "http", "https", "unknown", ""] {
+        metadata_rejection(config(json!({"metadata_type":kind})), "metadata_type");
+    }
+    for scheme in ["etcd", "redis", "http", "https", "HTTPS"] {
+        let root = json!({"metadata_type":"p2p", "metadata_servers":format!(" {scheme}://user:private@127.0.0.1:1 "), "rpc_server_hostname":"must-not-resolve.invalid"});
+        metadata_rejection(config(root.clone()), "metadata_servers");
+        // MC_FORCE_TCP and other legacy aliases do not make external discovery valid.
+        metadata_rejection(
+            load(json!({}), |key| match key {
+                "MC_TENT_CONF" => Some(root.to_string().into()),
+                "MC_FORCE_TCP" => Some("0".into()),
+                "MOONCAKE_LOCAL_HOSTNAME" => Some("must-not-resolve.invalid".into()),
+                _ => {
+                    assert!(!key.starts_with("MC_REDIS_"));
+                    None
+                }
+            }),
+            "metadata_servers",
+        );
+    }
+    let mut c = config(json!({})).unwrap();
+    metadata_rejection(
+        config(json!({"metadata_servers":"retained, https://private"})),
+        "metadata_servers",
+    );
+    c.tent.as_mut().unwrap().metadata_servers = "etcd://private".into();
+    metadata_rejection(c.validate().map(|_| c), "metadata_servers");
+}
+
+#[test]
+fn public_tent_entry_points_reject_external_metadata() {
+    const CHILD: &str = "ORBITE_P2P_CONFIG_TEST";
+    let temp = Temp::new();
+    if let Some(mode) = std::env::var_os(CHILD) {
+        if mode == "explicit" {
+            for (path, value) in [
+                ("metadata_type", "redis"),
+                ("metadata_servers", "etcd://private"),
+                ("metadata_servers", "redis://private"),
+                ("metadata_servers", "http://private"),
+                ("metadata_servers", "https://private"),
+            ] {
+                let text = json!({path:value}).to_string();
+                let file = temp.0.join("config.json");
+                fs::write(&file, &text).unwrap();
+                metadata_rejection(EngineConfig::from_tent_json(&text), path);
+                metadata_rejection(EngineConfig::from_tent_file(&file), path);
+                metadata_rejection(EngineConfig::from_tent_settings(&text, []), path);
+                metadata_rejection(
+                    EngineConfig::from_tent_settings("{}", [(path, value)]),
+                    path,
+                );
+            }
+        } else {
+            metadata_rejection(EngineConfig::from_tent_env(), "metadata_servers");
+            metadata_rejection(EngineConfig::from_tent_json("{}"), "metadata_servers");
+            metadata_rejection(EngineConfig::from_tent_settings("", []), "metadata_servers");
+            let file = temp.0.join("empty.json");
+            fs::write(&file, "{}").unwrap();
+            metadata_rejection(EngineConfig::from_tent_file(&file), "metadata_servers");
+        }
+        return;
+    }
+    for mode in ["explicit", "inline", "file"] {
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        for row in ENV.lines().skip(1) {
+            cmd.env_remove(row.split('\t').next().unwrap());
+        }
+        let text = r#"{"metadata_type":"p2p","metadata_servers":"https://private"}"#;
+        if mode == "inline" {
+            cmd.env("MC_TENT_CONF", text);
+        } else if mode == "file" {
+            let file = temp.0.join("external.json");
+            fs::write(&file, text).unwrap();
+            cmd.env("MC_TENT_CONF", file);
+        }
+        let output = cmd
+            .args([
+                "--exact",
+                "config::tent::tests::public_tent_entry_points_reject_external_metadata",
+                "--nocapture",
+            ])
+            .env(CHILD, mode)
+            .env("MC_FORCE_TCP", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{mode}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+}
+
 #[test]
 fn public_constructors_capture_the_file_and_do_not_reread_process_environment() {
     const CHILD: &str = "ORBITE_S17_SNAPSHOT_TEST";

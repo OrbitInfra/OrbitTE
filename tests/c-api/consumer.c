@@ -54,6 +54,21 @@ static tent_engine_t engine(void) {
     return e;
 }
 
+static void rejected_metadata(const char *mode, const char *key, const char *value) {
+    if (!strcmp(mode, "metadata-field"))
+        tent_set_config(key, value);
+    else if (!strcmp(mode, "metadata-json"))
+        tent_load_config_from_file(value);
+    tent_engine_t e = tent_create_engine();
+    assert(e && !tent_available(e));
+    char host[] = "guard";
+    uint16_t port = 4321;
+    /* InvalidMetadataType survives construction; no socket or output is published. */
+    assert(tent_rpc_server_addr_port(e, host, sizeof host, &port) == -6);
+    assert(!strcmp(host, "guard") && port == 4321);
+    tent_destroy_engine(e);
+}
+
 static void *tls_worker(void *arg) {
     /* Constructor fields take precedence over MC_TENT_CONF and the hostname alias. */
     tent_load_config_from_file("{\"rpc_server_hostname\":\"127.0.0.3\",\"rpc_server_port\":0}");
@@ -484,7 +499,9 @@ static void file_io(const char *uri) {
     tent_destroy_engine(e);
 }
 int main(int argc, char **argv) {
-    if (argc == 2 && !strcmp(argv[1], "source"))
+    if (argc == 4 && !strncmp(argv[1], "metadata-", 9))
+        rejected_metadata(argv[1], argv[2], argv[3]);
+    else if (argc == 2 && !strcmp(argv[1], "source"))
         source();
     else if (argc == 4 && !strcmp(argv[1], "local"))
         local_contracts(argv[2], argv[3]);

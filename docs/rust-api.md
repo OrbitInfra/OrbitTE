@@ -147,6 +147,35 @@ The expected `SourceEpoch` must come from the authoritative source owner;
 descriptors identify regions but never replace that authority, so a restarted
 process at the same endpoint cannot be reached through an old handle.
 
+### Discovery boundary
+
+OrbiTE transfers bytes between known peers. The consumer owns discovery,
+membership, KV indexes and external metadata stores. Publish the source's
+`endpoint()` and `source_epoch()` in your own registry, then pass that
+authoritative epoch to `open_segment(endpoint, expected_epoch, timeout)`.
+For example, OrbitKV maintains its own etcd membership and passes
+`transfer_endpoint` and `native_source_epoch` over its own gRPC. OrbiTE's
+P2P handshake supplies descriptors, capabilities and registration keys for
+that identity; it does not discover cluster members.
+
+Only `metadata_type: "p2p"` is supported. The TENT loader recognizes and
+rejects other metadata types and `etcd://`, `redis://`, `http://` and
+`https://` server URIs after configuration precedence, with an
+`Error::TentConfig` directing the caller to publish endpoint and epoch.
+This applies to file/inline `MC_TENT_CONF`, legacy overrides, the public
+`from_tent_*` loaders and the C/C++ constructors. No Redis credentials are
+read. External stores are out of scope, not deferred providers.
+
+When membership says a peer left, stop scheduling its endpoint/epoch and
+drain admitted work before releasing resources. Per-peer physical retirement
+is an open owner change. Today, `close_requester(timeout)` closes and drains
+the requester as a whole; it can isolate one peer only if that peer has a
+dedicated requester engine. `Unquiesced` retains the owners and is not a
+release receipt. Dropping a Rust descriptor or calling C/C++ `closeSegment`
+does not fence or drain that peer. Never replace an old descriptor's epoch
+with a newly observed value; obtain the replacement from its authoritative
+owner and explicitly open the new peer.
+
 For a local file, `open_file_segment` takes a `file://` name and a permission;
 `file_segment_info` returns the cached descriptor, `refresh_file_segment` re-reads
 the size from the same fd, `resolve_file_offset` checks a range, and

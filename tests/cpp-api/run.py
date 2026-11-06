@@ -74,6 +74,19 @@ def main():
         }
         file = tmp / "constructor.json"
         file.write_text(json.dumps(dict(cfg, rpc_server_hostname="127.0.0.3")))
+        subprocess.run([binary, "metadata", file], env=env, timeout=45, check=True)
+        # Constructor identity still wins over MC_TENT_CONF. A URI in the
+        # environment's server field cannot be made valid by P2PHANDSHAKE.
+        external = tmp / "external-metadata.json"
+        for scheme in ("etcd", "redis", "http", "https"):
+            document = json.dumps(dict(cfg, metadata_servers=scheme + "://private"))
+            external.write_text(document)
+            for source in (document, str(external)):
+                subprocess.run(
+                    [binary, "metadata-env", file],
+                    env=dict(env, MC_TENT_CONF=source, MC_FORCE_TCP="1"),
+                    timeout=45, check=True,
+                )
         subprocess.run(
             [binary, "contracts", file],
             env=dict(env, MC_TENT_CONF=json.dumps(cfg)),

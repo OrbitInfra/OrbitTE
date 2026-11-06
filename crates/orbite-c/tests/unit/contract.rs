@@ -59,6 +59,15 @@ fn panic_sentinels_and_typed_statuses_are_independent_of_task_state() {
     assert_eq!(guard(0u64, || panic!("control")), 0);
     void_call("control", || panic!("control"));
     assert_eq!(Code::from(orbite::Error::ResourceExhausted), FULL);
+    for path in ["metadata_type", "metadata_servers"] {
+        assert_eq!(
+            Code::from(orbite::Error::TentConfig {
+                path: path.into(),
+                reason: "external metadata stores are unsupported",
+            }),
+            Code(6)
+        );
+    }
     assert_eq!(
         Code::from(orbite::Error::Unquiesced {
             operation: "close",
