@@ -83,8 +83,8 @@ raw callback. Alias publication is excluded until the synchronous copy returns.
 A handled plugin error cannot fall through to host `memcpy`; host fallback is
 allowed only for two verified CPU allocations. CUDA copies restore the caller's
 exact context, including an absent context. The CUDA table can query external
-CUDA metadata, but device copies require allocations retained by its context; a foreign device
-address returns the handled error before copying, so TENT cannot fall through
+CUDA metadata, but device copies require allocations retained by its context;
+a foreign device address returns the handled error before copying, so TENT cannot fall through
 to a host copy. This is stricter than the frozen CUDA plugin. Raw table callers
 must use `create_plugin` and honor the C buffer-lifetime contract.
 
@@ -94,5 +94,5 @@ must use `create_plugin` and honor the C buffer-lifetime contract.
 installed C ABI, guarded loopback TCP, aliases, paused transfer drain,
 registration/ABI errors and sticky cleanup. `tests/device-plugin/cuda.py` drives
 the installed CUDA plugin through a CPU Driver API shim. These are CPU controls.
-The [installed CUDA plugin gate](qualification.md#queue-device-plugin) is written
+The {ref}`installed CUDA plugin gate <queue-device-plugin>` is written
 but unrun: **Implemented; installed profile unqualified**.
