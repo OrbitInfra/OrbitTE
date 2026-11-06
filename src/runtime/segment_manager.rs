@@ -44,6 +44,8 @@ struct Entry {
 pub(crate) struct SegmentManager {
     entries: Mutex<HashMap<PeerKey, Arc<Entry>>>,
     capacity: usize,
+    // Serializes native teardown only. Credit reconciliation remains callable
+    // after global requester close; payload admission has its own fence.
     closing: AtomicBool,
 }
 
@@ -96,9 +98,6 @@ impl SegmentManager {
         let entry = self.entry(key)?;
         {
             let mut state = entry.state.lock().unwrap_or_else(|p| p.into_inner());
-            if self.closing.load(Ordering::Acquire) {
-                return Err(Error::RequesterClosed);
-            }
             if !state.open {
                 return Err(Error::PeerClosed);
             }

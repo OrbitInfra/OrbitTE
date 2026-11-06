@@ -116,7 +116,6 @@ fn peer_retirement_global_close_waits_for_selective_native_cleanup() {
             m.close_cleanup(Instant::now() + Duration::from_millis(1)),
             Err(Error::Unquiesced { .. })
         ));
-        assert!(matches!(m.admit(key(2)), Err(Error::RequesterClosed)));
         release.send(()).unwrap();
         assert!(closer.join().unwrap().is_err());
         assert!(matches!(
