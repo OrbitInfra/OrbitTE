@@ -160,6 +160,7 @@ mod native {
             p.bytes(success)?;
         }
         let p = Pair::new("direct:connect", 1, true, false)?;
+        let started = Instant::now();
         let batch = p.engine.submit_async(
             TransferOp::Read,
             &p.peer,
@@ -167,7 +168,19 @@ mod native {
             None,
             WAIT,
         )?;
-        assert_eq!(batch.wait(WAIT)?.completed_tasks, 2);
+        let waited = batch.wait(WAIT);
+        // A completed count alone cannot distinguish a failed attempt from a
+        // publication/alias bug. Keep the terminal errors and physical owners
+        // in any future failure, without polling early or relaxing the receipt.
+        assert_eq!(
+            waited.as_ref().ok().map(|s| s.completed_tasks),
+            Some(2),
+            "after {:?}: wait: {waited:?}; tasks: {:?}; requester: {:?}; source: {:?}",
+            started.elapsed(),
+            batch.task_statuses(),
+            p.engine.stats(),
+            p._source.stats(),
+        );
         for (i, t) in batch.task_statuses()?.iter().enumerate() {
             assert_eq!((t.physical_owner, t.failover_count), (i, 1));
         }

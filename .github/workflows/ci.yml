@@ -272,6 +272,13 @@ jobs:
         run: cargo publish --dry-run --locked --features "$ORBITE_FEATURES"
       - name: Install both C libraries and run the independent C consumer
         run: bash .github/scripts/check-installed-c-api.sh "$RUNNER_TEMP/orbite-c"
+      - name: Stress submit rejection and per-owner failover accounting
+        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          python3 tests/failover/stress.py --binary "$binary" --iterations 2500 \
+            --jobs 4 --cpu-load 2 --test-threads 64 --output "$RUNNER_TEMP/failover-stress"
       - name: Check native device plugin ABI and lifetime
         if: contains(matrix.features, 'device-plugin')
         run: |
