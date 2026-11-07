@@ -46,16 +46,6 @@ jobs:
           python3 tests/reference/inventory/check.py --source "$native/reference"
           cmake -DREFERENCE="$native/reference" -DDEPS="$native/deps" -DOUTPUT="$RUNNER_TEMP/cpp-contract" -P tests/cpp-api/frozen.cmake
           python3 tests/reference/wire/check.py --source "$native/reference" --build "$native/tent-build" --output "$RUNNER_TEMP/orbite-wire"
-      - name: Guarded directional TENT TCP interoperability and mismatch controls
-        run: |
-          native="$RUNNER_TEMP/orbite-native-cpu"
-          python3 tests/reference/interop/run.py --source "$native/reference" --build "$native/tent-build" --iterations 50 --output "$RUNNER_TEMP/orbite-interop"
-      - name: Preserve mixed-peer evidence
-        if: always()
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: frozen-tent-interop-${{ matrix.toolchain }}
-          path: ${{ runner.temp }}/orbite-interop/*.json
       - name: Compare frozen RDMA slice geometry and controls
         run: python3 tests/reference/rdma_geometry.py --tent-source "$RUNNER_TEMP/orbite-native-cpu/reference" --output "$RUNNER_TEMP/orbite-rdma-geometry"
       - name: Preserve RDMA geometry evidence

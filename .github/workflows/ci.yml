@@ -106,17 +106,6 @@ jobs:
           bash .github/scripts/repeat-fabric.sh "$binary" "$RUNNER_TEMP/fabric-repeats"
           if ldd "$binary" | grep -F libfabric; then exit 1; fi
           python3 tests/hardware/build_installed.py --consumer fabric --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/fabric-installed"
-      - name: Repeat cooperative TENT requester ownership controls
-        if: matrix.features == ''
-        run: |
-          binary=$(cargo test --locked --lib --no-run --message-format=json |
-            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
-          count=$("$binary" runtime::control_plane::tent:: --list | awk '/: test$/ {n++} END {print n+0}')
-          test "$count" -ge 11
-          for i in $(seq 1 50); do
-            "$binary" runtime::control_plane::tent:: --test-threads="$(nproc)" > "$RUNNER_TEMP/tent-ownership.log" || { cat "$RUNNER_TEMP/tent-ownership.log"; exit 1; }
-            grep -Fq "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/tent-ownership.log"
-          done
       - name: Repeat guarded restart port ownership at suite parallelism
         if: matrix.features == ''
         run: |

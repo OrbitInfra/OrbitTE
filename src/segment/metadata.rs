@@ -70,7 +70,6 @@ impl ProcessIdentity {
 /// provider health. Execution still checks authoritative owners and readiness.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SegmentMetadata {
-    pub(crate) tent: Option<std::sync::Arc<serde_json::Value>>,
     pub(crate) tcp_disabled: bool,
     pub(crate) libfabric: bool,
     pub(crate) mnnvl: Option<crate::transport::mnnvl::Capability>,
@@ -131,7 +130,6 @@ impl SegmentMetadata {
         let mut cap = [0; 8];
         cap.copy_from_slice(&bytes[36..44]);
         Ok(Self {
-            tent: None,
             libfabric: bytes[1] != 0,
             max_transfer_bytes: u64::from_be_bytes(cap),
             tcp_disabled: bytes[0] & 16 != 0,

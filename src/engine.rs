@@ -1335,48 +1335,6 @@ impl TransferEngine {
         Ok(peer)
     }
 
-    /// Opens the explicitly selected frozen-TENT TCP profile. The consumer's
-    /// epoch fences local admission/retirement; TENT cannot validate it on wire.
-    /// Changed metadata fences an old descriptor before WRITE, but unchanged
-    /// addresses cannot prove source freshness. Retire on membership changes.
-    /// OrbiTE peers must use `open_segment` and their native endpoint instead.
-    pub fn open_tent_segment(
-        &self,
-        endpoint: SocketAddr,
-        expected_epoch: SourceEpoch,
-        timeout: Duration,
-    ) -> Result<RemoteSegment> {
-        let deadline = deadline(timeout)?;
-        let _admission = self.admit_batch(0)?;
-        let (handle, _peer) = self.peers.open(PeerKey {
-            endpoint,
-            epoch: expected_epoch,
-        })?;
-        let mut peer = control_plane::tent::open_segment(endpoint, expected_epoch, deadline)?;
-        peer.identity = Some(handle);
-        Ok(peer)
-    }
-
-    /// Separate cooperative-TENT listener, present only when explicitly enabled.
-    /// `endpoint()` always returns the native OrbiTE listener.
-    pub fn tent_endpoint(&self) -> Option<SocketAddr> {
-        self.control.tent_endpoint()
-    }
-
-    pub(crate) fn refresh_peer(
-        &self,
-        peer: &RemoteSegment,
-        deadline: Instant,
-    ) -> Result<RemoteSegment> {
-        if peer.metadata.tent.is_some() {
-            // Refresh can detect a restart, never silently adopt changed addresses
-            // or a different registration under an admitted consumer epoch.
-            control_plane::tent::refresh(peer, deadline)
-        } else {
-            control_plane::open_segment(peer.endpoint, peer.epoch, deadline)
-        }
-    }
-
     /// Opens a local `file://` name with fixed access. Descriptor lookup is lazy.
     /// Reopening the same name and permission shares the handle until close.
     pub fn open_file_segment(&self, name: &str, permission: Permission) -> Result<FileSegment> {
@@ -1533,7 +1491,8 @@ impl TransferEngine {
                     )
                 });
                 let peer = if missing {
-                    let mut refreshed = self.refresh_peer(peer, deadline)?;
+                    let mut refreshed =
+                        control_plane::open_segment(peer.endpoint, peer.epoch, deadline)?;
                     refreshed.identity = peer.identity.clone();
                     refreshed
                 } else {
@@ -1633,13 +1592,6 @@ impl TransferEngine {
                     },
                     None => Error::Unavailable(reason),
                 });
-            }
-            if peer.metadata.tent.is_some()
-                && (request.remote_staging || self.receiver_credits.is_some())
-            {
-                return Err(Error::Unavailable(
-                    "TENT TCP profile has no native remote-staging or receiver-credit RPCs",
-                ));
             }
             let (local, local_offset) = self
                 .source
@@ -2327,9 +2279,6 @@ impl TransferEngine {
         notification: &Notification,
         deadline: Instant,
     ) -> std::result::Result<(), NotificationFailure> {
-        if peer.metadata.tent.is_some() {
-            return control_plane::tent::notify(peer.endpoint, notification, deadline);
-        }
         self.notify_target(peer.into(), notification, deadline)
             .map_err(|failure| failure.outcome)
     }

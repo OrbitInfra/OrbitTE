@@ -230,5 +230,5 @@ process at the same port (the ignored `peer_process_fixture` is that gate's
 child, not a skipped case). `tests/notifications.rs` covers queue bounds,
 concurrent senders and pollers, and data completion despite notification
 failure. The [CPU oracle](cpu-oracle.md) compares one valid-input trace against
-native TENT. CI runs all of this on stable and Rust 1.85; physical two-host,
-mixed-peer and hardware gates are separate.
+native TENT. CI runs all of this on stable and Rust 1.85; physical two-host and
+hardware gates are separate.

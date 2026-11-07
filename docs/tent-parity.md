@@ -107,7 +107,7 @@ the behavior. Hardware qualification stays with the artifact that ran.
 | TENT C ABI | All 33 functions and the LP64 transfer-engine layouts have installed [C API](c-api.md) controls. The fork's negative native return codes preserve dispatch uncertainty. Excluded transports return unavailable |
 | TENT C++ API | The installed [native TENT and TENT-backed classic TE adapters](cpp-api.md) cover both S16 C++ binding rows. Rebuild callers against their headers and link the adapter archive to libtent |
 | Python API | Cover the frozen TENT binding's classes, fields, overloads, errors and context managers through thin native bindings |
-| Wire interoperability | Qualify OrbiTE-to-OrbiTE, TENT-to-OrbiTE and OrbiTE-to-TENT for each applicable backend/control protocol; API parity alone does not establish this |
+| TENT wire interoperability (S23) | Out of scope by design; see [wire and consumer boundaries](#wire-and-consumer-boundaries) |
 | Configuration and operations | Match effective defaults, precedence, environment mappings, topology formats, metrics and explicit unavailable-backend behavior |
 | Performance | Qualify matched workloads on each claimed hardware profile; source similarity or a Rust rewrite establishes no performance result |
 
@@ -183,7 +183,7 @@ All 18 upstream types are accounted for; only the 10 marked core or optional
 are implementation targets. Capability bits and compiled providers constrain
 supported transfer directions. Do not infer GPU support for a transport from
 another transport's platform support. Every selected row requires normal bytes,
-negative cases, teardown, installed-artifact and applicable mixed-peer gates.
+negative cases, teardown and installed-artifact gates.
 
 | ID / type | Frozen capability and special obligations | Required hardware/provider | Scope / delivery |
 | --- | --- | --- | --- |
@@ -272,7 +272,7 @@ the modules needed to compare with TENT's effective configuration.
 
 ## C and language binding inventory
 
-The [acceptance inventory][inventory] is the shared input to S17–S23. Its F01 rows identify each supported setting, unsupported field or excluded provider. The Rust loader exercises them in the CPU matrix. Each
+The [acceptance inventory][inventory] is the shared input to S17–S22 and later comparisons. Its F01 rows identify each supported setting, unsupported field or excluded provider. The Rust loader exercises them in the CPU matrix. Each
 public C declaration has a call/ownership case. The companion C probe checks
 the frozen public and plugin layouts on Linux LP64. The index also identifies
 reference tests by source and GTest filter, and maps config, environment,
@@ -304,20 +304,18 @@ RDMA peers using endpoint QP pools must also share the same ordered pool layout,
 width and link-layer settings.
 The control-plane magic keeps its historical spelling, `ORBITTE\0`.
 
-The control RPC assigns IDs for descriptor lookup, RDMA bootstrap, SendData,
-RecvData, Notify, Probe, Delegate, Pin, Unpin, update subscription, update
-notification and UB bootstrap. The UB bootstrap ID stays recognized but
-unavailable, like the excluded transports. See [the RPC contract][rpc]. The [wire fixtures][fixtures] freeze YLT request/reply headers, the
-struct_pack function argument, opaque attachments, segment JSON, and HP-TCP
-and provider bootstrap encodings. Linux CI compares them with unmodified
-v0.3.14 code and replays TCP data frames against a registered TENT source.
-OrbiTE-to-OrbiTE uses native framing. The [cooperative TENT TCP profile](tent-interop.md) is explicit per segment and uses a separate opt-in source listener. Consumer epochs fence local admission/retirement only: frozen TENT cannot validate them remotely. Changed metadata fences a WRITE before payload; unchanged stale addresses remain an inherent risk of that profile. There is no autodetection or downgrade.
+OrbiTE remains compatible with TENT's configuration and API/ABI as a library
+replacement, subject to the documented safety extensions and C++ source rebuild.
+The deployments are wire-exclusive: TENT and OrbiTE peers do not interoperate,
+and both peers run the same OrbiTE build. There is no protocol autodetection or
+downgrade. A frozen TENT client is rejected at the native magic/version boundary
+before admission or payload access.
 
-Interoperability is directional: test a Rust requester against a C++ source
-and a C++ requester against a Rust source, with permission errors, restarts and
-partial responses. A safety extension that changes wire or ABI requires an
-explicit compatible profile or version rejection; do not silently downgrade
-epoch/generation requirements for an old peer.
+The [RPC inventory][rpc] and [wire fixtures][fixtures] retain the frozen TENT
+YLT envelopes, struct_pack arguments, attachments, segment JSON, HP-TCP frames
+and provider attributes as reference contracts. Linux CI compares them with the
+unmodified v0.3.14 codecs and dispatcher; these are oracle checks, not an
+OrbiTE wire profile. The frozen build also remains the P11 performance reference.
 
 OrbitKV currently consumes a patched older TENT ABI with extra source-epoch and
 source-close operations. Those are an additional consumer contract, not part of

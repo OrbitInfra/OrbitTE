@@ -48,7 +48,7 @@ artifacts and hardware profiles.
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm remains planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | C ABI, C++ source adapters, Python wheels and configuration implemented |
-| P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
+| P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Planned |
 
 ```mermaid
@@ -104,7 +104,10 @@ controls, and CPython 3.10–3.14 packaging. S21b adds driver-validated retained
 CUDA Array Interface/DLPack owners; its installed GPU profile is unqualified.
 S22 implements the checked [device plugin ABI](device-plugins.md), CPU shared-library
 controls and a CUDA provider using the fallible driver table. Its installed GPU
-profile remains unqualified. S23 implements the explicit [cooperative TENT TCP profile](tent-interop.md), with directional mixed-peer CPU controls. Native OrbiTE framing stays the default; the frozen peer cannot validate consumer epochs. S24 implements the opt-in [libfabric host path](fabric.md), with real software-provider controls and an unrun EFA gate. S25 and S26 follow.
+profile remains unqualified. S23 is out of scope by design; see the
+[wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries).
+S24 implements the opt-in [libfabric host path](fabric.md), with real
+software-provider controls and an unrun EFA gate. S25 and S26 follow.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -129,7 +132,7 @@ Done:
   metrics, metadata, logical RPCs and 88 reference test sources. A native C probe
   freezes LP64 layouts. The pinned C++ codecs and loopback dispatcher check
   control RPCs, memory/file metadata, HP-TCP frames and provider attributes.
-  S17–S23 extend those cases with their own evidence.
+  S17–S22 extend those cases with their own evidence.
 
 Open:
 
@@ -138,7 +141,7 @@ Open:
 - [ ] Extend the CPU oracle to the remaining native/Python/classic-TE behavior,
   Python guards and tebench byte checks, with hardware triggers where needed.
 - [ ] Extend the shared trace to allowed concurrent transitions, faults, broken
-  lifetime/epoch controls beyond the implemented S23 mixed-peer TCP gate.
+  lifetime/epoch controls against independent native and Rust runs.
 - [ ] Write the run-manifest schema and freeze workload-specific resource and
   performance guards before formal measurements.
 
@@ -209,11 +212,11 @@ Open:
 - [ ] Peer identity, descriptor update subscriptions and reconnect semantics.
 - [ ] Notification RPC fallback and native C allocation/free conventions.
 - [x] Core resource and failure metrics. See [metrics](metrics.md).
-- [x] Directional mixed-peer TCP against frozen TENT, with explicit profile selection, rejection controls and guarded READ/WRITE.
+- S23 TENT wire interoperability is out of scope by design.
 - [ ] Physical two-host TCP qualification.
 
-Exit: real two-process and two-host TCP byte tests, mixed-peer tests for the
-frozen protocol, permission/range denial, restart, reconnect and lost-reply
+Exit: real two-process and two-host TCP byte tests, permission/range denial,
+restart, reconnect and lost-reply
 controls; a lost reply never authorizes ambiguous replay.
 
 ## P3 — HP-TCP and SHM
@@ -230,7 +233,6 @@ Requirements: B02/B03 with associated F04/F07–F11/F18.
 P3 is complete at source level. Linux CI qualifies loopback HP-TCP and same-host
 DRAM SHM on `/dev/shm`, including fragmented frames, restart fencing and
 unlink/unregister races. Physical HP-TCP rails and CXL need installed runs.
-Directional Rust/TENT interoperability remains in the interoperability profile.
 
 ## P4 — Host RDMA and endpoint ownership
 
@@ -389,7 +391,7 @@ unavailable instead of instantiating stubs.
 
 Exit per row: build without the provider, explicit unavailable result,
 fake-provider contract tests, then real installed bytes, permissions, faults,
-drain and applicable mixed-peer interoperability.
+drain and peer retirement.
 
 ## P9 — External APIs and operational compatibility
 
@@ -417,7 +419,7 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
 Exit: independent Rust, C, C++ and Python consumers run the parity cases
 against installed artifacts, with explicit provider/feature matrices.
 
-## P10 — Fault, physical lifetime and interoperability acceptance
+## P10 — Fault and physical lifetime acceptance
 
 Runs throughout P2–P9. The [release ladder](#release-ladder) requires acceptance
 for each release's supported profiles; full parity closes the complete matrix.
@@ -431,7 +433,7 @@ for each release's supported profiles; full parity closes the complete matrix.
 - [ ] For failover, prove the earlier attempt can no longer modify destination
   memory before replay, and prove eventual reclamation for each claimed path.
 - [ ] Same-host, two-host, multirail, storage, device and fabric profiles, plus
-  both mixed C++/Rust directions; keep failed runs and counterfactuals.
+  cross-backend fault and lifetime controls; keep failed runs and counterfactuals.
 
 Exit: per-profile accepted evidence of correct bytes, monotonic authority,
 bounded ownership, no early reuse and eventual cleanup.
@@ -461,17 +463,16 @@ publish packages.
 | Version | Release gate |
 | --- | --- |
 | `0.1.0-alpha.N` | Maintainer-published milestones during early development; APIs remain unstable. The current release is `0.1.0-alpha.1`, published from main [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490). |
-| `0.1.0-beta.1` | S21–S26 and per-peer retirement are complete. The Rust API, C ABI and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration, C/C++ ABI, Python and TENT TCP interoperability must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
-| `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-physical-lifetime-and-interoperability-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
+| `0.1.0-beta.1` | S21–S26 (excluding out-of-scope S23) and per-peer retirement are complete. The Rust API, C ABI and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration, C/C++ ABI and Python must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
+| `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
 
-Beta evidence uses the existing [source and mixed-peer checks](qualification.md#reproduce-and-review),
+Beta evidence uses the existing [source and oracle checks](qualification.md#reproduce-and-review),
 [C ABI](qualification.md#installed-c-abi-on-linux),
 [C++ adapters](qualification.md#c-source-adapters),
 [HP-TCP](qualification.md#hp-tcp-rail-verification),
 [SHM](qualification.md#shared-memory-and-cxl-verification) and
 [io_uring](qualification.md#local-file-segments) and
-[Python wheels](qualification.md#python-wheels) and
-[directional TENT TCP](qualification.md#tent-tcp-interoperability) profiles. A source implementation
+[Python wheels](qualification.md#python-wheels) profiles. A source implementation
 or shim does not satisfy an installed hardware gate.
 
 The [verification queue](qualification.md#verification-queue) owns the commands
@@ -541,7 +542,7 @@ safety in actual owners; avoid forwarding facades or a separate coordinator.
 | Real process/TCP/SHM/file | Control, TCP, memory, storage or lifecycle changes | Real cross-process bytes, errors, protocol and owned shutdown |
 | P2P discovery boundary | F06 configuration or consumer API changes | External stores rejected; consumer-issued endpoint and epoch authority preserved |
 | RDMA/device/storage/provider | Corresponding implementation changes | Real backend bytes and hardware-specific completion and lifetime |
-| Cross-language/mixed-peer | API, wire or binding changes | Installed caller behavior and directional interoperability |
+| Cross-language | API or binding changes | Installed Rust, C/C++ and Python caller behavior and lifetimes |
 | Matched performance | Hot-path, scheduling, metrics or release changes | Measured benefit or regression for the recorded profile only |
 | Final installed artifact | Every supported release profile | Real package, runtime dependency and loader behavior |
 

@@ -76,7 +76,7 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 | libfabric | Host DRAM RMA, opt-in software TCP/EFA profiles | Implemented; EFA installed profile unqualified |
 | MPComm | Optional network provider | Planned (P8.1) |
 
-TENT's C/C++ adapters and [Python API](docs/python.md) are implemented; TENT wire interoperability remains planned.
+TENT's C/C++ adapters and [Python API](docs/python.md) are implemented. See the [wire and consumer boundary](docs/tent-parity.md#wire-and-consumer-boundaries).
 [Capabilities](docs/capabilities.md) lists the exact limits of each path.
 
 ## Quick Start

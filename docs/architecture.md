@@ -201,13 +201,11 @@ exercise these differences and the captured environment without changing a
 process variable.
 
 TENT's `closeSegment` removes a name/ID mapping in `SegmentManager` and bumps
-its cache version; shared descriptors already in use survive. OrbiTE's Rust
-peer descriptor is a snapshot and the current C/C++ close removes its handle.
-Neither operation is a per-peer physical drain receipt. Admission fencing and
-retiring RDMA connections, HP-TCP lanes and imported mappings together require
-a separate owner change. Until then, a consumer stops dispatch to a departed
-peer and uses the existing requester-wide close when it needs a drain receipt;
-see [discovery boundary](rust-api.md#discovery-boundary).
+its cache version; shared descriptors already in use survive. OrbiTE's C/C++
+close preserves that reversible handle contract. Rust `close_segment` fences
+an endpoint/epoch, drains admitted work and retires matching transport caches;
+a timeout or failed native cleanup retains owners and charges. See the
+[discovery boundary](rust-api.md#discovery-boundary).
 
 ## Engine and transport boundary
 
@@ -216,34 +214,14 @@ The [acceptance inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/
 connects each public field or message to its source, owner, test trigger and
 expected result. The oracle captures the two YLT envelope layers separately
 from TENT's attachments. The Rust control plane uses its existing codec.
-S23 replays those bytes and moves guarded payloads in both peer directions against the frozen native build.
-
-
-The [cooperative TENT profile](tent-interop.md) has a separately configured
-listener on the existing control acceptor/worker/queue owner, and an explicit
-`open_tent_segment` requester API. `endpoint` and `open_segment` always use native
-framing; an OrbiTE marker in TENT JSON rejects accidental OrbiTE-to-OrbiTE use.
-TENT's raw-address protocol has no source epoch or registration generation.
-Consumer epochs fence local admission and retirement, and a pre-WRITE descriptor
-comparison fences any observed metadata change without adopting new addresses.
-`changed_metadata_fences_writes_and_consumer_epoch_change_retires_old_identity`
-checks both that extra fence and consumer retirement with unchanged metadata.
-This cannot detect an identical descriptor after restart; the stale-address
-WRITE risk is explicit, never represented as native epoch protection.
-
-Differences from the frozen RPC implementation are bounded attachments and
-metadata, endpoint-redirect rejection, strict response header validation
-and no replay after any WRITE payload may have left. READ commits only a full
-validated response, as in frozen TENT.
-The `magic_version_serialization_sequence_and_lengths_fail_closed`, metadata,
-`truncated_read_response_and_partial_write_frame_leave_destinations_unchanged`
-and `lost_write_ack_is_unknown_and_never_replayed_and_bad_responses_are_rejected`
-controls cover them. `retirement_timeout_retains_a_running_tent_read_until_drain`
-checks the existing peer permit and charges. Unsupported RPCs return a service
-error; bootstrap format coverage publishes no RDMA keys. The compatibility
-profile adds no dependency or requester socket pool. Frozen YLT remains a
-build-time test oracle only.
-
+The [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries)
+excludes S23. The native acceptor has one listener and no profile dispatch.
+It rejects a foreign magic prefix before waiting for the rest of the header;
+`frozen_rpc_prefix_is_rejected_before_a_native_header_or_payload_is_read` checks
+that boundary, unchanged guards and continued native service. The frozen oracle
+also runs `frozen_tent_client_is_rejected_without_admission_or_payload` with
+actual TENT descriptor, READ and WRITE clients. The native handler reports
+`Error::Protocol` before source admission. YLT remains test-only.
 
 Callers build a `TransferRequest` with a transport (or `Transport::Unspec`) and
 two absolute addresses; the operation is chosen at submission, and an optional

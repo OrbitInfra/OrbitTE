@@ -1,3 +1,6 @@
+#[path = "control_plane/native_boundary.rs"]
+pub(crate) mod native_boundary;
+
 use std::net::Shutdown;
 
 use super::*;

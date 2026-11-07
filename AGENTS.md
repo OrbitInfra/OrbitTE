@@ -67,7 +67,7 @@ Check `gh pr list` before branching from current main. The work order is in §7.
   exact gate command to the verification queue in
   [docs/qualification.md](docs/qualification.md).
 - Paths that need no special hardware (io_uring on Linux, HP-TCP, SHM,
-  C ABI, Python, TENT TCP interop, libfabric `tcp` provider) must be
+  C ABI, Python and libfabric `tcp` provider) must be
   tested for real in CI. Only those can be called qualified on CI evidence.
 - Never write "qualified" or "accepted" for a GPU, RDMA, GDS, MNNVL or fabric
   profile without an installed hardware run. Missing hardware means
@@ -107,6 +107,8 @@ Code:
 - Mirror TENT's module layout: new transports go in `src/transport/<name>/`
   after `tent/src/transport/<name>/`. Keep resources with their owner; do not
   add forwarding facades or a separate coordinator.
+- Report upstream TENT problems promptly with an issue; send an upstream PR
+  when the fix is clear.
 - Record every deliberate difference from TENT (especially safety fixes) in
   [docs/architecture.md](docs/architecture.md) or the transport's guide, with a
   negative control test.
@@ -514,7 +516,7 @@ codec compute. Keep the consumer contract in [local copies](docs/local-copy.md).
     `src/rpc/rpc.cpp`);
   - the segment metadata format;
   - HP-TCP frames and provider bootstrap.
-- Required before S17–S23.
+- Required before S17–S22 and later reference comparisons.
 
 ### S17 — F01 configuration compatibility [CPU]
 
@@ -567,15 +569,9 @@ Out of scope by design: the consumer owns discovery and etcd/Redis/HTTP; OrbiTE 
 - **Implement:** registration, bad or missing plugin handling and CUDA plugin
   loading.
 
-### S23 — TENT wire interoperability profile [CPU for TCP]
+### S23 — TENT wire interoperability
 
-- Using the S16 freeze, implement a TENT-compatible control/metadata/TCP
-  profile with explicit version rejection, beside OrbiTE's own protocol.
-- **Done:**
-  - Directional mixed-peer tests: a Rust requester against a C++ source and a
-    C++ requester against a Rust source.
-  - They use the frozen TENT build already produced by `tests/reference/`.
-  - RDMA bootstrap interoperability is source only.
+Out of scope by design; see the [wire and consumer boundary](docs/tent-parity.md#wire-and-consumer-boundaries).
 
 ### S24 — P8.2 libfabric (B17) [CPU via the tcp provider]
 
@@ -634,7 +630,8 @@ list below shows its scope.
    - S25 MPComm.
 4. **Release work:** the P10 fault matrix, P11 matched performance against
    TENT, and installed OrbitKV integration. Follow the
-   [release ladder](docs/completion-plan.md#release-ladder).
+   [release ladder](docs/completion-plan.md#release-ladder). S23 is outside the
+   verification queue; retain the frozen TENT oracle and matched comparisons.
 
 ## 9. Do not
 
