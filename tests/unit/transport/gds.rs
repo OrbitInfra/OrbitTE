@@ -981,7 +981,12 @@ fn deferred_sweep_skips_permanent_destroy_and_reclaims_independent_work() -> Res
         std::thread::yield_now();
     }
     for _ in 0..8 {
-        f.engine.allocate_batch(1)?.free()?;
+        let mut empty = f.engine.allocate_batch(1)?;
+        let released = empty.allocation_release_receipt();
+        empty.free()?;
+        // A progress lookup may still own this exact reservation after public
+        // free. Reuse its only available slot after the destructor's receipt.
+        released.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     }
     let done = f.engine.stats()?;
     assert_eq!(
