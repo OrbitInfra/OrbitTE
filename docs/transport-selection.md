@@ -177,7 +177,7 @@ candidates can run only after a safe failure. Caller-supplied fallback indices,
 local recompute and compression remain unsupported. See
 [transport attempts](async-batches.md#transport-attempts).
 
-The selector scans at most 256 compiled rules and six candidates, once per
+The selector scans at most 256 compiled rules and seven candidates, once per
 public request. The compiled rule scan allocates no strings, takes no selector lock and calls
 no driver; no selector work is added per slice, WR or CQ completion. Existing
 registration resolution, admission and transport owners keep their own costs.
@@ -192,7 +192,8 @@ when NVLink is disabled. Bit 4 disables ordinary TCP payloads and bit 5
 announces the SHM trailer. Bit 6 announces MNNVL fabric capabilities. Bytes 4–19 hold the boot identity when known and
 20–35 hold the process nonce only for NVLink. Bytes 36–43 give the maximum
 accepted transfer length as a big-endian unsigned integer. An unknown limit
-prevents folding two requests. Bytes 1–3 are reserved. Region
+prevents folding two requests. Byte 1 bit 0 advertises configured libfabric;
+its remaining bits and bytes 2–3 are reserved. Region
 bytes 25–27 carry memory type, IPC export consent and HP-TCP registration.
 The [Describe layout](cpu-tcp.md#development-wire-contract) gives the trailer order and SHM fields.
 
