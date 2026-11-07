@@ -1,4 +1,30 @@
 fn main() {
+    // Shared host access tracking and registered DMA leases have distinct users.
+    for (name, enabled) in [
+        (
+            "native_dma",
+            cfg!(any(
+                feature = "cuda",
+                feature = "rdma",
+                feature = "io-uring",
+                feature = "fabric"
+            )),
+        ),
+        (
+            "native_dma_lease",
+            cfg!(any(
+                feature = "rdma",
+                feature = "io-uring",
+                feature = "gds",
+                feature = "fabric"
+            )),
+        ),
+    ] {
+        println!("cargo:rustc-check-cfg=cfg({name})");
+        if enabled {
+            println!("cargo:rustc-cfg={name}");
+        }
+    }
     build_identity();
     println!("cargo:rustc-check-cfg=cfg(unsupported_native_target)");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
@@ -11,7 +37,6 @@ fn main() {
         feature = "rdma",
         feature = "io-uring",
         feature = "gds",
-        feature = "device-plugin",
         feature = "fabric"
     )) {
         println!("cargo:rustc-cfg=unsupported_native_target");

@@ -81,9 +81,9 @@ fixtures and CPU codec checks support the independent frozen oracle.
 | Capability | Status | Limits |
 | --- | --- | --- |
 | Rust API | Implemented | See [Rust API](rust-api.md) |
-| TENT C ABI | Implemented (F21) | Linux LP64, installed shared and static libraries, 33 entry points and real two-process TCP. Native GPU and RDMA C profiles await installed runs. See the [C API](c-api.md) |
-| TENT C++ and classic TE | Implemented (F21) | [Installed C++20 clients](cpp-api.md) on Linux loopback, including explicit progress, guarded TCP transfers and cancellable HP-TCP scatter. RNIC and GPU Direct profiles await hardware |
-| Device plugin ABI | Implemented (F03) | [Explicit C loader](device-plugins.md), frozen table/layout, bounded retained allocations and fallible CUDA provider. CPU native-library controls; installed GPU profile unqualified |
+| TENT C ABI (S19) | Removed; out of scope | Frozen declarations retained as reference inventory only |
+| TENT C++ and classic TE (S20) | Removed; out of scope | No source adapters or classic-TE shim |
+| Device plugin ABI (S22/F03) | Removed; out of scope | CPU and CUDA use built-in owners |
 | TENT Python API | Implemented (F21) | [Installed wheels](python.md) for CPython 3.10–3.14, Linux x86_64/aarch64. Guarded TCP, GIL release and retained host/CAI/DLPack exporters; native GPU/RDMA Python profiles remain unqualified |
 | TENT configuration and P2P self-description | Configuration implemented (F01), P2P available (F06) | File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Discovery, membership, KV indexes and external metadata stores belong to the consumer; non-P2P configuration is rejected. Rust `close_segment(endpoint, epoch, timeout)` fences and drains one peer; live descriptor/operation references bound the identity table, while failed native cleanup stays charged. CPU sockets/SHM are exercised on Linux; RNIC/CUDA retirement is shim-only, installed profile unqualified |
 | TENT wire interoperability | Out of scope by design (S23) | See the [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries) |

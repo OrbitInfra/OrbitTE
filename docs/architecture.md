@@ -2,6 +2,11 @@
 
 OrbiTE follows frozen Mooncake TENT's engine, transport, context, registered
 buffer, endpoint and worker boundaries, implemented as Rust resource owners.
+The [product positioning](https://github.com/OrbitInfra/OrbiTE#overview) defines
+the consumer and non-goal boundary. The [release ladder](completion-plan.md#release-ladder)
+places test consolidation after the beta API freeze and a NIXL-based P/D
+design after installed GDR/NVLink qualification. Neither adds a current
+transport, connector or performance claim.
 Architectural alignment does not by itself establish behavior, ABI, wire or
 performance parity. See [capabilities](capabilities.md) for support and the
 [completion plan](completion-plan.md#p4-remaining-delivery) for open work.
@@ -11,81 +16,14 @@ performance parity. See [capabilities](capabilities.md) for support and the
 :class: dark-light
 :::
 
-## C transfer-engine boundary
-
-The `orbite-c` package exports the frozen C records and catches unwinding at
-each entry. Bounded, non-reused engine and batch tokens resolve to the Rust
-owners. C requests can mix opcodes and targets in one submit. The batch worker
-prepares every group before publishing the interval and owns its notification.
-The process address index shares backing locks across registrations, including
-registrations on different engines. Final unregister checks for surviving
-borrowers. Failed native retirement fences the backing against reuse.
-
-TENT opens a P2P segment by name. The C handle pins the first responding
-source epoch and checks it thereafter. The installed C tests replace the peer
-on its original port, withhold a READ during bulk unregister, and cut a
-notification reply after enqueue. The [C API](c-api.md) describes the release
-receipts and the fork's negative status codes.
-
-The [C++ adapters](cpp-api.md) link to the same Rust owners through libtent.
-Their versioned request bridge borrows policy bytes for the duration of the
-call and resolves them against compiled names. All records in an interval use
-the same monotonic clock sample. Native C++ constructors pass an explicit
-configuration source, independent of C thread-local settings. The fork's
-terminal-result query reads published tasks under the batch lock without
-voting on a retry. Dropping a TCP WRITE acknowledgement in the installed C
-control returns an unknown effect after the source has committed the bytes.
-
-Classic scatter pins only a cancellable direct route before publication and
-bypasses runtime-queue dispatch. The Rust batch owns each range and its permits.
-The C++ operation retains private segment handles, callbacks and a shared
-engine through native drain. A held HP-TCP response exercises a timed wait
-and moving the operation. The RDMA shim rejects a staged GPU peer and a
-rejected RDMA owner never falls back to TCP. An opt-in process watcher invokes
-Rust close outside the signal handler. It holds at most one weak reference per
-engine and joins on normal exit.
-
-## Native device plugin boundary
-
-`orbite-c::device_plugin` owns each checked table, dynamic library and context.
-The optional `device-plugin` feature uses the existing semver-compatible
-`libloading` dependency. The CUDA table is exported from `libtent.so` with
-`cuda,device-plugin`; it reuses the core Driver API and context guard. Neither
-feature starts a plugin automatically. The frozen loader has no production
-caller or config/env selector, so the explicit per-engine load/close functions
-are extensions rather than configuration aliases.
-
-The frozen record has no layout negotiation. A separate descriptor is required
-before registration, leaving the original header unchanged. Missing descriptors,
-invalid layouts or any incomplete slot reject before allocation (`fake.c` cases
-1–7 and 20–28). Excluded classes and duplicate providers also reject. Unlike
-TENT, CPU plugins may supply the explicitly configured C allocation path, and
-load failure is reported rather than skipped. Serialized per-plugin calls,
-eight-library limits and the existing C allocation budgets bound resources.
-
-TENT ignores failed destroy and retries provider frees by dispatch. OrbiTE
-fences uncertain allocation/copy/free/destroy outcomes and retains the library,
-backing and charge. `fake.c` cases 8–11 and 18 prove sticky cleanup, and the
-paused TCP control proves that cancel/unregister cannot release a running
-allocation. Cross-engine aliases retain the same backing. Synchronous plugin
-copies hold the span-table lock through completion; the
-`synchronous_copy_excludes_concurrent_alias_publication` control proves that
-another engine cannot publish an alias after the exclusivity check.
-Unlike frozen `cudaMemcpy` dispatch, the CUDA provider drains the legacy stream
-before reporting success: [CUDA's synchronous API](https://docs.nvidia.com/cuda/cuda-driver-api/api-sync-behavior.html)
-can return before device-to-device or pageable-host-to-device DMA completes.
-CUDA shim modes 23 and 2 defer bytes until that drain and retain owners when it fails.
-The CUDA table refuses copies of foreign device allocations without a provider
-owner, returning the handled error before posting (`cuda.py` case 21). Its
-metadata query still checks foreign CUDA ranges through the native probe. The
-loader is a native-code trust boundary; no ABI check can validate arbitrary
-callback code.
-
 ## Python boundary
 
-The optional PyO3 feature of `orbite-c` builds `orbite._native`; it reuses the
-existing bounded memory, segment and batch tables directly. No Python dependency
-or interpreter is loaded by an ordinary Rust or C build. Shared PyO3 has a
+The separate `orbite-python` crate builds only `orbite._native`. This is a real
+wheel-packaging boundary: it keeps PyO3 out of the primary Rust crate and owns
+the existing bounded memory, segment and batch tables directly. The removed
+C/C++ exports, raw argument/output adapters and external plugin loader have no
+Python callers. No Python dependency or interpreter is loaded by an ordinary
+Rust build. See the [consumer boundary](tent-parity.md#wire-and-consumer-boundaries). Shared PyO3 has a
 compatible minimum of 0.27.2 and the lockfile fixes its MSRV-tested graph. Maturin
 builds one wheel per CPython version because the 3.10 stable ABI lacks the buffer
 API needed to retain exporters. Mooncake's `mooncake.tent` and standalone `tent`
@@ -112,18 +50,18 @@ a held real TCP reply while another is blocked in wait. No Python objects enter
 the payload worker other than the retained exporter owner. Decrementing that
 owner uses PyO3's deferred reference pool; it never acquires the GIL beneath a
 native lock. A cleanup-result fault keeps a real Python exporter and its closed
-ABI slot. Installed-wheel CUDA controls drive native range checks, exact context
+engine slot. Installed-wheel CUDA controls drive native range checks, exact context
 restoration, a blocked copy and failed pinned cleanup through a fallible driver
 shim. Export leases are bounded by the registration budget, including duplicates.
 `trim_idle_staging_buffers` reclaims only idle ProxyManager slots, with a bounded
-single pass and one-shot cleanup; active slots are untouched. The ABI adapter
+single pass and one-shot cleanup; active slots are untouched. The Python adapter
 uses it together with `CudaMemory::trim_idle_copy_resources` before releasing
 foreign registrations, avoiding an idle context cache pinning a Python tensor
 indefinitely. Checked event/stream destruction reports `Unquiesced` before Drop;
 failed cleanup keeps the registration, slot charge and exporter (`test_failed_staging_cleanup_keeps_exporter_and_never_retries`).
 This retained interchange contract is an extension beyond TENT's raw integers.
 If interpreter finalization prevents a safe detach, the bounded
-ABI slot remains retained. The [guide](python.md) records these deliberate
+engine slot remains retained. The [guide](python.md) records these deliberate
 lifetime differences from frozen `src/python/pybind.cpp` and its guard test.
 
 ## Peer retirement
@@ -164,12 +102,10 @@ retirement does not weaken that safety boundary.
 Frozen `segment_manager.cpp::closeRemote`, `segment_tracker.cpp` and
 `transfer_engine_impl.cpp::closeSegment` invalidate handles/descriptors without
 this reference-retained membership fence or cross-transport drain. Rust retirement is a
-stronger extension. The C/C++ adapters preserve reversible TENT handle close,
-including scatter's private handles. `peer_retirement_*` controls distinguish
+stronger extension. Python preserves reversible TENT handle close. `peer_retirement_*` controls distinguish
 retirement from timeout, exercise submit/close races, keep a held TCP reply and
 CUDA event charged, reject stale snapshots after a same-endpoint restart, and
-prove native destroy is attempted once. The installed C/C++ consumers are the
-negative control against accidentally making their handle close permanent.
+prove native destroy is attempted once. The installed-wheel reopen control distinguishes handle close from peer retirement.
 
 ## Configuration ownership
 
@@ -177,7 +113,7 @@ Discovery, membership, KV indexes and etcd/Redis/HTTP stores live in the
 consumer. The P2P control service describes an already identified peer's
 segments, capabilities, registration keys and epochs; it does not find peers
 or replace the consumer's authoritative epoch. This deliberately excludes
-TENT's external metastore plugins. The configuration and installed C/C++
+TENT's external metastore plugins. The configuration and installed Python
 negative controls reject those types and server URIs, including through
 `MC_TENT_CONF` and legacy overrides, before binding an engine or resolving
 a hostname. Diagnostics name the endpoint/epoch migration without echoing
@@ -201,7 +137,7 @@ exercise these differences and the captured environment without changing a
 process variable.
 
 TENT's `closeSegment` removes a name/ID mapping in `SegmentManager` and bumps
-its cache version; shared descriptors already in use survive. OrbiTE's C/C++
+its cache version; shared descriptors already in use survive. OrbiTE's Python
 close preserves that reversible handle contract. Rust `close_segment` fences
 an endpoint/epoch, drains admitted work and retires matching transport caches;
 a timeout or failed native cleanup retains owners and charges. See the
@@ -475,12 +411,13 @@ request, preserving the registration policy. Invalid boolean spellings preserve
 typed settings, and debug affinity logs omit memory addresses and keys.
 See [metrics](metrics.md) and [RDMA configuration](rdma-cuda.md).
 
-The offline diagnostics module and installed `tent` binary share compile-time
+The offline diagnostics module and installed `orbite` binary share compile-time
 build identity with the exporter. The CLI uses the standard argument iterator
-and serde_json. Only the free-text redactor needs the small `regex-lite`
-matcher. A packaged header exposes the same Rust renderer and redactor to C
-and C++ through synchronous callbacks. The installed-header control checks the
-document against the CLI and rejects an unsupported format.
+and serde_json; it never starts an engine or accesses the network. Only version
+text/JSON rendering and the exit-code table remain. Neither the CLI nor Python
+uses arbitrary-document rendering or redaction, so those APIs, the C diagnostics
+header and the `regex-lite` dependency are removed. The packaged CLI control
+checks its identity and verifies the absence of network/thread syscalls.
 
 ## RDMA resource owners
 
@@ -730,9 +667,8 @@ a null binding. Copy and final pinned-buffer cleanup errors reach the caller.
 An uncertain restore poisons the owner even if the visible binding can be
 repaired. The same-device custom-context and no-context controls inject failures
 at save, switch, copy and restore. Host and CUDA allocations dispatch by owner,
-so a handled CUDA failure cannot fall through to host memcpy. The [device plugin ABI](device-plugins.md) shares these CUDA owners and the
-C memory registry. A plugin allocation holds its library until physical drain;
-failed free/destroy callbacks fence and retain it without retry.
+so a handled CUDA failure cannot fall through to host memcpy. External device-plugin callbacks are out of scope; built-in copies retain
+these context and completion controls.
 
 Each asynchronous copy holds its staging until the recorded event completes. A failed enqueue
 or record requires a proven stream drain; otherwise the allocation, staging,

@@ -1,12 +1,11 @@
 # OrbiTE completion plan
 
-Build an independently maintained Rust transfer engine for CPU DRAM, NVIDIA
-GPUs and local SSDs against the [frozen latest TENT contract](tent-parity.md).
-OrbiTE replaces OrbitKV's earlier Mooncake TENT dependency and must carry every
-end-to-end KV cache path, including GPU↔DRAM and GPU↔SSD. CPU and CUDA are the
-selected platforms; other accelerator vendors are outside scope. The target
-keeps TENT's applicable runtime, language and operational behavior and the selected
-transport types; MPComm is deferred.
+Follow the [product positioning and non-goals](https://github.com/OrbitInfra/OrbiTE#overview):
+OrbiTE is the KV data plane for LLM inference on NVIDIA, with OrbitKV cache
+tiering and cross-node reuse as its first use case. This plan delivers the
+[frozen TENT design](tent-parity.md) through Rust and Python, and records the
+evidence for each owner and profile. P/D integration follows the release gates
+below; it is not a current capability claim. MPComm remains deferred.
 
 Storage and optional network providers are opt-in builds, like `rdma` and
 `cuda`: a network/memory-only build must run without file/SSD executors,
@@ -47,7 +46,7 @@ artifacts and hardware profiles.
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm is deferred: no consumer; provider unavailable |
-| P9 | C/C++/Python and operational compatibility | P0/P2/P6 | C ABI, C++ source adapters, Python wheels and configuration implemented |
+| P9 | Rust/Python and operational compatibility | P0/P2/P6 | Python wheels and configuration implemented; S19/S20/S22 removed and out of scope |
 | P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Planned |
 
@@ -92,9 +91,7 @@ copies and a mapped-host kernel. The [installed comparison](qualification.md#cal
 and the P5 hardware verification queue remain open.
 S16 freezes the reference acceptance inventory and native wire fixtures. S17
 implements F01 against its configuration, environment and precedence cases.
-S19 implements the [installed C ABI](c-api.md) against the S16 declarations and
-LP64 fixtures. S20 implements the [native and classic C++ source adapters](cpp-api.md),
-including versioned requests, explicit progress and physically drained waits.
+S19 (C ABI) and S20 (C++/classic TE) are removed and out of scope.
 The P2P-only discovery boundary precedes S21. External etcd/Redis/HTTP stores,
 cluster membership and KV indexes belong to the consumer; S18 is out of scope
 by design. Per-peer admission fencing, drain and selective transport retirement
@@ -102,9 +99,7 @@ are implemented; native cleanup is shim-tested and awaits the installed gate.
 S21 implements the [Python surface](python.md), installed-wheel byte and lifetime
 controls, and CPython 3.10–3.14 packaging. S21b adds driver-validated retained
 CUDA Array Interface/DLPack owners; its installed GPU profile is unqualified.
-S22 implements the checked [device plugin ABI](device-plugins.md), CPU shared-library
-controls and a CUDA provider using the fallible driver table. Its installed GPU
-profile remains unqualified. S23 is out of scope by design; see the
+S22 (device plugins) is removed and out of scope; CPU/CUDA are built in. S23 is out of scope by design; see the
 [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries).
 S24 implements the opt-in [libfabric host path](fabric.md), with real
 software-provider controls and an unrun EFA gate. S25 MPComm is deferred: no
@@ -134,13 +129,13 @@ Done:
   metrics, metadata, logical RPCs and 88 reference test sources. A native C probe
   freezes LP64 layouts. The pinned C++ codecs and loopback dispatcher check
   control RPCs, memory/file metadata, HP-TCP frames and provider attributes.
-  S17–S22 extend those cases with their own evidence.
+  S17 and S21 extend their in-scope cases with evidence; C/C++/plugin rows remain reference-only and explicitly out of scope.
 
 Open:
 
 - [ ] Pin optional-provider SDKs and build options for the profiles outside
   the isolated CPU reference build.
-- [ ] Extend the CPU oracle to the remaining native/Python/classic-TE behavior,
+- [ ] Extend the CPU oracle to the remaining native/Python behavior,
   Python guards and tebench byte checks, with hardware triggers where needed.
 - [ ] Extend the shared trace to allowed concurrent transitions, faults, broken
   lifetime/epoch controls against independent native and Rust runs.
@@ -400,25 +395,18 @@ drain and peer retirement.
 Requirements: F01/F06/F20–F22 and the complete language inventory.
 
 - [x] Immutable F01 configuration snapshots and per-key dispositions in the S16 inventory.
-- [x] F21 C ABI. Both installed libraries export 33 functions with the frozen LP64
-  layout and paired output frees. The C consumer exercises real loopback TCP,
-  configuration and negative native statuses. GPU/RNIC C profiles await hardware.
-- [x] F21 native C++ and TENT-backed classic TE source adapters. The installed
-  clients exercise both binding rows, including progress, sync/wait, scatter
-  callbacks, named policies, deadlines and intent. Native hardware profiles remain queued.
+- S19 C ABI and S20 C++/classic TE are removed and out of scope.
 - [x] F21 Python classes, properties, overloads, enums, defaults and context
   managers; typed errors, GIL release and exporter lifetime through physical drain.
   Installed-wheel controls map all three S16 Python binding rows and 128 detailed
   surface rows. S21b adds retained CAI/DLPack CUDA owners with driver-validated
   bounds, producer readiness and sticky cleanup. Native profiles remain unqualified.
 - [x] F06 P2P-only configuration boundary; S18 external stores and cluster discovery are out of scope by design.
-- [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. Identity charges follow live handles/operations; safe unreferenced entries reclaim, while uncertain cleanup remains charged. C/C++ segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
+- [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. Identity charges follow live handles/operations; safe unreferenced entries reclaim, while uncertain cleanup remains charged. Python segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
 - [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
-- [x] F03 device plugin ABI registration, checked runtime loading and a CUDA
-  provider. CPU libraries exercise the installed C boundary and drain; CUDA
-  shim controls pass, with the installed GPU gate queued.
+- S22/F03 device plugins are removed and out of scope.
 
-Exit: independent Rust, C, C++ and Python consumers run the parity cases
+Exit: independent Rust and Python consumers run the parity cases
 against installed artifacts, with explicit provider/feature matrices.
 
 ## P10 — Fault and physical lifetime acceptance
@@ -453,7 +441,7 @@ Requirements: F22 and the applicable accepted backend and compatibility profiles
   cold/warm, mixed priority, CPU/device/file, multirail). Initial guards:
   goodput ≥ 0.95, p99 latency ≤ 1.05 and CPU-per-byte and peak-RSS ≤ 1.10 of the
   frozen reference, ratified in P0 before formal runs.
-- [ ] Packaged crates, shared libraries, headers and wheels tested outside the
+- [ ] Packaged crates, CLI and wheels tested outside the
   checkout, with provider discovery, runtime paths and provenance.
 - [ ] Installed manifests prove no C++ Mooncake engine/common/Store dependency.
 
@@ -465,12 +453,12 @@ publish packages.
 | Version | Release gate |
 | --- | --- |
 | `0.1.0-alpha.N` | Maintainer-published milestones during early development; APIs remain unstable. The current release is `0.1.0-alpha.1`, published from main [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490). |
-| `0.1.0-beta.1` | S21–S24 (excluding out-of-scope S23), S26 and per-peer retirement are complete; S25 is deferred. The Rust API, C ABI and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration, C/C++ ABI and Python must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
+| `0.1.0-beta.1` | S21, S24 and S26 and per-peer retirement are complete; S25 is deferred. The Rust API and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration and Python must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
+| Test consolidation (after the beta.1 API freeze) | Audit `tests/unit` (about 72k lines) for repeated assertions of the same invariant through the same owner, often added by different steps; merge them into table-driven tests. Preserve every negative control and distinct failure path: timeout, cancel, partial submit, `Unquiesced`, stale epoch and each deliberate TENT difference. CPU shims and `tests/hardware` gates are out of scope. Report source/test line deltas and invariant counts before/after; the invariant count must be unchanged. Tests-only refactor: no production change and no coverage drop. |
 | `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
+| Post-0.1.0 P/D integration design | Begin after the GDR and NVLink installed profiles qualify. Prefer an OrbiTE NIXL backend plugin so the official vLLM `NixlConnector`, SGLang NIXL backend and Dynamo can select it without engine changes or forks; OrbiTE does not ship custom P/D connectors. Write a design document first: capability gap; NIXL descriptors, notifications and release semantics versus physical quiescence; abort safety for in-flight WRITEs into decode pages; joint arbitration of P/D and cache traffic; and TTFT/ITL against NIXL+UCX and Mooncake. Any C/C++ glue is purpose-built for that plugin. This is a plan, not implemented code. |
 
 Beta evidence uses the existing [source and oracle checks](qualification.md#reproduce-and-review),
-[C ABI](qualification.md#installed-c-abi-on-linux),
-[C++ adapters](qualification.md#c-source-adapters),
 [HP-TCP](qualification.md#hp-tcp-rail-verification),
 [SHM](qualification.md#shared-memory-and-cxl-verification) and
 [io_uring](qualification.md#local-file-segments) and
@@ -528,7 +516,7 @@ lives under `/root/orbitte-artifacts/` and is valid only for those artifacts.
 | `src/runtime/` | Control plane, transport selection, admission queue, QoS, receiver credits and ProxyManager |
 | `src/transport/tcp/`, `src/transport/rdma/`, `src/transport/nvlink/` | Payload transports and their native resource owners |
 | `src/cuda/`, `src/platform/` | NVIDIA allocation, streams, IPC and host topology |
-| `crates/orbite-c/`, `include/` | Transfer-engine C library and installed header, plus the diagnostics header. C++ source adapters and optional Python wheel boundary |
+| `crates/orbite-python/`, `python/` | Python packaging boundary, retained exporters and TENT-shaped P2P API |
 | `tests/` | Unit (mirroring `src/`), integration, reference, fault and installed tests |
 | `benches/` | Future reusable traces and matched-run drivers |
 | `docs/` | Contracts, recipes, support matrix and this plan |
@@ -544,7 +532,7 @@ safety in actual owners; avoid forwarding facades or a separate coordinator.
 | Real process/TCP/SHM/file | Control, TCP, memory, storage or lifecycle changes | Real cross-process bytes, errors, protocol and owned shutdown |
 | P2P discovery boundary | F06 configuration or consumer API changes | External stores rejected; consumer-issued endpoint and epoch authority preserved |
 | RDMA/device/storage/provider | Corresponding implementation changes | Real backend bytes and hardware-specific completion and lifetime |
-| Cross-language | API or binding changes | Installed Rust, C/C++ and Python caller behavior and lifetimes |
+| Cross-language | API or binding changes | Installed Rust and Python caller behavior and lifetimes |
 | Matched performance | Hot-path, scheduling, metrics or release changes | Measured benefit or regression for the recorded profile only |
 | Final installed artifact | Every supported release profile | Real package, runtime dependency and loader behavior |
 

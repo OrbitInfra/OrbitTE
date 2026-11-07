@@ -91,10 +91,10 @@ the behavior. Hardware qualification stays with the artifact that ran.
 | [`db4f146e`](https://github.com/OrbitInfra/Mooncake/commit/db4f146ecb5ae3bc432c0262c1cb6650a0a39ba4) | [TENT] Add intra-node PCIe P2P copies between Intel XPUs (#4379) | **N/A** | Intel XPU PCIe peer copies, Level Zero IPC imports and XPU-specific selector capabilities require SYCL. |
 | [`a7496800`](https://github.com/OrbitInfra/Mooncake/commit/a7496800527b93105ac5c4177ce7cdabc5667dbf) | [TENT] Add asynchronous MLU host-device copies (#4720) | **Port** | R1c implemented. Shared controls cover submit publication before wake, scoped polling, staging-child drain and retained registration rollback. MLU and its runtime remain excluded. |
 | [`dae22d47`](https://github.com/OrbitInfra/Mooncake/commit/dae22d472e31f6aac92ee1dfe938dc1441b58850) | [TENT] Do not advance the notify send slot on a failed post (#4434) | **N/A** | The corrected send slot belongs to the RDMA notification QP. OrbiTE notifications use local, TCP and control-RPC delivery. |
-| [`b2c7d0a7`](https://github.com/OrbitInfra/Mooncake/commit/b2c7d0a7b5cec0b04563138f40d4c40937dd63fe) | [Bugfix][TENT] Restore caller CUDA context after plugin copies (#4839) | **Port** | R1c implemented. The CUDA owner restores the exact binding. A handled copy or cleanup error is terminal and cannot enter host memcpy. S22 provides the checked external plugin ABI. |
+| [`b2c7d0a7`](https://github.com/OrbitInfra/Mooncake/commit/b2c7d0a7b5cec0b04563138f40d4c40937dd63fe) | [Bugfix][TENT] Restore caller CUDA context after plugin copies (#4839) | **Port** | R1c implemented. The CUDA owner restores the exact binding. A handled copy or cleanup error is terminal and cannot enter host memcpy. The external plugin ABI is now out of scope; built-in copies retain the context controls. |
 | [`042ab8a1`](https://github.com/OrbitInfra/Mooncake/commit/042ab8a18b0e6ccfe87782261a5556a3dd4446e4) | [TENT] Add Intel XPU GPUDirect dma-buf RDMA to the Transfer Engine (#4378) | **N/A** | The dma-buf exporter and accelerator-specific range checks serve Intel XPU. OrbiTE's NVIDIA RDMA path uses its CUDA registration owner. |
 | [`3b08b771`](https://github.com/OrbitInfra/Mooncake/commit/3b08b77168870d265e32b6cfeab661f037426b9c) | [TE/TENT] Add adaptive RDMA congestion control core (#4197) | **Port** | R1b implemented. The opt-in `rdma-adaptive` shared core provides off/observe/enforce windows, generation-scoped evidence and completion classification. As in the TENT build, workers do not call it. |
-| [`7540f582`](https://github.com/OrbitInfra/Mooncake/commit/7540f5826ed32cb755b1db027a2c609adb53f024) | [TENT] Add diagnostic core and version CLI (#4154) | **Port** | R1d implemented. The packaged offline `tent diagnostics version [--json]` binary, Rust diagnostics module and C/C++ header share the renderer and build identity. CI installs the binary and links both native clients. |
+| [`7540f582`](https://github.com/OrbitInfra/Mooncake/commit/7540f5826ed32cb755b1db027a2c609adb53f024) | [TENT] Add diagnostic core and version CLI (#4154) | **Port** | R1d implemented. TENT’s C++ diagnostics header and `tent` CLI map to the Rust `version_snapshot()` API and packaged `orbite diagnostics version [--json]` CLI. No C/C++ diagnostics header; unused redaction and external-document rendering are removed. |
 | [`7a058556`](https://github.com/OrbitInfra/Mooncake/commit/7a0585567458a4aba6a58115888c54b7fd1a44e1) | fix(tent): allow CPU clients to select peer GPU TCP memory (#4410) | **Port** | R1d implemented. `cpu_platform_can_select_peer_gpu` maps the capability matrix. A separately built CPU-only requester byte-checks READ and WRITE over real TCP against a CUDA-shim source. |
 | [`e3e9d70e`](https://github.com/OrbitInfra/Mooncake/commit/e3e9d70eea3c8ea9eb236b4c9c92f361fbbe533f) | [Bugfix][TENT] Restore the caller's exact CUDA context after copies (#4643) | **Port** | R1c implemented. The Driver guard saves the exact caller binding, including null, and checks it after pop. A failed save precedes all copies. Unproven restoration fences the owner. |
 
@@ -104,17 +104,12 @@ the behavior. Hardware qualification stays with the artifact that ran.
 | --- | --- |
 | Functional behavior | Reproduce implemented operations, routing, status/error semantics, notifications, resource behavior and backend combinations in the selected CPU/NVIDIA scope |
 | Rust API | Provide native Rust interfaces for the selected implemented TENT capability set, including features absent from its C API |
-| TENT C ABI | All 33 functions and the LP64 transfer-engine layouts have installed [C API](c-api.md) controls. The fork's negative native return codes preserve dispatch uncertainty. Excluded transports return unavailable |
-| TENT C++ API | The installed [native TENT and TENT-backed classic TE adapters](cpp-api.md) cover both S16 C++ binding rows. Rebuild callers against their headers and link the adapter archive to libtent |
+| TENT C ABI (S19) | Removed and out of scope; reference inventory retained |
+| TENT C++ API (S20) | Removed and out of scope; no classic-TE shim |
 | Python API | Cover the frozen TENT binding's classes, fields, overloads, errors and context managers through thin native bindings |
 | TENT wire interoperability (S23) | Out of scope by design; see [wire and consumer boundaries](#wire-and-consumer-boundaries) |
 | Configuration and operations | Match effective defaults, precedence, environment mappings, topology formats, metrics and explicit unavailable-backend behavior |
 | Performance | Qualify matched workloads on each claimed hardware profile; source similarity or a Rust rewrite establishes no performance result |
-
-C++ binary ABI interchangeability is not assumed: C++ consumers rebuild the
-source adapter. The adapter must carry C++-only request fields through a
-versioned native FFI path; the existing C request struct lacks `policy_name`,
-`deadline_ns` and `intent_type` and must not be silently extended or drop them.
 
 Keep compatibility entrypoints at the binding boundary and one Rust behavior
 owner underneath. OrbiTE's runtime must not call the C++ TENT engine, legacy
@@ -142,10 +137,10 @@ that every branch or provider has already been qualified upstream.
 | --- | --- | --- | --- |
 | F01 | Default/config-file/config-object construction; `MC_TENT_CONF` file or inline JSON; legacy environment mappings and precedence; typed parsing; invalid-root/path diagnostics; immutable per-engine snapshots | `common/config*`, `config_lifecycle*`, `transfer_engine_config_override_test` | P1 |
 | F02 | CPU/NUMA, PCI and device discovery; RDMA allow/deny lists; custom topology and priority matrices; `cpu:`/`cuda:`; strict locality; unavailable accelerator locations are rejected | `runtime/topology*`, `platform/*`, `topology_priority_matrix_test`, `strict_local_numa_test` | P1/P4/P5/P8 |
-| F03 | Platform allocation/free, location and pointer probing, synchronous copy and device/context/stream ownership; CUDA device-plugin C ABI | `runtime/platform*`, `memory_prober*`, `platform/*`, `device_plugin.h`, `plugins/*` | P1/P5/P8 |
+| F03 | External device plugin ABI removed and out of scope. Built-in CPU/CUDA allocation, probing, copy and context owners remain in P1/P5 | `device_plugin.h`, `plugins/*`; built-in `runtime/platform*`, `memory_prober*`, `platform/*` | Out of scope (plugin ABI) |
 | F04 | Single/batch memory allocation and registration; permissions/options; duplicate references, range geometry, warmup/prefault, unregister and partial-failure ownership | `transfer_engine_impl.cpp`, `segment_registry*`, `local_memory_lifecycle_test`, `coalesce_regions_test`, backend buffer tests | P1/P4/P5/P8 |
 | F05 | Memory/file segments, `file://` addressing, open/close/info, descriptor caching/refresh, update subscription/invalidation and retry coalescing | `segment*`, `control_plane*`, `segment_manager_test`, `segment_desc_retry_test` | P2/P7 |
-| F06 | P2P self-description only: segment descriptors, capabilities, registration keys and epochs. Consumer-owned discovery, membership, KV indexes and etcd/Redis/HTTP stores are out of scope. Non-P2P metadata configs are recognized and rejected with migration guidance. Rust peer retirement adds an endpoint/epoch fence and native drain; frozen C/C++ close remains reversible handle invalidation | `runtime/metastore.cpp`, `runtime/segment_manager.cpp`, `runtime/segment_tracker.cpp`, `control_plane*`; [discovery boundary](rust-api.md#discovery-boundary) | P2/P9 |
+| F06 | P2P self-description only: segment descriptors, capabilities, registration keys and epochs. Consumer-owned discovery, membership, KV indexes and etcd/Redis/HTTP stores are out of scope. Non-P2P metadata configs are recognized and rejected with migration guidance. Rust peer retirement adds an endpoint/epoch fence and native drain; Python close remains reversible handle invalidation | `runtime/metastore.cpp`, `runtime/segment_manager.cpp`, `runtime/segment_tracker.cpp`, `control_plane*`; [discovery boundary](rust-api.md#discovery-boundary) | P2/P9 |
 | F07 | RPC bootstrap, peer probe, data READ/WRITE, notifications, Delegate/Pin/Unpin, update subscriptions; reconnect and owned handler shutdown | `rpc/*`, `control_plane*`, `rpc_reconnect_test`, `rpc_handler_isolation_test`, `delegate_rpc_test` | P2/P5/P10 |
 | F08 | Batch capacity/IDs; READ/WRITE; partial submission; merge eligibility and public alias-to-owner mapping; per-task/list/overall status and transferred bytes | `transfer_engine_impl.cpp`, `request_merge_test`, `request_submit_bench`, `engine_failover_e2e_test` | P1/P2/P6 |
 | F09 | Observational polling option, explicit `progressBatch`, background progress worker, bounded wake/fallback timing, terminal-state stability and deferred batch retirement | `progress_worker*`, `progress_worker_test`, `runtime_queue_dispatch_test`, `poll_backoff_test` | P1/P6 |
@@ -160,7 +155,7 @@ that every branch or provider has already been qualified upstream.
 | F18 | RDMA endpoint caches, bootstrap concurrency, per-rail health, cooldown/probe/half-open recovery, device loss, retirement and failed-cleanup quarantine | `rdma/endpoint*`, `rail_monitor*`, endpoint/rail/async-event teardown tests | P4/P6/P10 |
 | F19 | Local and remote staging; delegate/pin/unpin registry; chunk buffers; mixed direct/staged requests; nested work admission, completion and proxy shutdown | `proxy_manager*`, `remote_stage_operation*`, `stage_buffer_concurrency_test`, `proxy_shutdown_timeout_test` | P5/P6/P8/P10 |
 | F20 | Transfer/attempt/queue/failure-stage and deadline observations; labels and histograms; HTTP/JSON/Prometheus output; configuration, disabled mode and available-NIC load snapshots | `metrics/*`, `common/qos_metrics*`, metrics tests, `getNicLoadStats` | P2/P6/P9 |
-| F21 | Native C++, C and Python surfaces; classic-TE-to-TENT shim, including its synchronous/wait helpers and explicit unavailable operations | public headers, `src/python/pybind.cpp`, parent `src/transfer_engine.cpp`, `test_python_guards.py` | P9 |
+| F21 | Python only: frozen TENT-shaped P2P classes, fields, overloads, defaults, exceptions and guards; retained exporters and detached blocking calls | `src/python/pybind.cpp`, `test_python_guards.py` | P9 |
 | F22 | Transport/platform feature selection, missing-provider errors, installed artifacts, SDK/runtime discovery, examples and reproducible byte-checking benchmarks | TENT/parent CMake, provider adapters, CI, benchmark sources | Every stage/P11 |
 
 For F15 the frozen RDMA shared header publishes one rotating priority slot.
@@ -223,18 +218,14 @@ Source authority: [transport types][types], [runtime loader][loader],
 [transport implementations][transports] and [platform implementations][platforms].
 
 The upstream's eight platform families are CPU, CUDA, ROCm/HIP, Ascend, Sunrise,
-TPU, XPU and MLU. OrbiTE implements CPU, CUDA and the CUDA device-plugin ABI.
+TPU, XPU and MLU. OrbiTE implements built-in CPU and CUDA owners.
 The other six platforms and ROCm plugin are excluded by project scope, rather
 than classified as missing hardware qualification. In-scope provider stubs
 qualify unavailable/error handling and state-machine controls only; they cannot
 qualify real transfers.
 
-S22 preserves the frozen plugin header and layout. The native loader has no
-production config/env selector in the frozen tree; OrbiTE adds explicit C
-load/close calls. A required separate layout descriptor rejects incompatible
-libraries before registration. Failed free/destroy retains owners instead of
-unloading, and handled copy failures never authorize a host fallback. The
-[plugin guide](device-plugins.md) records these safety differences and controls.
+S22 external device plugins are removed and out of scope. Their declarations
+and layouts remain in the reference inventory, with no runtime loader.
 
 Frozen TENT builds `BufIoTransport` as a static target. It caches buffered fds,
 runs synchronous `pread`/`pwrite` at the request's file offset and stages CUDA
@@ -283,19 +274,19 @@ DRAM↔SSD and GPU↔SSD byte movement onto these modules; that switch is consum
 integration with its own P10/P11 qualification. A compatibility profile enables
 the modules needed to compare with TENT's effective configuration.
 
-## C and language binding inventory
+## Language binding inventory
 
 The [acceptance inventory][inventory] is the shared input to S17–S22 and later comparisons. Its F01 rows identify each supported setting, unsupported field or excluded provider. The Rust loader exercises them in the CPU matrix. Each
-public C declaration has a call/ownership case. The companion C probe checks
+public C declaration has an out-of-scope disposition. The companion C probe checks
 the frozen public and plugin layouts on Linux LP64. The index also identifies
 reference tests by source and GTest filter, and maps config, environment,
 direction flags, metrics, metadata and logical RPCs to their owners and
 acceptance triggers. The [public header][api] remains the upstream authority.
 
-The richer Rust/C++ surface additionally covers `Request.policy_name`,
-`deadline_ns`, `intent_type`, peer probing, explicit `progressBatch`, topology
-introspection and the TENT-backed classic-TE sync/wait helpers. Export/import
-segment declarations preserve the reference's `NotImplemented` result.
+The C function, C++ and device-plugin rows are marked out of scope. Their
+frozen signatures and layouts remain oracle checks, not a shipped ABI. Rust
+and Python retain policy, deadline, intent, explicit progress and topology
+operations; Python export/import segment methods remain unsupported.
 
 Python parity includes `OpCode`, `TransferStatusEnum`, `Permission`,
 `TransportType`, `IntentType`, `SegmentInfoType`, `Notification`, `Request`,
@@ -317,12 +308,13 @@ RDMA peers using endpoint QP pools must also share the same ordered pool layout,
 width and link-layer settings.
 The control-plane magic keeps its historical spelling, `ORBITTE\0`.
 
-OrbiTE remains compatible with TENT's configuration and API/ABI as a library
-replacement, subject to the documented safety extensions and C++ source rebuild.
-The deployments are wire-exclusive: TENT and OrbiTE peers do not interoperate,
-and both peers run the same OrbiTE build. There is no protocol autodetection or
-downgrade. A frozen TENT client is rejected at the native magic/version boundary
-before admission or payload access.
+Rust is OrbiTE's primary API. Python is source-compatible with the frozen
+TENT-shaped P2P subset (`import orbite as tent`), including its configuration
+and metric names. There is no C/C++ ABI before a consumer needs one; a future
+C API would be purpose-built, not TENT's 33 functions. TENT and OrbiTE are
+wire-exclusive deployments: both peers run the same OrbiTE build. There is no
+protocol autodetection or downgrade. A frozen TENT client is rejected at the
+native magic/version boundary before admission or payload access.
 
 The [RPC inventory][rpc] and [wire fixtures][fixtures] retain the frozen TENT
 YLT envelopes, struct_pack arguments, attachments, segment JSON, HP-TCP frames

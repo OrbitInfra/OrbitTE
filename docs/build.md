@@ -88,7 +88,3 @@ external artifact directories.
 The website is generated from this `docs/` tree using Mooncake's Sphinx Book
 Theme. See [the contributor instructions](contributing.md#documentation-site)
 for the exact build and preview commands.
-
-The Linux `device-plugin` feature enables explicit native library loading in
-`orbite-c`. Add `cuda` for the Driver API provider; no library is loaded until
-`orbite_load_device_plugins` is called. See [device plugins](device-plugins.md).

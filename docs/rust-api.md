@@ -10,9 +10,6 @@ cargo doc --locked --no-deps --open
 Add `--features rdma,cuda` in an environment with the
 [build prerequisites](build.md).
 
-The separate [C API](c-api.md) exports the TENT constructor and its thread-local
-settings. Rust applications can construct a typed `EngineConfig` directly.
-
 ## Transfer requests
 
 `TransferRequest::new(transport, local_address, remote_address, length)` starts
@@ -163,7 +160,7 @@ rejects other metadata types and `etcd://`, `redis://`, `http://` and
 `https://` server URIs after configuration precedence, with an
 `Error::TentConfig` directing the caller to publish endpoint and epoch.
 This applies to file/inline `MC_TENT_CONF`, legacy overrides, the public
-`from_tent_*` loaders and the C/C++ constructors. No Redis credentials are
+`from_tent_*` loaders and the Python constructor. No Redis credentials are
 read. External stores are out of scope, not deferred providers.
 
 When membership says a peer left, call
@@ -200,7 +197,7 @@ and `retired_peer_segments` partition that count by admission state.
 failed cleanup. `reclaimed_peer_segments` is the cumulative reclaimed-entry
 count, and `active_peer_operations` counts outstanding admission permits. These
 counters are observations, not release receipts. Dropping a descriptor or calling the
-frozen C/C++ `closeSegment` still only closes a handle: TENT permits reopening
+TENT-shaped Python `close_segment` still only closes a handle: TENT permits reopening
 the same live source. The stronger Rust operation deliberately remains separate.
 
 For a local file, `open_file_segment` takes a `file://` name and a permission;

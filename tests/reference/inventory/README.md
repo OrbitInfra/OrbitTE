@@ -12,15 +12,16 @@ the Rust owner, downstream step, trigger and evidence to retain. Reference test
 rows carry those fields directly and give the GTest filter in their source.
 Future steps should add their executable evidence to the existing row.
 
-The installed S19 consumer in `tests/c-api/` checks every symbol in `c-api.tsv`
-and links the same calls against both libraries. Its LP64 fixture covers the
-transfer engine. The two device-plugin records belong to S22.
+S19 (C ABI), S20 (C++/classic TE) and S22 (device plugins) are removed and
+out of scope. Their 33 C declarations, two C++ rows, two plugin rows and LP64
+layouts remain frozen reference inventory. `check.py` compares them against
+upstream, not against an installed OrbiTE header or library. Historical C
+control names in `c-api.tsv` are not current test paths or release gates.
 
-The two C++ rows in `bindings.tsv` name their installed controls. A common
-C++20 declaration fixture compiles against both header trees. The remaining
-plugin rows retain their own step. The three Python rows are implemented by
-installed-wheel tests. [Python declarations](python.tsv) expand them into 128
-surface rows (132 declarations with overloads), checked against `pybind.cpp`.
+The three Python rows remain implemented by installed-wheel tests.
+[Python declarations](python.tsv) expand them into 128 surface rows (132
+declarations with overloads), checked against `pybind.cpp` and implemented in
+`crates/orbite-python` plus `python/orbite`.
 The four `register_local_memory*` rows and their unregister/guard lifetimes also
 have an additive retained-exporter contract in `tests/python/test_cuda_exporters.py`:
 CAI v2/v3, legacy/versioned DLPack, native range/device checks, writable contiguous
@@ -32,12 +33,12 @@ C declarations and semantics resolve to `include/tent/transfer_engine.h` and
 `src/transfer_engine_c.cpp`. RPC numbers, dispatcher and attachment semantics
 resolve to `include/tent/rpc/rpc.h`, `src/rpc/rpc.cpp` and
 `src/runtime/control_plane.cpp`. Stage-specific mapped outcomes are test
-targets even where the corresponding compatibility adapter is still planned.
+targets; removed interfaces are explicitly out of scope.
 
 | Surface | Contract | Acceptance |
 | --- | --- | --- |
-| C ABI | [33 declarations and call contracts](c-api.tsv), [Linux LP64 layouts](abi.lp64) | S19 compares input validation, allocation/free, results and guards. The C probe measures size, alignment, member offset/width and the public constants. |
-| C++, Python and device plugins | [Binding cases](bindings.tsv) | S20–S22 use the same storage, submission and retirement contracts. The plugin table layout comes from the independent C probe. |
+| C ABI | [33 declarations and call contracts](c-api.tsv), [Linux LP64 layouts](abi.lp64) | Out of scope (S19 removed). The reference-only C probe measures frozen size, alignment, offsets and constants. |
+| C++, Python and device plugins | [Binding cases](bindings.tsv) | S21 remains an installed-wheel contract. S20/S22 are out of scope; the plugin layout is checked only against frozen upstream. |
 | Configuration | [Keys and effective absent values](config.tsv), [environment mappings](environment.tsv), [precedence vectors](precedence.json) | The absent column comes from frozen TENT. The S17 columns identify the OrbiTE owner or disposition and a JSON test input. The Rust controls consume every row, including policy, QoS and pool members, and replay the precedence vectors. |
 | Capabilities | [Transport values, directions, notification and cancellation](capabilities.tsv) | Test the six local-to-target direction flags after a successful native install. GDR requires the provider's positive GPU Direct check. EGM requires its explicit setting. Unspec authorizes selection and has no provider of its own. BufIo has no loader entry or public transport value. |
 | Observability | [Metric families](metrics.tsv), [other observations](observations.tsv) | Compare type, labels, finite histogram boundaries and structured observations. Bind and runtime-enable gauges report actual state. Extensions with the `orbite_` prefix are outside the frozen family set. |
@@ -101,17 +102,14 @@ values. Mixed Rust/TENT peer execution is out of scope. The actual frozen client
 also connects to the OrbiTE native listener in a negative control: rejection
 must precede admission and payload access.
 
-S22 implements both `binding.plugin` rows with the unchanged plugin header and
-installed C layout checks. Frozen `MemoryProber::loadPlugins` has no production
-caller or config/environment selector. The explicit OrbiTE loader and required
-ABI descriptor are safety extensions, tested in `tests/device-plugin/`; they do
-not add invented frozen configuration rows.
+Frozen `MemoryProber::loadPlugins` has no production caller or configuration
+selector. S22 is out of scope; no external plugin loading is shipped.
 
 The retained S16 corpus is `wire/rpc.json` (every `rpc.tsv` row and native
 prefix rejection), `wire/formats.json` (memory/file metadata, opaque handles,
 RDMA and optional-provider attribute rows), `hp_tcp/{read,write,ack}.bin`
-(the production HP-TCP codec), and the public-header/LP64 fixtures used by
-installed bindings and plugins. `wire/check.py` executes the frozen codecs and
+(the production HP-TCP codec), and the public-header/LP64 fixtures retained as
+out-of-scope upstream inventory. `wire/check.py` executes the frozen codecs and
 configuration precedence vectors independently of OrbiTE. No S16 fixture was
 exclusive to S23. The S23-only mixed-peer driver, coverage table and profile
 unit tests have been removed; they are not release gates.

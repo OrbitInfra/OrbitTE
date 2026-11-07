@@ -36,9 +36,9 @@ jobs:
       - name: Check the optional Python boundary on both feature profiles
         if: matrix.python == '3.13'
         run: |
-          for features in python python,rdma,cuda,io-uring,gds,metrics,rdma-adaptive; do
-            cargo clippy --locked -p orbite-c --features "$features" --all-targets -- -D warnings
-            cargo test --locked -p orbite-c --features "$features"
+          for features in '' rdma,cuda,io-uring,gds,metrics,rdma-adaptive; do
+            cargo clippy --locked -p orbite-python --features "$features" --all-targets -- -D warnings
+            cargo test --locked -p orbite-python --features "$features"
           done
       - name: Build and test the installed CPU wheel
         run: bash .github/scripts/check-installed-python.sh "$RUNNER_TEMP/wheel-cpu"

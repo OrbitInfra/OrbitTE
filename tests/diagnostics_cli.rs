@@ -18,30 +18,30 @@ fn packaged_cli_contract_and_compiled_feature_flags() {
             "\"command\": \"version\"",
             "",
         ),
-        (vec![], 2, "", "tent [OPTIONS]"),
-        (vec!["unknown"], 2, "", "tent [OPTIONS]"),
-        (vec!["version"], 2, "", "tent [OPTIONS]"),
+        (vec![], 2, "", "orbite [OPTIONS]"),
+        (vec!["unknown"], 2, "", "orbite [OPTIONS]"),
+        (vec!["version"], 2, "", "orbite [OPTIONS]"),
         (vec!["diagnostics"], 2, "", "diagnostics [OPTIONS]"),
         (
             vec!["diagnostics", "unknown"],
             2,
             "",
-            "tent diagnostics [OPTIONS]",
+            "orbite diagnostics [OPTIONS]",
         ),
         (
             vec!["diagnostics", "version", "--bad"],
             2,
             "",
-            "tent diagnostics version",
+            "orbite diagnostics version",
         ),
         (
             vec!["diagnostics", "version", "--json", "extra"],
             2,
             "",
-            "tent diagnostics version",
+            "orbite diagnostics version",
         ),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_tent"))
+        let output = Command::new(env!("CARGO_BIN_EXE_orbite"))
             .args(&args)
             .env("TENT_METRICS_HTTP_HOST", "invalid.invalid")
             .env("TENT_METRICS_HTTP_PORT", "invalid")
@@ -67,7 +67,6 @@ fn packaged_cli_contract_and_compiled_feature_flags() {
                 ("cuda", cfg!(feature = "cuda")),
                 ("uring", cfg!(feature = "io-uring")),
                 ("metrics", cfg!(feature = "metrics")),
-                ("device-plugin", cfg!(feature = "device-plugin")),
                 ("rdma-adaptive", cfg!(feature = "rdma-adaptive")),
                 ("gds", cfg!(feature = "gds")),
             ] {
