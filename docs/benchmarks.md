@@ -19,8 +19,12 @@ must remain separate owners. File batches preserve one owner per public request
 for independent CQE outcomes, including contiguous blocks; the runner checks
 that mapping too. There is one caller, two configured workers per engine,
 three warmup batches, 100 samples and three independent process trials. Trial
-order alternates the two implementations. Both disable retries, metrics,
-progress workers and runtime queues, and enable merging. The manifest records
+order alternates the two implementations. Both disable engine failover,
+metrics, progress workers and runtime queues, and enable merging. TENT's
+transport-local TCP retry defaults are pinned separately: three retries,
+100 ms initial delay and a 2,000 ms cap. OrbiTE has no corresponding inner
+TCP retry loop. These are healthy-path measurements, not retry benchmarks.
+The manifest records
 these settings, actual process thread counts, compiler versions, affinity,
 source and binary hashes, filesystems and every command. Internal worker
 arrangements differ: these are matched caller/worker settings, not identical

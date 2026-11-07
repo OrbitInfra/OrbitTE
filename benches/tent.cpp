@@ -51,6 +51,10 @@ int main(int argc, char** argv) {
         tent_set_config("rpc_server_port", "0");
         tent_set_config("rpc_server_threads", argv[8]);
         tent_set_config("transports/tcp/max_concurrent_tasks", argv[8]);
+        // Pin the frozen transport-local defaults separately from engine failover.
+        tent_set_config("transports/tcp/max_retry_count", "3");
+        tent_set_config("transports/tcp/retry_base_delay_ms", "100");
+        tent_set_config("transports/tcp/retry_max_delay_ms", "2000");
         tent_set_config("log_level", "error");
         tent_set_config("enable_progress_worker", "false");
         tent_set_config("enable_runtime_queue", "false");

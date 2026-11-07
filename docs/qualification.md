@@ -252,6 +252,9 @@ CPUs (0–3), AMD EPYC 7763, glibc 2.39, Rust 1.99.1/LLVM 23.1.1 and GCC 13.3.0.
 Each TENT/OrbiTE pair ran on the same job's host; toolchain jobs are not pooled.
 Caller concurrency is one and exposed worker knobs are two; actual process
 counts differ (TCP: OrbiTE 7, TENT 37; file: OrbiTE 7, TENT 27–29).
+The original manifest's `retries: 0` means engine failover only; TENT's separate
+TCP-local retry policy kept its frozen defaults (three, 100–2,000 ms).
+The runner now names both settings explicitly without changing those values.
 
 Cells are **OrbiTE / TENT**, the median of the three per-trial statistics.
 CPU time is whole-process microseconds per batch, including clock overhead.
