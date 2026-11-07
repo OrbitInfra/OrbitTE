@@ -453,8 +453,7 @@ impl TransferEngine {
                 request.remote_staging = false;
             }
             if refresh {
-                let mut snapshot = self
-                    .refresh_peer(peer, deadline)
+                let mut snapshot = control_plane::open_segment(peer.endpoint, peer.epoch, deadline)
                     .map_err(|e| (e, RemoteEffect::None))?;
                 snapshot.identity = peer.identity.clone();
                 let address = request.remote.address + request.remote_offset as u64;

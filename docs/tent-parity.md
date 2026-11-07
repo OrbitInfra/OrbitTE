@@ -107,7 +107,7 @@ the behavior. Hardware qualification stays with the artifact that ran.
 | TENT C ABI | All 33 functions and the LP64 transfer-engine layouts have installed [C API](c-api.md) controls. The fork's negative native return codes preserve dispatch uncertainty. Excluded transports return unavailable |
 | TENT C++ API | The installed [native TENT and TENT-backed classic TE adapters](cpp-api.md) cover both S16 C++ binding rows. Rebuild callers against their headers and link the adapter archive to libtent |
 | Python API | Cover the frozen TENT binding's classes, fields, overloads, errors and context managers through thin native bindings |
-| Wire interoperability | Qualify OrbiTE-to-OrbiTE, TENT-to-OrbiTE and OrbiTE-to-TENT for each applicable backend/control protocol; API parity alone does not establish this |
+| TENT wire interoperability (S23) | Out of scope by design; see [wire and consumer boundaries](#wire-and-consumer-boundaries) |
 | Configuration and operations | Match effective defaults, precedence, environment mappings, topology formats, metrics and explicit unavailable-backend behavior |
 | Performance | Qualify matched workloads on each claimed hardware profile; source similarity or a Rust rewrite establishes no performance result |
 
@@ -119,7 +119,7 @@ versioned native FFI path; the existing C request struct lacks `policy_name`,
 Keep compatibility entrypoints at the binding boundary and one Rust behavior
 owner underneath. OrbiTE's runtime must not call the C++ TENT engine, legacy
 TE engine, Mooncake Store, PG, EP or resharding components. External device and
-OS interfaces such as verbs, CUDA, cuFile, MPComm and libfabric remain
+OS interfaces such as verbs, CUDA, cuFile and libfabric remain
 explicit optional dependencies for their selected modules. HIP, Ascend, Sunrise,
 PJRT/TPU, XPU/SYCL, MLU and URMA SDKs are outside this build and
 implementation scope. Transport state machines and policy remain in Rust.
@@ -183,7 +183,7 @@ All 18 upstream types are accounted for; only the 10 marked core or optional
 are implementation targets. Capability bits and compiled providers constrain
 supported transfer directions. Do not infer GPU support for a transport from
 another transport's platform support. Every selected row requires normal bytes,
-negative cases, teardown, installed-artifact and applicable mixed-peer gates.
+negative cases, teardown and installed-artifact gates.
 
 | ID / type | Frozen capability and special obligations | Required hardware/provider | Scope / delivery |
 | --- | --- | --- | --- |
@@ -201,10 +201,23 @@ negative cases, teardown, installed-artifact and applicable mixed-peer gates.
 | B12 `TPU` | Host-device staging through PJRT ABI and provider bridge; ownership of pending device work | Actual supported TPU/PJRT adapter | Excluded accelerator |
 | B13 `XPU` | Host-device copy and staging with native SYCL allocations/context | Intel XPU, DPC++/SYCL runtime | Excluded accelerator |
 | B14 `MLU` | Host-device copy/staging, allocation and process ownership | Cambricon MLU runtime/devices | Excluded accelerator |
-| B15 `MPCOMM` | Host and supported NVIDIA GDR; peer registry, registration and completion mapping | Compatible provider/endpoints; frozen GPU support requires `nvidia_peermem` | Optional network, P8.1 |
+| B15 `MPCOMM` | Deferred: no consumer; provider unavailable | Constant recognized and returns unavailable | Deferred P8.1 / S25 |
 | B16 `HYLINK` | HIP-backed host/device directions, endpoint and registered-region lifecycle | HIP devices and compatible Hylink provider | Excluded accelerator |
 | B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | Implemented, P8.2; real software TCP-provider controls, EFA installed profile unqualified. See [libfabric](fabric.md) |
 | B18 `MEMFABRIC` | Ascend-backed host/device directions, dynamically loaded provider ABI, memory allocator and completion lifecycle | Ascend ACL and compatible MemFabric provider | Excluded accelerator |
+
+B15 MPComm is deferred because no consumer uses it and no libmpcomm provider
+is available; fake-provider controls would not establish a usable path. MPComm
+owns slicing, NIC/QP selection and workers, bypassing OrbiTE's RDMA scheduler,
+credits, QoS and rail health. The frozen
+[adapter](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/mpcomm/mpcomm_adapter.cpp)
+and [peer registry](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/mpcomm/mpcomm_peer_registry.cpp)
+provide no peer close, handshake timeout or cancellation; reconnect can leak
+QPs. Those boundaries do not satisfy physical ownership or per-peer retirement.
+The installed C consumer keeps the negative control: `TRANSPORT_MPCOMM`
+returns unavailable for allocation and registration. Its frozen constants and
+codec inventory remain, but no transport implementation or release gate is
+planned. Revisit B15 if a consumer brings a provider and hardware.
 
 Source authority: [transport types][types], [runtime loader][loader],
 [transport implementations][transports] and [platform implementations][platforms].
@@ -272,7 +285,7 @@ the modules needed to compare with TENT's effective configuration.
 
 ## C and language binding inventory
 
-The [acceptance inventory][inventory] is the shared input to S17–S23. Its F01 rows identify each supported setting, unsupported field or excluded provider. The Rust loader exercises them in the CPU matrix. Each
+The [acceptance inventory][inventory] is the shared input to S17–S22 and later comparisons. Its F01 rows identify each supported setting, unsupported field or excluded provider. The Rust loader exercises them in the CPU matrix. Each
 public C declaration has a call/ownership case. The companion C probe checks
 the frozen public and plugin layouts on Linux LP64. The index also identifies
 reference tests by source and GTest filter, and maps config, environment,
@@ -304,20 +317,18 @@ RDMA peers using endpoint QP pools must also share the same ordered pool layout,
 width and link-layer settings.
 The control-plane magic keeps its historical spelling, `ORBITTE\0`.
 
-The control RPC assigns IDs for descriptor lookup, RDMA bootstrap, SendData,
-RecvData, Notify, Probe, Delegate, Pin, Unpin, update subscription, update
-notification and UB bootstrap. The UB bootstrap ID stays recognized but
-unavailable, like the excluded transports. See [the RPC contract][rpc]. The [wire fixtures][fixtures] freeze YLT request/reply headers, the
-struct_pack function argument, opaque attachments, segment JSON, and HP-TCP
-and provider bootstrap encodings. Linux CI compares them with unmodified
-v0.3.14 code and replays TCP data frames against a registered TENT source.
-OrbiTE-to-OrbiTE uses native framing. The [cooperative TENT TCP profile](tent-interop.md) is explicit per segment and uses a separate opt-in source listener. Consumer epochs fence local admission/retirement only: frozen TENT cannot validate them remotely. Changed metadata fences a WRITE before payload; unchanged stale addresses remain an inherent risk of that profile. There is no autodetection or downgrade.
+OrbiTE remains compatible with TENT's configuration and API/ABI as a library
+replacement, subject to the documented safety extensions and C++ source rebuild.
+The deployments are wire-exclusive: TENT and OrbiTE peers do not interoperate,
+and both peers run the same OrbiTE build. There is no protocol autodetection or
+downgrade. A frozen TENT client is rejected at the native magic/version boundary
+before admission or payload access.
 
-Interoperability is directional: test a Rust requester against a C++ source
-and a C++ requester against a Rust source, with permission errors, restarts and
-partial responses. A safety extension that changes wire or ABI requires an
-explicit compatible profile or version rejection; do not silently downgrade
-epoch/generation requirements for an old peer.
+The [RPC inventory][rpc] and [wire fixtures][fixtures] retain the frozen TENT
+YLT envelopes, struct_pack arguments, attachments, segment JSON, HP-TCP frames
+and provider attributes as reference contracts. Linux CI compares them with the
+unmodified v0.3.14 codecs and dispatcher; these are oracle checks, not an
+OrbiTE wire profile. The frozen build also remains the P11 performance reference.
 
 OrbitKV currently consumes a patched older TENT ABI with extra source-epoch and
 source-close operations. Those are an additional consumer contract, not part of

@@ -43,7 +43,7 @@ outputs is insufficient.
 | Contract | Trace coverage | Remaining boundary |
 | --- | --- | --- |
 | F04 host registration | Existing backing, single and batch duplicate registration, first permission retained during subsequent WRITE, partial/final unregister and descriptor refresh | Failed provider free, overlapping native registrations and retained DMA |
-| F05/F07/F08 CPU movement | Noncontiguous batched READ, offset WRITE, exact bytes/sentinels and completed byte counts | Native error mapping, partial posts, cancellation, failover and mixed peers |
+| F05/F07/F08 CPU movement | Noncontiguous batched READ, offset WRITE, exact bytes/sentinels and completed byte counts | Native error mapping, partial posts, cancellation and failover |
 | F08 batch lifetime | Both drivers allocate/submit/poll/free; the first READ appends two groups to one capacity reservation; terminal polling repeats without redelivery | Asynchronous multi-target hooks and merged task aliases |
 | F11 notifications | Explicit local/remote, attached READ/WRITE, empty submission, deliberate repeats, empty names/messages and empty polls | Ambiguous native receipts, provider fallback and durable/deduplicated delivery |
 | Selected F09 C output | Native notification result reuse, reset on free and repeated free | OrbiTE C ABI and the remaining 33-symbol/native contract |
@@ -144,7 +144,7 @@ controls are recorded in the
 ## Qualification limits
 
 This first comparison has valid-input CPU behavior coverage. It leaves the full
-P0 inventory/oracle, TENT YLT/HP-TCP interoperability, metadata schemas, all native
+P0 inventory/oracle, metadata schemas, all native
 errors/configuration, physical two-host tests, RNIC/GPU/storage and consumer
 installed qualification open. OrbitKV-specific source epochs and source-close
 extensions need their own audited adapter controls. Use the

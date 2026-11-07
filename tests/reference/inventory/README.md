@@ -1,6 +1,6 @@
 # Frozen TENT acceptance inventory
 
-S17–S23 use the tables in this directory as their contract. The pin and native
+S17–S22 and later comparisons use the tables in this directory as their contract. The pin and native
 build options come from [contract.json](../contract.json). Paths in the
 `source` column start at `mooncake-transfer-engine/tent/` in that revision.
 OrbiTE paths start at the crate root. Each row defines a check. Qualification results are recorded separately. In particular, inventorying a provider does not run it.
@@ -41,7 +41,7 @@ targets even where the corresponding compatibility adapter is still planned.
 | Configuration | [Keys and effective absent values](config.tsv), [environment mappings](environment.tsv), [precedence vectors](precedence.json) | The absent column comes from frozen TENT. The S17 columns identify the OrbiTE owner or disposition and a JSON test input. The Rust controls consume every row, including policy, QoS and pool members, and replay the precedence vectors. |
 | Capabilities | [Transport values, directions, notification and cancellation](capabilities.tsv) | Test the six local-to-target direction flags after a successful native install. GDR requires the provider's positive GPU Direct check. EGM requires its explicit setting. Unspec authorizes selection and has no provider of its own. BufIo has no loader entry or public transport value. |
 | Observability | [Metric families](metrics.tsv), [other observations](observations.tsv) | Compare type, labels, finite histogram boundaries and structured observations. Bind and runtime-enable gauges report actual state. Extensions with the `orbite_` prefix are outside the frozen family set. |
-| Metadata and wire | [Metadata fields and ownership](metadata.tsv), [logical RPC IDs and attachments](rpc.tsv), [native fixtures](../wire/) | F06 and S23 check P2P fields, bytes and errors. External-store rows retain their frozen source with an explicit out-of-scope disposition. S24/S25 can use the same provider bootstrap fixtures. |
+| Metadata and wire | [Metadata fields and ownership](metadata.tsv), [logical RPC IDs and attachments](rpc.tsv), [native fixtures](../wire/) | F06 checks native P2P fields and errors. S23 is out of scope; the frozen codecs remain independent oracle checks. External-store rows retain their frozen source with an explicit out-of-scope disposition. S24 uses the fabric attribute fixtures. |
 | Test sources | [88 recursive C++ test source mappings](tests.tsv) | Includes nested vendor directories. A shim exercises ownership and serialization. The hardware trigger is a separate acceptance condition. Primitive-specific and excluded SDK cases have an explicit disposition. |
 
 ## Configuration order
@@ -97,10 +97,21 @@ native dispatcher. A second, registered TENT source accepts real TCP READ and
 WRITE, checks both guards and rejects crossing the registered range. Only the
 fixture's address field is relocated to that process's live allocation. Stage
 addresses, GPU handles, RDMA QPNs and optional provider tokens are inert test
-values. Mixed Rust/TENT peer execution belongs to S23.
+values. Mixed Rust/TENT peer execution is out of scope. The actual frozen client
+also connects to the OrbiTE native listener in a negative control: rejection
+must precede admission and payload access.
 
 S22 implements both `binding.plugin` rows with the unchanged plugin header and
 installed C layout checks. Frozen `MemoryProber::loadPlugins` has no production
 caller or config/environment selector. The explicit OrbiTE loader and required
 ABI descriptor are safety extensions, tested in `tests/device-plugin/`; they do
 not add invented frozen configuration rows.
+
+The retained S16 corpus is `wire/rpc.json` (every `rpc.tsv` row and native
+prefix rejection), `wire/formats.json` (memory/file metadata, opaque handles,
+RDMA and optional-provider attribute rows), `hp_tcp/{read,write,ack}.bin`
+(the production HP-TCP codec), and the public-header/LP64 fixtures used by
+installed bindings and plugins. `wire/check.py` executes the frozen codecs and
+configuration precedence vectors independently of OrbiTE. No S16 fixture was
+exclusive to S23. The S23-only mixed-peer driver, coverage table and profile
+unit tests have been removed; they are not release gates.

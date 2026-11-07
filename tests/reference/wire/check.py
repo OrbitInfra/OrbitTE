@@ -230,6 +230,15 @@ def main():
     for name, obj in [("formats", formats), ("rpc", records)]:
         compare(name, obj, json.loads((HERE / (name + ".json")).read_text()))
     replay_registered(peer, frozen)
+    # A real frozen client must fail at OrbiTE's native prefix, before admission.
+    env = clean_environment()
+    env["ORBITE_TEST_FROZEN_CLIENT"] = str(peer)
+    subprocess.run(
+        ["cargo", "test", "--locked", "--lib",
+         "runtime::control_plane::tests::native_boundary::frozen_tent_client_is_rejected_without_admission_or_payload",
+         "--", "--ignored", "--exact"],
+        cwd=REF.parents[1], env=env, check=True, timeout=240,
+    )
     print(
         f"{revision}: {len(records)} native loopback exchanges, memory/file metadata, "
         "three HP-TCP frames and provider attributes matched"

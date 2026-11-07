@@ -1,7 +1,7 @@
 # Capabilities
 
 This page summarizes the current source on `main`. The `0.1.0-alpha.1` crate on
-crates.io only reserves the package name.
+crates.io is published for early development; its API is unstable.
 
 | Status | Meaning |
 | --- | --- |
@@ -14,7 +14,7 @@ crates.io only reserves the package name.
 behind every hardware result. The [v0.3.14 delta](tent-parity.md#v0314-delta)
 records the source alignment. The [S16 acceptance inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
 lists the six native direction flags and their provider conditions. Wire
-fixtures and CPU codec checks are available for the future mixed-peer profile.
+fixtures and CPU codec checks support the independent frozen oracle.
 
 ## Transports
 
@@ -35,7 +35,7 @@ fixtures and CPU codec checks are available for the future mixed-peer profile.
 | [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
 | [MNNVL / EGM](cuda-ipc.md#multi-node-nvlink-and-egm) | Implemented; installed profile unqualified | CUDA VMM fabric handles, GPU and host-NUMA exports, bounded imports and checked close. The multi-node device and EGM gates are unrun |
 | [Libfabric host DRAM](fabric.md) | Implemented (P8.2); software TCP provider tested in Linux CI | Runtime-loaded opt-in provider, bounded RMA grants and sticky native retention. EFA is implemented; installed profile unqualified |
-| MPComm | Planned (P8.1) | Optional network provider |
+| MPComm | Deferred (P8.1) | No consumer; provider unavailable. Constant recognized and returns unavailable |
 
 ## Memory and batches
 
@@ -86,7 +86,7 @@ fixtures and CPU codec checks are available for the future mixed-peer profile.
 | Device plugin ABI | Implemented (F03) | [Explicit C loader](device-plugins.md), frozen table/layout, bounded retained allocations and fallible CUDA provider. CPU native-library controls; installed GPU profile unqualified |
 | TENT Python API | Implemented (F21) | [Installed wheels](python.md) for CPython 3.10–3.14, Linux x86_64/aarch64. Guarded TCP, GIL release and retained host/CAI/DLPack exporters; native GPU/RDMA Python profiles remain unqualified |
 | TENT configuration and P2P self-description | Configuration implemented (F01), P2P available (F06) | File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Discovery, membership, KV indexes and external metadata stores belong to the consumer; non-P2P configuration is rejected. Rust `close_segment(endpoint, epoch, timeout)` fences and drains one peer; live descriptor/operation references bound the identity table, while failed native cleanup stays charged. CPU sockets/SHM are exercised on Linux; RNIC/CUDA retirement is shim-only, installed profile unqualified |
-| TENT wire interoperability | Implemented (S23, CPU TCP) | [Explicit cooperative profile](tent-interop.md), directional frozen C++/Rust READ/WRITE on loopback. Consumer-owned epoch fence; TENT cannot validate it remotely. OrbiTE peers keep native framing. RDMA bootstrap is codec-only and unavailable; GPU/RDMA interop unqualified |
+| TENT wire interoperability | Out of scope by design (S23) | See the [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries) |
 
 ## Provider selection
 

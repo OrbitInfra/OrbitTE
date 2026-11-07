@@ -28,8 +28,8 @@ targets; these compile checks exercise no device.
 The [S16 reference checks](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
 compare the frozen C headers, configuration precedence, provider metadata and
 native request/reply bytes on Linux. TCP data fixtures also run against a real
-registered TENT source with guard bytes. They also supply the directional
-[TENT TCP interoperability gate](#tent-tcp-interoperability).
+registered TENT source with guard bytes. A frozen client also exercises native
+OrbiTE prefix rejection, with no admission or payload movement.
 
 The S17 Rust controls read the same 223 configuration rows, 67 environment
 rows and 12 precedence vectors. They check feature selection, error paths,
@@ -53,10 +53,14 @@ NVLink and MNNVL retirement remain **Implemented; installed profile unqualified*
 The C/C++ same-epoch reopen controls preserve frozen segment-handle close;
 it is not a drain receipt.
 
-## TENT TCP interoperability
+(tent-tcp-interoperability)=
+## Historical TENT TCP interoperability
 
-The `Frozen TENT CPU comparison` workflow builds unmodified Mooncake v0.3.14
-and runs `tests/reference/interop/run.py` on stable and Rust 1.85. The explicit
+The S23 profile in [#171, `33f86e92`](https://github.com/OrbitInfra/OrbiTE/pull/171)
+was accepted before the maintainer removed wire interoperability from scope.
+The following records that artifact and its commands; it is not a current
+profile or release gate. At that revision, the `Frozen TENT CPU comparison`
+workflow built unmodified Mooncake v0.3.14 and ran `tests/reference/interop/run.py` on stable and Rust 1.85. The explicit
 CPU/TCP profile checks Rust requester → C++ source and C++ requester → Rust
 source, READ/WRITE with full bytes and guards, read-only denial, invalid ranges,
 and bad request magic/version. Both directions repeat 50 times; `result.json`
@@ -65,17 +69,17 @@ the native oracle runtime. The `runtime::control_plane::tent` controls also chec
 response validation, bounded metadata, explicit selection, epoch retirement,
 metadata-change fencing, partial responses and lost WRITE acknowledgements.
 
-Reproduce after the existing CPU oracle has created its frozen source/build:
+Historical command at `33f86e92`, after the CPU oracle created its frozen source/build:
 
 ```sh
 python3 tests/reference/interop/run.py --source "$OUT/reference" \
   --build "$OUT/tent-build" --iterations 50 --output "$OUT/interop"
 ```
 
-This qualifies only the declared Linux loopback CPU profile on passing CI;
+That evidence covered only the declared Linux loopback CPU profile;
 it does not qualify GPU, RDMA bootstrap or physical-network performance.
 TENT cannot attest to consumer epochs; unchanged stale addresses remain the
-[cooperative profile's limitation](tent-interop.md#identity-and-retirement).
+[cooperative profile's recorded limitation](https://github.com/OrbitInfra/OrbiTE/blob/33f86e92/docs/tent-interop.md#identity-and-retirement).
 RDMA bootstrap has source codec/rejection controls only and remains unavailable
 and unqualified; the native OrbiTE RDMA installed gates do not establish TENT
 wire interoperability.
@@ -194,7 +198,6 @@ external output directory; failed runs are kept.
 | Per-peer NVLink IPC retirement | Implemented; installed profile unqualified | With the same packaged consumer on a reserved NVLink host: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile nvlink --source-bind 127.0.0.1:19091 --other-bind 127.0.0.1:19092 --bind 127.0.0.1:0 --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --output "$RUN/nvlink"` | Import/export release and guards; shim controls supply delayed-event and failed-close evidence |
 | Per-peer MNNVL retirement | Implemented; installed profile unqualified | On a reserved fabric pair: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile mnnvl --source-host "$SOURCE_HOST" --source-binary "$SOURCE_BINARY" --source-bind "$SOURCE_ADDR:19091" --other-bind "$SOURCE_ADDR:19092" --bind "$REQUESTER_ADDR:0" --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --domain "$FABRIC_DOMAIN" --output "$RUN/mnnvl"` | Native VMM import release, guarded bytes and fresh epoch; actual fabric domain comes from the platform owner |
 | EFA host DRAM (S24, B17) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer fabric --toolchain stable --output "$ART"`, then copy that clean artifact to the same path on both hosts and run `python3 tests/hardware/fabric_run.py --artifact "$ART" --source-ssh "$SOURCE_SSH" --source-ip "$SOURCE_IP" --requester-ip "$REQUESTER_IP" --source-domain "$SOURCE_DOMAIN" --requester-domain "$REQUESTER_DOMAIN" --source-device "$SOURCE_EFA" --requester-device "$REQUESTER_EFA" --output "$OUT/efa.json"`. Repeat with 1.85.0 and a fresh artifact. | Two EFA hosts with delivery-complete support; exact provider/domain, native EFA byte-counter deltas, guarded READ/WRITE and checked close. Written, not run. |
-| MPComm (S25) | Planned | Written with the step | None |
 | [P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration]{#queue-release} | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are

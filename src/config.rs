@@ -71,9 +71,6 @@ impl Default for RuntimeQueueConfig {
 /// Immutable per-engine budgets and optional provider configuration.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
-    /// Opt-in, separate frozen-TENT TCP endpoint for cooperative peers.
-    /// Native OrbiTE framing always remains on `bind_addr`. No autodetection.
-    pub tent_bind_addr: Option<SocketAddr>,
     /// Present for a configuration resolved by the TENT loader. Provider overrides
     /// have already been consumed and must not be read again at startup.
     pub tent: Option<TentSettings>,
@@ -221,7 +218,6 @@ impl Default for EngineConfig {
 impl EngineConfig {
     fn defaults() -> Self {
         Self {
-            tent_bind_addr: None,
             tent: None,
             tcp: true,
             #[cfg(feature = "io-uring")]
@@ -338,9 +334,6 @@ impl EngineConfig {
         #[cfg(feature = "fabric")]
         if let Some(fabric) = &self.fabric {
             fabric.validate()?;
-        }
-        if self.tent_bind_addr.is_some() && !self.tcp {
-            return Err(Error::InvalidConfig("TENT TCP endpoint requires TCP"));
         }
         if let Some(settings) = &self.tent {
             settings.validate()?;

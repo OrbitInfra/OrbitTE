@@ -13,23 +13,23 @@ config.cuda	S17	src/cuda	CUDA shim with absent, explicit and environment values	
 config.network	S17	src/transport	Construct TCP, HP-TCP or SHM over loopback or tmpfs	effective setting, validation error and selection
 config.policy	S17	src/runtime/transport_selector.rs	Compile policy, QoS and runtime queue rules with absent and conflicting leaves	compiled policy and selected physical owner or typed error
 config.metrics	S17	src/metrics/config.rs	Conflicting default, JSON and environment settings	observed scrape configuration and validation outcome
-config.optional	S17/S24/S25	src/transport	Build proposed provider config with absent and explicit values; run CPU fabric or installed MPComm when available	effective setting and explicit unavailable result without provider
+config.optional	S17/S24; S25 deferred	src/transport	Build provider config with absent and explicit values; run CPU fabric and reject MPComm	effective setting and explicit unavailable result without provider
 config.excluded	S17	src/config.rs	Request excluded platform or recognize its legacy spelling	explicit unavailable; no vendor SDK loaded
 metrics.record	S10/S16	src/metrics	Record and scrape the named family with recording enabled, disabled and toggled	type, exact labels, values and buckets in Prometheus and JSON
 metrics.qos	S11/S16	src/metrics	Compare QoS class inputs and structured report for a known workload	units, absence of unavailable measurements and aggregate results
-metadata.segment	S23	src/runtime/control_plane.rs	Decode native memory and file documents, omit optional fields, remove one required field	field values, provider attributes, omission/default or parse failure
-metadata.registry	F06/S23	src/runtime/control_plane.rs	Fetch P2P descriptors with authoritative epochs; reject external metadata stores at construction	immutable descriptor snapshot or typed configuration error; central registry operations N/A
-wire.rpc	S23	src/runtime/control_plane.rs	Compare native YLT envelopes and attachments; exercise unknown logical function	exact request and reply header/body/attachment or RPC error
-wire.segment	S23	src/runtime/control_plane.rs	Get and invalidate named descriptors	exact JSON attachment, update notification and fresh snapshot
-wire.tcp	S23	src/runtime/control_plane.rs	Native TCP READ/WRITE against checked binary attachments	LE address and length, payload and error/size contract
-wire.bootstrap	S23	src/transport/rdma	Serialize and parse RDMA peer descriptor, missing GID and error reply	exact JSON fields and failure before QP use
-wire.stage	S23	src/runtime/proxy_manager.rs	Native client calls synthetic Delegate, Pin and Unpin recipients	serialized delegated fields, address and reply attachment
-wire.excluded	S23	src/runtime/control_plane.rs	Encode and decode the dedicated UB envelope without invoking a provider	separate ID and validated version; excluded in OrbiTE
-wire.hp	S23	src/transport/hp_tcp/protocol.rs	Re-encode READ, WRITE and ACK with the native HP-TCP codec	exact existing .bin files, network byte order and rejection of bad magic
-wire.fabric	S24	src/transport	Compile native fabric attribute codec alone; later run real libfabric tcp provider	provider, NIC address bytes, offset mode, chunk NIC/key alignment
-wire.mpcomm	S25	src/transport	Run native peer address codec without an MPComm device	encoded endpoint, address and port or malformed prefix error
-cap.select	S6/S23	src/runtime/transport_selector.rs	Inspect registered provider and select each local/target pair	eligibility vector plus unavailable hints; actual execution needs its own gate
-cap.excluded	S19/S23	src/runtime/transport_selector.rs	Select an excluded transport constant	explicit unavailable and no SDK load
+metadata.segment	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Decode native memory and file documents, omit optional fields, remove one required field	field values, provider attributes, omission/default or parse failure; frozen TENT oracle only, no OrbiTE wire executor
+metadata.registry	F06	src/runtime/control_plane.rs	Fetch P2P descriptors with authoritative epochs; reject external metadata stores at construction	immutable descriptor snapshot or typed configuration error; central registry operations N/A
+wire.rpc	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Compare native YLT envelopes and attachments; exercise unknown logical function	exact request and reply header/body/attachment or RPC error; frozen TENT oracle only, no OrbiTE wire executor
+wire.segment	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Get and invalidate named descriptors	exact JSON attachment, update notification and fresh snapshot; frozen TENT oracle only, no OrbiTE wire executor
+wire.tcp	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Native TCP READ/WRITE against checked binary attachments	LE address and length, payload and error/size contract; frozen TENT oracle only, no OrbiTE wire executor
+wire.bootstrap	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Serialize and parse RDMA peer descriptor, missing GID and error reply	exact JSON fields and failure before QP use; frozen TENT oracle only, no OrbiTE wire executor
+wire.stage	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Native client calls synthetic Delegate, Pin and Unpin recipients	serialized delegated fields, address and reply attachment; frozen TENT oracle only, no OrbiTE wire executor
+wire.excluded	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Encode and decode the dedicated UB envelope without invoking a provider	separate ID and validated version; excluded in OrbiTE; frozen TENT oracle only, no OrbiTE wire executor
+wire.hp	S12/S16	src/transport/hp_tcp/protocol.rs	Re-encode READ, WRITE and ACK with the native HP-TCP codec	exact existing .bin files, network byte order and rejection of bad magic
+wire.fabric	S24	src/transport	Compare frozen fabric attribute codecs and the OrbiTE real libfabric tcp provider controls	provider, NIC address bytes, offset mode, chunk NIC/key alignment
+wire.mpcomm	S16 oracle; S25 deferred	tests/reference/wire/native.cpp	Run native peer address codec without an MPComm device	encoded endpoint, address and port or malformed prefix error
+cap.select	S6	src/runtime/transport_selector.rs	Inspect registered provider and select each local/target pair	eligibility vector plus unavailable hints; actual execution needs its own gate
+cap.excluded	S19	src/runtime/transport_selector.rs	Select an excluded transport constant	explicit unavailable and no SDK load
 binding.cpp	S20	src/engine.rs	Compile independent public C++ and TENT-backed classic-TE clients	method result, referenced handle and retained transfer status
 binding.python	S21	crates/orbite-c/src/python.rs	Install a wheel and exercise the frozen Python types, buffers and guard paths	exporter lifetime, GIL release and terminal receipt
 binding.plugin	S22	src/cuda/driver.rs	Load a public plugin table including missing and failed callbacks	ABI layout, typed unsupported/handled-error outcome and retained owners

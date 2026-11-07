@@ -13,8 +13,8 @@ thread_local! {
 }
 
 pub(in crate::runtime::control_plane) fn instrument(
-    mut accept: impl FnMut() -> io::Result<(TcpStream, Option<SocketAddr>)>,
-) -> impl FnMut() -> io::Result<(TcpStream, Option<SocketAddr>)> {
+    mut accept: impl FnMut() -> io::Result<TcpStream>,
+) -> impl FnMut() -> io::Result<TcpStream> {
     let mut before = NEXT.with(|next| next.take());
     move || {
         if let Some(before) = &mut before {
