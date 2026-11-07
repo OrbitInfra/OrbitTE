@@ -465,3 +465,33 @@ fn restart_at_the_same_ports_and_address_rejects_the_old_write_id() {
     expected[1..5].copy_from_slice(b"live");
     assert_eq!(bytes(&reg), expected);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn p10_killed_hp_tcp_requester_releases_only_after_partial_write_drain() {
+    let (src, _dst, remote, _local, peer) = setup(cfg(), 18);
+    let header = frame(&peer, TransferOp::Write, 2, 8).encode();
+    let mut child = crate::runtime::control_plane::tests::killed_peer::KilledPeer::start(
+        address(&peer).into(),
+        &header,
+        0,
+    );
+    let until = Instant::now() + WAIT;
+    while &bytes(&remote)[2..6] != b"part" {
+        assert!(Instant::now() < until);
+        thread::yield_now();
+    }
+    src.unregister_memory(&remote).unwrap();
+    assert!(matches!(
+        src.close_source(Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    assert_eq!(src.stats().unwrap().retained_bytes, 18);
+    child.kill();
+    src.close_source(WAIT).unwrap();
+    let mut expected = [0xa5; 18];
+    expected[2..6].copy_from_slice(b"part");
+    assert_eq!(bytes(&remote), expected);
+    drop(remote);
+    assert_eq!(src.stats().unwrap().retained_bytes, 0);
+}

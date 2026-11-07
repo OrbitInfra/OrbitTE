@@ -47,8 +47,8 @@ artifacts and hardware profiles.
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm is deferred: no consumer; provider unavailable |
 | P9 | Rust/Python and operational compatibility | P0/P2/P6 | Python wheels and configuration implemented; S19/S20/S22 removed and out of scope |
-| P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
-| P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Planned |
+| P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | CPU fixture matrix implemented; installed acceptance remains open |
+| P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Scoped CPU comparisons implemented; consumer/hardware release gates remain open |
 
 ```mermaid
 flowchart LR
@@ -103,8 +103,9 @@ S22 (device plugins) is removed and out of scope; CPU/CUDA are built in. S23 is 
 [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries).
 S24 implements the opt-in [libfabric host path](fabric.md), with real
 software-provider controls and an unrun EFA gate. S25 MPComm is deferred: no
-consumer; provider unavailable. Next is S26 benchmarks and fault-matrix
-preparation, then the beta.1 gate review.
+consumer; provider unavailable. S26 provides [byte-checked CPU sweeps and the
+executable fault matrix](benchmarks.md); hardware fault acceptance and matched
+performance remain queued. The next step is the maintainer's beta.1 gate review.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -413,6 +414,9 @@ against installed artifacts, with explicit provider/feature matrices.
 
 Runs throughout P2–P9. The [release ladder](#release-ladder) requires acceptance
 for each release's supported profiles; full parity closes the complete matrix.
+S26 maps existing controls in [the CPU fixture list](benchmarks.md#cpu-fault-matrix),
+adds real socket peer kills, and queues installed GPU/RDMA/GDS receipt faults.
+CPU execution is preparation, not acceptance of the hardware matrix.
 
 - [ ] Separate known-unsubmitted rejection and cancel from partial post, running
   work, logical error, physical quiescence and completed cleanup.
@@ -431,6 +435,11 @@ bounded ownership, no early reuse and eventual cleanup.
 ## P11 — Consumers, performance and release
 
 Requirements: F22 and the applicable accepted backend and compatibility profiles.
+S26 implements reproducible, byte-checked CPU/TCP/io_uring comparisons against
+frozen TENT, plus OrbiTE HP-TCP/SHM sweeps ([method](benchmarks.md)). No tuning or
+general performance claim follows from these scoped runs. Add NIXL (for example
+NIXL+UCX) as a second baseline during the hardware P11 pass; there is no NIXL
+dependency in this step.
 
 - [ ] Run OrbitKV against an installed artifact through its transfer owner,
   preserving the still-needed source-epoch and source-close contracts. A scoped

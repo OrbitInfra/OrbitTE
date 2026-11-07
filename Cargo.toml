@@ -17,7 +17,7 @@ documentation = "https://orbitinfra.github.io/OrbiTE/"
 readme = "README.md"
 keywords = ["rdma", "transfer", "distributed", "ai", "memory"]
 categories = ["network-programming"]
-include = ["build.rs", "src/**", "tests/**", "examples/**", "docs/**", "python/**", "pyproject.toml", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
+include = ["build.rs", "src/**", "benches/**", "tests/**", "examples/**", "docs/**", "python/**", "pyproject.toml", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
 publish = ["crates-io"]
 
 [features]
@@ -145,3 +145,13 @@ path = "tests/hardware/peer_gpu_requester.rs"
 name = "fabric"
 path = "tests/hardware/fabric.rs"
 required-features = ["fabric"]
+
+[[bench]]
+name = "transfer"
+path = "benches/transfer.rs"
+harness = false
+
+[[example]]
+name = "gds_p10"
+path = "tests/hardware/gds_p10.rs"
+required-features = ["gds"]

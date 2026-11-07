@@ -20,7 +20,7 @@ def digest(path):
 def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     gpu = consumer_kind == "gpu"
     nvlink = consumer_kind == "nvlink"
-    storage = consumer_kind in ("storage-cuda", "gds")
+    storage = consumer_kind in ("storage-cuda", "gds", "gds-p10")
     features, binary_name, protocol, fixture_relative = {
         "fabric": (["fabric"], "orbite-fabric", "orbite-installed-fabric", "tests/hardware/fabric.rs"),
         "python-cuda": (["cuda"], "orbite-python-cuda", "orbite-installed-python-cuda", "tests/hardware/python_cuda.py"),
@@ -34,6 +34,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         "gpu": (["rdma", "cuda"], "orbite-hardware-peer", "orbite-hardware-peer-v1", "examples/hardware_peer.rs"),
         "mnnvl": (["cuda"], "orbite-mnnvl", "orbite-installed-mnnvl", "tests/hardware/mnnvl.rs"),
         "nvlink": (["cuda"], "orbite-nvlink", "orbite-installed-nvlink-v1", "tests/hardware/nvlink.rs"),
+        "gds-p10": (["gds"], "orbite-gds-p10", "orbite-installed-gds-p10", "tests/hardware/gds_p10.rs"),
         "gds": (["gds"], "orbite-gds", "orbite-installed-gds-v1", "tests/hardware/gds.rs"),
         "mixed-gpu": (["rdma", "cuda"], "orbite-mixed-gpu", "orbite-installed-mixed-gpu", "tests/hardware/mixed_gpu.rs"),
         "staging-control": (["rdma", "cuda"], "orbite-staging-control", "orbite-installed-staging-control", "tests/hardware/staging_control.rs"),
@@ -142,8 +143,10 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             fixture_hashes[str(relative)] = digest(path)
         if storage or consumer_kind in ('peer-retirement', 'local-copy', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control'):
             drivers = [{'peer-retirement': 'peer_retirement_run.py', 'local-copy': 'local_copy_run.py', 'staging-control': 'staging_control_run.py', 'peer-gpu-source': 'peer_gpu_tcp_run.py', 'peer-gpu-requester': 'peer_gpu_tcp_run.py', 'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py', 'mnnvl': 'mnnvl_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
-            if consumer_kind == 'gds':
+            if consumer_kind in ('gds', 'gds-p10'):
                 drivers.append('gds_run.py')
+            if consumer_kind == 'gds-p10':
+                drivers += ['gds_p10_run.py', 'gds_p10_observer.c']
             for name in drivers:
                 relative = 'tests/hardware/' + name
                 driver = library / relative
@@ -151,6 +154,12 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
                     raise ValueError('packaged storage driver differs from source')
                 fixture_hashes[relative] = digest(driver)
                 shutil.copy2(driver, output / driver.name)
+            if consumer_kind == 'gds-p10':
+                observer = output / 'liborbite_gds_p10.so'
+                compiler = shlex.split(environment.get('CC', 'cc'))
+                run('observer-build', [*compiler, '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread',
+                                      '-fPIC', '-shared', str(output / 'gds_p10_observer.c'), '-ldl', '-o', str(observer)])
+                manifest.update(observer=str(observer), observer_sha256=digest(observer))
         elif nvlink:
             for relative in ('tests/hardware/nvlink_observer.c', 'tests/hardware/nvlink_run.py'):
                 source = library / relative
@@ -223,7 +232,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             raise ValueError('consumer resolved an unexpected OrbiTE source')
         resolved = next(n['features'] for n in metadata['resolve']['nodes'] if n['id'] == dependency[0]['id'])
         expected_features = {'default', *features}
-        if consumer_kind == 'gds':
+        if 'gds' in features:
             expected_features.add('cuda')
         if set(resolved) != expected_features:
             raise ValueError('consumer must use only its declared normal dependency features')
@@ -265,6 +274,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('fabric', 'python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy'), default='host')
+    parser.add_argument('--consumer', choices=('fabric', 'python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'gds-p10', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

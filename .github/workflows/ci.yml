@@ -89,6 +89,9 @@ jobs:
           echo "ORBITE_EXT4_DIR=$ext" >> "$GITHUB_ENV"
           echo "ORBITE_TMPFS_DIR=/dev/shm" >> "$GITHUB_ENV"
           if [[ "$ORBITE_FEATURES" == *io-uring* ]]; then echo "ORBITE_REQUIRE_IO_URING=1" >> "$GITHUB_ENV"; fi
+      - name: Build the P10 native GDS gate without running it
+        if: matrix.features == 'gds'
+        run: python3 tests/hardware/build_installed.py --consumer gds-p10 --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/gds-p10-installed"
       - name: Clippy
         run: cargo clippy --workspace --locked --features "$ORBITE_FEATURES" --all-targets -- -D warnings
       - name: Set the same test parallelism for the suite and stability controls
@@ -96,6 +99,18 @@ jobs:
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"
       - name: Test CPU TCP and ownership
         run: cargo test --workspace --locked --features "$ORBITE_FEATURES"
+      - name: P10 CPU fault matrix and real peer kills
+        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          python3 tests/faults/run.py --binary "$binary" --output "$RUNNER_TEMP/p10-cpu" --kill-repeats 50
+      - name: Preserve P10 CPU fault evidence
+        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: p10-cpu-${{ matrix.toolchain }}
+          path: ${{ runner.temp }}/p10-cpu/
       - name: Repeat fabric ownership and real-process controls
         if: matrix.features == 'fabric'
         run: |

@@ -112,5 +112,6 @@ qualification
 installed-host
 native-cleanup
 cpu-oracle
+benchmarks
 completion-plan
 :::

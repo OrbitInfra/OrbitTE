@@ -203,7 +203,10 @@ external output directory; failed runs are kept.
 | Per-peer NVLink IPC retirement | Implemented; installed profile unqualified | With the same packaged consumer on a reserved NVLink host: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile nvlink --source-bind 127.0.0.1:19091 --other-bind 127.0.0.1:19092 --bind 127.0.0.1:0 --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --output "$RUN/nvlink"` | Import/export release and guards; shim controls supply delayed-event and failed-close evidence |
 | Per-peer MNNVL retirement | Implemented; installed profile unqualified | On a reserved fabric pair: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile mnnvl --source-host "$SOURCE_HOST" --source-binary "$SOURCE_BINARY" --source-bind "$SOURCE_ADDR:19091" --other-bind "$SOURCE_ADDR:19092" --bind "$REQUESTER_ADDR:0" --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --domain "$FABRIC_DOMAIN" --output "$RUN/mnnvl"` | Native VMM import release, guarded bytes and fresh epoch; actual fabric domain comes from the platform owner |
 | EFA host DRAM (S24, B17) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer fabric --toolchain stable --output "$ART"`, then copy that clean artifact to the same path on both hosts and run `python3 tests/hardware/fabric_run.py --artifact "$ART" --source-ssh "$SOURCE_SSH" --source-ip "$SOURCE_IP" --requester-ip "$REQUESTER_IP" --source-domain "$SOURCE_DOMAIN" --requester-domain "$REQUESTER_DOMAIN" --source-device "$SOURCE_EFA" --requester-device "$REQUESTER_EFA" --output "$OUT/efa.json"`. Repeat with 1.85.0 and a fresh artifact. | Two EFA hosts with delivery-complete support; exact provider/domain, native EFA byte-counter deltas, guarded READ/WRITE and checked close. Written, not run. |
-| [P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration]{#queue-release} | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
+| [P10 native GDS receipt faults]{#queue-p10-gds} | Written and compiled; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer gds-p10 --toolchain stable --output "$ART"`. For each `MODE` in `drain quarantine`, run `python3 "$ART/gds_p10_run.py" --artifact "$ART" --directory "$NVME_EXT4_DIR" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --mode "$MODE" --output "$RUN/$MODE"`. Repeat with 1.85.0 and a fresh artifact. | Real cuFile submit with withheld status receipts; native-route counters, guarded READ, retained fd/GPU/charges. Not run. |
+| P10 RDMA posted-work faults | Prepared; installed rerun required | Use the [installed host runner](installed-host.md#in-flight-dma-interruption) with `installed-inflight-dma`, `installed-lost-completion`, `installed-cleanup-failure` and restart profile cases: `python3 tests/hardware/run.py --profile "$P10_RDMA_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbite-rdma-host" --output "$RUN"`. Build with `python3 tests/hardware/build_installed.py --consumer host --output "$ART"`. | Existing exact WR/CQE/retirement and byte controls; no new hardware run. |
+| P10 cooperative CUDA IPC faults | Prepared; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer nvlink --output "$ART"`. For each `MODE` in `batch-graceful batch-requester-exit`, run `python3 "$ART/nvlink_run.py" --binary "$ART/installed/bin/orbite-nvlink" --observer "$ART/libnvlink_observer.so" --binary-sha256 "$BIN_SHA" --observer-sha256 "$OBSERVER_SHA" --devices 0,1 --lock-root "$GPU_LOCK_ROOT" --output "$RUN/$MODE" --mode "$MODE" --memory device --payload 65536`. | Reuses native copy/event observer and grouped lifetime controls; no exporter-crash claim. Not run. |
+| [P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration]{#queue-release} | CPU preparation implemented; hardware acceptance open | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
 qualified in CI and do not wait here.
@@ -231,6 +234,69 @@ byte and guard for H2D and D2H. Four matched reverse-order layouts cover
 1, 16, 257 and 1,024 fragments. After five warmups the driver records 30
 submit-to-drain wall times per direction and backend and their medians. The
 unrun gate reserves qualification and timing claims for the named GPU.
+
+## CPU benchmark evidence
+
+S26's [method and reproduction commands](benchmarks.md) pin the workload,
+compiler and host in external CI artifacts. [Run 42362843122](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843122)
+completed 480 verified rows on each of stable and Rust 1.85.0 on 2026-11-07.
+Each row has three warmups and 100 checked samples; each case has three process
+trials. The raw `cpu-bench-*` artifacts retain all samples and commands.
+GPU/RDMA/GDS/EFA rows say **not run (hardware)**.
+
+The selected stable results below use OrbiTE branch commit `dfe3ffd2`
+(Actions test merge `31b7112cc9e8650357ab06d2b93a44166a6b6524`) and frozen TENT
+`e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`. The recorded runner is
+`runnervm7aw5e`: Ubuntu 24.04, Linux `7.0.0-1017-azure`, four allowed x86_64
+CPUs (0–3), AMD EPYC 7763, glibc 2.39, Rust 1.99.1/LLVM 23.1.1 and GCC 13.3.0.
+Each TENT/OrbiTE pair ran on the same job's host; toolchain jobs are not pooled.
+Caller concurrency is one and exposed worker knobs are two; actual process
+counts differ (TCP: OrbiTE 7, TENT 37; file: OrbiTE 7, TENT 27–29).
+The original manifest's `retries: 0` means engine failover only; TENT's separate
+TCP-local retry policy kept its frozen defaults (three, 100–2,000 ms).
+The runner now names both settings explicitly without changing those values.
+
+Cells are **OrbiTE / TENT**, the median of the three per-trial statistics.
+CPU time is whole-process microseconds per batch, including clock overhead.
+A dash means no matched baseline in this driver. Files are warmed ext4 with
+OrbiTE O_DIRECT or buffered tmpfs, without fsync. These cloud-loopback results
+are neither installed hardware qualification nor a general performance claim.
+
+| Profile / operation / shape | p50 µs O / T | p99 µs O / T | GiB/s O / T | CPU µs O / T |
+| --- | ---: | ---: | ---: | ---: |
+| CPU memcpy control READ, 1 × 64 MiB | 3,631.6 / 3,579.8 | 3,864.6 / 3,752.2 | 17.125 / 17.412 | 3,652.1 / 3,592.5 |
+| TCP READ, 1 × 4 KiB | 275.8 / 285.1 | 327.6 / 334.5 | 0.014 / 0.014 | 376.1 / 255.5 |
+| TCP WRITE, 1 × 4 KiB | 278.9 / 287.9 | 355.3 / 318.7 | 0.013 / 0.014 | 393.0 / 256.8 |
+| HP-TCP READ, 1 × 4 KiB | 180.1 / — | 288.0 / — | 0.019 / — | 241.2 / — |
+| HP-TCP WRITE, 1 × 4 KiB | 168.5 / — | 288.9 / — | 0.021 / — | 225.1 / — |
+| SHM READ, 1 × 4 KiB | 158.4 / — | 189.6 / — | 0.025 / — | 112.3 / — |
+| SHM WRITE, 1 × 4 KiB | 158.6 / — | 195.3 / — | 0.024 / — | 112.4 / — |
+| io_uring ext4 READ, 1 × 4 KiB | 292.4 / 275.6 | 465.1 / 486.7 | 0.012 / 0.013 | 261.6 / 165.9 |
+| io_uring ext4 WRITE, 1 × 4 KiB | 328.2 / 272.4 | 664.0 / 529.5 | 0.011 / 0.013 | 294.6 / 167.8 |
+| io_uring tmpfs READ, 1 × 4 KiB | 157.3 / 83.7 | 283.1 / 249.6 | 0.023 / 0.041 | 166.5 / 99.4 |
+| io_uring tmpfs WRITE, 1 × 4 KiB | 198.1 / 84.5 | 321.2 / 258.2 | 0.018 / 0.041 | 249.4 / 100.1 |
+| TCP READ, 1 × 64 MiB | 114,507.4 / 121,340.3 | 146,553.5 / 138,350.4 | 0.523 / 0.515 | 151,510.0 / 160,760.3 |
+| HP-TCP READ, 1 × 64 MiB | 13,868.2 / — | 15,240.3 / — | 4.494 / — | 46,363.0 / — |
+| SHM READ, 1 × 64 MiB | 3,918.6 / — | 4,109.8 / — | 16.064 / — | 4,039.0 / — |
+| io_uring ext4 READ, 1 × 64 MiB | 25,963.8 / 26,999.7 | 54,305.0 / 34,079.6 | 2.138 / 2.293 | 5,266.2 / 4,922.9 |
+| io_uring tmpfs READ, 1 × 64 MiB | 8,918.7 / 9,123.2 | 9,521.6 / 9,855.4 | 7.032 / 6.854 | 9,213.4 / 9,378.0 |
+| TCP WRITE, 64 × 4 KiB contiguous | 436.6 / 443.5 | 539.4 / 496.6 | 0.553 / 0.552 | 684.1 / 560.4 |
+| TCP WRITE, 64 × 4 KiB gapped | 9,543.9 / 6,233.4 | 9,992.8 / 6,483.5 | 0.026 / 0.039 | 17,181.7 / 13,064.4 |
+| io_uring ext4 READ, 64 × 4 KiB gapped | 926.5 / 979.2 | 15,716.4 / 1,779.6 | 0.125 / 0.232 | 1,015.2 / 1,143.6 |
+
+OrbiTE is materially slower for scattered small TCP batches: the 64-block
+READ/WRITE p50s are 1.36×/1.53× TENT's. Four-KiB tmpfs READ/WRITE p50s are
+1.88×/2.34×. Likely contributors are the per-batch worker and per-owner TCP
+connections, versus TENT's task/RPC pools and caller-driven file submission;
+these are source-based hypotheses, not profiler findings. Ext4's gapped
+64-block READ/WRITE tails also inflate (p99 15.7/8.8 ms versus 1.8/1.7 ms),
+reducing throughput despite similar medians. That tail cause is unresolved in
+this warmed, page-cache/coherence-sensitive workload. No path was tuned here.
+
+[CI run 42362843121](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843121)
+records 24 passing CPU fault controls and two N/A dispositions per toolchain
+in `p10-cpu-*`; the new TCP and HP-TCP process-kill controls each passed 50
+repetitions. This is P10 preparation, not acceptance of its hardware matrix.
 
 ## Metrics
 

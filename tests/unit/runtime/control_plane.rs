@@ -1875,3 +1875,39 @@ fn accept_readiness_preserves_bounded_handoff_and_serves_the_next_connection() {
 
 #[path = "control_plane/peer_retirement.rs"]
 mod peer_retirement;
+
+#[cfg(target_os = "linux")]
+#[test]
+fn p10_killed_tcp_requester_retains_partial_write_until_socket_drain() {
+    let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+    let memory = engine
+        .register_memory(vec![0xa5; 18].into(), Permission::RemoteReadWrite)
+        .unwrap();
+    let frame = Request {
+        operation: Operation::TcpWrite,
+        epoch: engine.source_epoch(),
+        region: memory.id(),
+        offset: 2,
+        length: 8,
+    }
+    .encode();
+    let mut peer = killed_peer::KilledPeer::start(engine.endpoint(), &frame, REPLY_SIZE);
+    engine.unregister_memory(&memory).unwrap();
+    assert!(matches!(
+        engine.close_source(Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    assert_eq!(engine.stats().unwrap().retained_bytes, 18);
+    peer.kill();
+    engine.close_source(common::EVENTUAL_PROGRESS).unwrap();
+    let mut got = [0; 18];
+    memory.read(0, &mut got).unwrap();
+    assert_eq!(got, [0xa5; 18]);
+    assert_eq!(engine.stats().unwrap().active_source_operations, 0);
+    drop(memory);
+    assert_eq!(engine.stats().unwrap().retained_bytes, 0);
+}
+
+#[cfg(target_os = "linux")]
+#[path = "control_plane/killed_peer.rs"]
+pub(crate) mod killed_peer;

@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'src/**'
+      - 'benches/**'
+      - 'tests/faults/**'
       - 'crates/orbite-python/**'
       - 'tests/reference/**'
       - 'tests/unit/transport/rdma/slice.rs'
@@ -20,7 +22,7 @@ permissions:
 jobs:
   cpu-oracle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -36,7 +38,7 @@ jobs:
       - name: Install reference build dependencies
         timeout-minutes: 10
         run: |
-          .github/scripts/install-native-deps.sh cmake g++ git curl python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev libcli11-dev clang-18 libclang-18-dev
+          .github/scripts/install-native-deps.sh cmake g++ git curl python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev libcli11-dev liburing-dev clang-18 libclang-18-dev
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
       - name: Compare frozen native TENT and OrbiTE
         run: python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/orbite-native-cpu"
@@ -53,6 +55,30 @@ jobs:
         with:
           name: frozen-tent-rdma-geometry-${{ matrix.toolchain }}
           path: ${{ runner.temp }}/orbite-rdma-geometry/
+      - name: Prepare warmed ext4 and tmpfs benchmark filesystems
+        run: |
+          if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
+          ext="$RUNNER_TEMP/orbite-bench-ext4"
+          mkdir -p "$ext"
+          if test "$(findmnt -n -o FSTYPE -T "$ext")" != ext4; then
+            truncate -s 1G "$RUNNER_TEMP/bench-ext4.img"
+            mkfs.ext4 -q -F "$RUNNER_TEMP/bench-ext4.img"
+            sudo mount -o loop "$RUNNER_TEMP/bench-ext4.img" "$ext"
+            sudo chown "$(id -u):$(id -g)" "$ext"
+          fi
+          echo "ORBITE_EXT4_DIR=$ext" >> "$GITHUB_ENV"
+      - name: Matched byte-checked CPU sweeps (no hardware)
+        run: python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
+      - name: Preserve raw measurements outside Git
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cpu-bench-${{ matrix.toolchain }}
+          path: |
+            ${{ runner.temp }}/orbite-bench/*.json
+            ${{ runner.temp }}/orbite-bench/*.jsonl
+            ${{ runner.temp }}/orbite-bench/*.stdout
+            ${{ runner.temp }}/orbite-bench/*.stderr
       - name: Preserve comparison evidence
         if: always()
         uses: actions/upload-artifact@v7.0.2
