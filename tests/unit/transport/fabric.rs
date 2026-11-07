@@ -1,5 +1,17 @@
 use super::fabric_attrs::*;
 
+#[test]
+fn numa_preference_keeps_unknown_unmatched_and_registered_fallback_rails() {
+    let nodes = [0, 1, -1, 1];
+    let nics = [0, 1, 2, 3];
+    assert_eq!(numa_local_nics(&nics, Some(1), |n| nodes[n]), [1, 3]);
+    assert_eq!(numa_local_nics(&nics, Some(0), |n| nodes[n]), [0]);
+    assert_eq!(numa_local_nics(&nics, None, |n| nodes[n]), nics);
+    assert_eq!(numa_local_nics(&nics, Some(7), |n| nodes[n]), nics);
+    assert_eq!(numa_local_nics(&[0, 2], Some(1), |n| nodes[n]), [0, 2]);
+    assert_eq!(numa_local_nics(&nics, Some(u32::MAX), |n| nodes[n]), nics);
+}
+
 #[cfg(feature = "fabric")]
 #[path = "fabric/shim.rs"]
 mod shim;

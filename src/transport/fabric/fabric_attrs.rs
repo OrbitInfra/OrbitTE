@@ -17,6 +17,23 @@ fn unknown_numa() -> i32 {
     -1
 }
 
+/// TENT prefers the buffer's socket without losing registered fallback rails.
+pub(super) fn numa_local_nics(
+    nics: &[usize],
+    node: Option<u32>,
+    numa: impl Fn(usize) -> i32,
+) -> Vec<usize> {
+    let local: Vec<_> = node
+        .and_then(|n| i32::try_from(n).ok())
+        .map(|node| nics.iter().copied().filter(|&n| numa(n) == node).collect())
+        .unwrap_or_default();
+    if local.is_empty() {
+        nics.to_vec()
+    } else {
+        local
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PeerAttr {
     pub version: u32,

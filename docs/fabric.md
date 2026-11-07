@@ -56,6 +56,7 @@ installation is explicitly off (`fabric: None`, `enable: false`).
 Additional typed bounds are `max_pending_ops` (4096 slices and MRs per domain),
 `max_peer_addresses` (4096 address-vector entries per domain) and `max_domains`
 (16). Engine byte, source-operation and batch admission budgets also apply.
+PTE charges conservatively assume 4 KiB pages, even for huge-page backing.
 Invalid bounds fail before installation. Discovery or construction failure is
 an engine construction error; it does not silently install TCP instead.
 OrbiTE never sets `FI_HMEM` or changes another process environment variable.
@@ -69,6 +70,10 @@ access capabilities, context cookies and thread-safe domains. It prefers IPv4
 for duplicate domains and omits loopback when another domain exists unless
 explicitly whitelisted. Unsupported MR modes, including raw keys, are rejected.
 The selected virtual-address or MR-offset mode is checked between peers.
+Posting prefers registered NICs on each buffer's NUMA node, retaining TENT's
+same-index peer rail preference within that subset. Unknown placement or no
+matching NIC uses all registered NICs. OrbiTE uses the retained allocation's
+published location; it does not infer placement by probing ordinary heap pages.
 
 Each admitted request registers its exact range. A native control grant binds
 remote keys to the source epoch, region, range, operation and a unique nonce.

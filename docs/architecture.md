@@ -365,6 +365,14 @@ Deliberate differences have negative controls:
 
 The configured EFA path remains implemented but unqualified. Software-provider
 results establish neither EFA DMA safety nor physical-network performance.
+NUMA preference follows TENT using each registration's published location;
+unknown heap placement stays unknown instead of adding a page-location probe.
+`numa_preference_keeps_unknown_unmatched_and_registered_fallback_rails` checks
+that unknown or unmatched placement keeps every registered candidate and that
+preference never invents a rail outside the MR's registered subset.
+PTE accounting conservatively uses base pages instead of TENT's heap-page-size
+probe; huge pages cannot reduce this charge. The over-budget chunk-assignment
+control rejects a range that exceeds that base-page budget.
 
 ## Batch progress and notification ownership
 

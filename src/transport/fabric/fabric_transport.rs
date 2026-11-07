@@ -167,6 +167,7 @@ struct Buffer {
     loan: Arc<Loan>,
     attr: BufferAttr,
     mrs: Vec<Vec<(usize, Arc<Mr>)>>,
+    post_nics: Vec<Vec<usize>>,
 }
 impl Buffer {
     fn create(
@@ -272,6 +273,14 @@ impl Buffer {
                     .collect(),
             },
             mrs: vec![Vec::new(); ranges.len()],
+            post_nics: assignments
+                .iter()
+                .map(|nics| {
+                    attrs::numa_local_nics(nics, memory.0.descriptor.profile.node, |n| {
+                        owner.contexts[n].nic.numa
+                    })
+                })
+                .collect(),
         };
         let mut error = thread_error;
         results.sort_by_key(|(c, n, _)| (*c, *n));
@@ -470,14 +479,7 @@ impl FabricTransport {
                     return Err(e);
                 }
             };
-            let prepared = self.prepare(
-                peer.into(),
-                operation,
-                &buffer,
-                &grant,
-                request.length,
-                until,
-            );
+            let prepared = self.prepare(peer.into(), operation, &buffer, &grant, request, until);
             let tasks = match prepared {
                 Ok(tasks) => tasks,
                 Err(e) => {
@@ -540,7 +542,7 @@ impl FabricTransport {
         operation: TransferOp,
         local: &Buffer,
         remote: &Grant,
-        length: usize,
+        request: &PreparedTransfer,
         until: Instant,
     ) -> Result<Vec<(Arc<Context>, Arc<Task>)>> {
         if remote.peer.provider != self.peer.provider
@@ -557,7 +559,7 @@ impl FabricTransport {
             .min()
             .ok_or(Error::Unavailable("fabric domain"))?;
         let spans = attrs::cut_spans(
-            length as u64,
+            request.length as u64,
             0,
             &local.attr.ranges(),
             0,
@@ -565,25 +567,41 @@ impl FabricTransport {
             max_message.min(self.config.slice_size as u64),
             self.config.max_pending_ops,
         )?;
+        let preferred: Vec<_> = remote
+            .buffer
+            .chunks
+            .iter()
+            .map(|chunk| {
+                attrs::numa_local_nics(&chunk.nics, request.remote.profile.node, |n| {
+                    remote.peer.nics[n].numa
+                })
+            })
+            .collect();
         let mut groups: Vec<Vec<Op>> = (0..self.contexts.len()).map(|_| Vec::new()).collect();
         for span in spans {
             let choices = &local.mrs[span.local];
             let turn = self.cursor.fetch_add(1, Ordering::Relaxed);
-            let (nic, mr) = &choices[turn % choices.len()];
+            let local_nics = &local.post_nics[span.local];
+            let nic = local_nics[turn % local_nics.len()];
+            let (_, mr) = choices
+                .iter()
+                .find(|(n, _)| *n == nic)
+                .ok_or(Error::Internal("fabric preferred NIC lost its MR"))?;
             let remote_chunk = &remote.buffer.chunks[span.remote];
-            let remote_nic = if remote_chunk.nics.contains(nic) {
-                *nic
+            let remote_nics = &preferred[span.remote];
+            let remote_nic = if remote_nics.contains(&nic) {
+                nic
             } else {
-                remote_chunk.nics[turn % remote_chunk.nics.len()]
+                remote_nics[turn % remote_nics.len()]
             };
             let address = attrs::unhex(&remote.peer.nics[remote_nic].addr)?;
-            let fi_addr = self.contexts[*nic].peer(peer, &address)?;
+            let fi_addr = self.contexts[nic].peer(peer, &address)?;
             let base = if remote.peer.virt_addr {
                 remote.address + span.off
             } else {
                 span.off - remote_chunk.off
             };
-            groups[*nic].push(Op::new(
+            groups[nic].push(Op::new(
                 mr.clone(),
                 span.off as usize - mr.off,
                 span.len as usize,
