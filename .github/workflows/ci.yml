@@ -262,6 +262,15 @@ jobs:
           .github/scripts/repeat-runtime-controls.sh "$binary"
           .github/scripts/repeat-runtime-controls.sh "$binary" batch-release
           .github/scripts/repeat-runtime-controls.sh "$binary" rail-recovery
+      - name: Repeat GDS reservation release at suite parallelism
+        if: matrix.features == 'rdma,cuda,io-uring,gds'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          for i in $(seq 1 200); do
+            RUST_TEST_THREADS=$(nproc) "$binary" --exact transport::gds::tests::deferred_sweep_skips_permanent_destroy_and_reclaims_independent_work > "$RUNNER_TEMP/gds-reservation.log" 2>&1 || { cat "$RUNNER_TEMP/gds-reservation.log"; exit 1; }
+            grep -F "test result: ok. 1 passed; 0 failed;" "$RUNNER_TEMP/gds-reservation.log"
+          done
       - name: Repeat Linux shared quota and receiver credit controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics'
         run: |
