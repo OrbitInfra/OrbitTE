@@ -368,10 +368,7 @@ impl FabricTransport {
         length: usize,
     ) -> Result<()> {
         let write = request.operation == Operation::FabricWrite;
-        let nonce = self
-            .nonce
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-            .map_err(|_| Error::ResourceExhausted)?;
+        let nonce = super::next_id(&self.nonce)?;
         let buffer = Buffer::create(self, memory, offset, length, if write { 2 } else { 1 })?;
         let grant = Grant {
             peer: self.peer.clone(),

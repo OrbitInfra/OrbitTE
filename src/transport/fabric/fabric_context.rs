@@ -276,10 +276,7 @@ impl Context {
         if s.mrs >= self.config.max_pending_ops {
             return Err(Error::ResourceExhausted);
         }
-        let key = self
-            .key
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-            .map_err(|_| Error::ResourceExhausted)?;
+        let key = super::next_id(&self.key)?;
         let address = loan.address().as_ptr().wrapping_add(offset);
         let mut mr = std::ptr::null_mut();
         let mut desc = std::ptr::null_mut();

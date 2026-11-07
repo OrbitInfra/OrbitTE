@@ -274,3 +274,18 @@ fn native_capability_and_request_byte_fixture() {
         "4f524249545445000001170007070707070707070707070707070707000000000000000900000000000000020000000000000008"
     );
 }
+
+#[cfg(feature = "fabric")]
+#[test]
+fn native_ids_never_wrap_or_reuse_a_live_key() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let counter = AtomicU64::new(u64::MAX - 1);
+    assert_eq!(super::next_id(&counter).unwrap(), u64::MAX - 1);
+    for _ in 0..2 {
+        assert!(matches!(
+            super::next_id(&counter),
+            Err(crate::Error::ResourceExhausted)
+        ));
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+    }
+}
