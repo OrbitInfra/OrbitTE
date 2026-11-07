@@ -1,6 +1,6 @@
 //! Interpose on real tcp-provider calls: every unmodified call reaches libfabric.
 #![allow(unsafe_code)]
-use super::super::sys::{Calls, Completion, Handles, REAL, Symbols};
+use super::super::sys::{Calls, Completion, Handles, Info, REAL, Symbols};
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -13,6 +13,8 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct Faults {
+    pub no_delivery_complete: AtomicBool,
+    pub opens: AtomicUsize,
     pub hold: AtomicBool,
     pub drain_expired: Arc<AtomicBool>,
     pub reject: AtomicBool,
@@ -46,6 +48,7 @@ pub(super) fn configured<T>(faults: Arc<Faults>, f: impl FnOnce() -> T) -> T {
 pub(super) fn calls(real: Calls) -> Calls {
     if CURRENT.with(|s| s.borrow().is_some()) {
         Calls {
+            describe,
             open,
             close,
             register,
@@ -58,6 +61,22 @@ pub(super) fn calls(real: Calls) -> Calls {
         real
     }
 }
+unsafe extern "C" fn describe(info: *mut c_void, out: *mut Info) -> i32 {
+    // SAFETY: forward the retained discovery record and its initialized output.
+    let result = unsafe { (REAL.describe)(info, out) };
+    CURRENT.with(|current| {
+        if result == 0
+            && current
+                .borrow()
+                .as_ref()
+                .is_some_and(|f| f.no_delivery_complete.load(Ordering::SeqCst))
+        {
+            // SAFETY: the successful call initialized this exclusive output.
+            unsafe { (*out).delivery_complete = 0 };
+        }
+    });
+    result
+}
 unsafe extern "C" fn open(
     a: *const Symbols,
     i: *mut c_void,
@@ -68,6 +87,11 @@ unsafe extern "C" fn open(
     address: *mut u8,
     len: *mut usize,
 ) -> i32 {
+    CURRENT.with(|current| {
+        if let Some(f) = current.borrow().as_ref() {
+            f.opens.fetch_add(1, Ordering::SeqCst);
+        }
+    });
     // SAFETY: forward the production ABI arguments unchanged.
     let code = unsafe { (REAL.open)(a, i, cq, peers, tcp, h, address, len) };
     CURRENT.with(|current| {

@@ -505,6 +505,13 @@ fn runtime_loading_attributes_and_configuration_are_explicit() {
         Api::load_from("libc.so.6"),
         Err(Error::Unavailable(_))
     ));
+    let caps = Arc::new(Faults::default());
+    caps.no_delivery_complete.store(true, SeqCst);
+    assert!(matches!(
+        shim::configured(caps.clone(), || FabricTransport::new(cfg().fabric.unwrap())),
+        Err(Error::Unavailable(_))
+    ));
+    assert_eq!(caps.opens.load(SeqCst), 0);
     let env = std::env::var_os("FI_HMEM");
     let f = FabricTransport::new(cfg().fabric.unwrap()).unwrap();
     assert!(

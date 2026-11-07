@@ -55,6 +55,7 @@ type Post = unsafe extern "C" fn(
 ) -> i32;
 #[derive(Clone, Copy)]
 pub(super) struct Calls {
+    pub describe: unsafe extern "C" fn(*mut c_void, *mut Info) -> i32,
     pub open: unsafe extern "C" fn(
         *const Symbols,
         *mut c_void,
@@ -74,6 +75,7 @@ pub(super) struct Calls {
 }
 pub(super) type Symbols = ffi::orbite_fi_api;
 pub(super) const REAL: Calls = Calls {
+    describe: ffi::orbite_fi_describe,
     open: ffi::orbite_fi_open,
     close: ffi::orbite_fi_close,
     register: ffi::orbite_fi_register,
@@ -229,8 +231,8 @@ impl InfoList {
             let mut info = Info::default();
             // SAFETY: next is in this retained fi_getinfo chain. describe checks
             // its required attributes and copies only into fixed output fields.
-            let r = unsafe { ffi::orbite_fi_describe(next, &mut info) };
-            if r == 0 {
+            let r = unsafe { (self.api.calls.describe)(next, &mut info) };
+            if r == 0 && info.delivery_complete != 0 {
                 entries.push((next, info));
             }
             // SAFETY: next remains live until InfoList drops.
