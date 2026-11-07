@@ -141,3 +141,7 @@ required-features = ["cuda"]
 [[example]]
 name = "peer_gpu_requester"
 path = "tests/hardware/peer_gpu_requester.rs"
+
+[[example]]
+name = "tent_interop"
+path = "tests/reference/interop/rust.rs"

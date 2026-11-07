@@ -54,12 +54,12 @@ fn backoff(warned: &mut bool, error: &io::Error) -> Instant {
 
 pub(super) fn run(
     mut poll: mio::Poll,
-    mut accept: impl FnMut() -> io::Result<TcpStream>,
-    sender: mpsc::SyncSender<(TcpStream, Instant)>,
+    mut accept: impl FnMut() -> io::Result<(TcpStream, Option<SocketAddr>)>,
+    sender: mpsc::SyncSender<(TcpStream, Instant, Option<SocketAddr>)>,
     stopping: &AtomicBool,
     timeout: Duration,
 ) -> io::Result<()> {
-    let mut events = mio::Events::with_capacity(2);
+    let mut events = mio::Events::with_capacity(3);
     let mut warned = false;
     let mut retry_at: Option<Instant> = None;
     while !stopping.load(Ordering::Acquire) {
@@ -73,12 +73,12 @@ pub(super) fn run(
             }
         }
         match accept() {
-            Ok(stream) => {
+            Ok((stream, profile)) => {
                 warned = false;
                 if stream.set_nonblocking(false).is_ok() && stream.set_nodelay(true).is_ok() {
                     if let Ok(deadline) = deadline(timeout) {
                         // The fixed queue and worker count bound sockets and payloads.
-                        let _ = sender.try_send((stream, deadline));
+                        let _ = sender.try_send((stream, deadline, profile));
                     }
                 }
                 continue;

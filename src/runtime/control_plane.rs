@@ -3,6 +3,7 @@ mod accept;
 mod connection;
 #[cfg(feature = "cuda")]
 mod source_sessions;
+pub(crate) mod tent;
 #[cfg(feature = "cuda")]
 pub(crate) use connection::Connecting;
 
@@ -569,6 +570,7 @@ fn retryable(error: &io::Error) -> bool {
 pub(crate) struct ControlService {
     source: Arc<Source>,
     endpoint: SocketAddr,
+    tent_endpoint: Option<SocketAddr>,
     stopping: Arc<AtomicBool>,
     acceptor: Option<JoinHandle<()>>,
     accept_wake: mio::Waker,
@@ -586,9 +588,23 @@ impl ControlService {
         let poll = mio::Poll::new()?;
         poll.registry()
             .register(&mut listener, mio::Token(0), mio::Interest::READABLE)?;
+        let mut tent_listener = config
+            .tent_bind_addr
+            .map(|bind| {
+                let listener = TcpListener::bind(bind)?;
+                listener.set_nonblocking(true)?;
+                Ok::<_, io::Error>(mio::net::TcpListener::from_std(listener))
+            })
+            .transpose()?;
+        let tent_endpoint = tent_listener.as_ref().map(|l| l.local_addr()).transpose()?;
+        if let Some(listener) = &mut tent_listener {
+            poll.registry()
+                .register(listener, mio::Token(2), mio::Interest::READABLE)?;
+        }
         let accept_wake = mio::Waker::new(poll.registry(), mio::Token(1))?;
         let stopping = Arc::new(AtomicBool::new(false));
-        let (sender, receiver) = mpsc::sync_channel::<(TcpStream, Instant)>(config.handler_threads);
+        let (sender, receiver) =
+            mpsc::sync_channel::<(TcpStream, Instant, Option<SocketAddr>)>(config.handler_threads);
         let receiver = Arc::new(Mutex::new(receiver));
         source
             .notifications
@@ -596,6 +612,7 @@ impl ControlService {
         let mut service = Self {
             source: source.clone(),
             endpoint,
+            tent_endpoint,
             stopping,
             acceptor: None,
             accept_wake,
@@ -621,6 +638,7 @@ impl ControlService {
             let source = Arc::clone(&source);
             let stopping = Arc::clone(&service.stopping);
             let max_bytes = config.max_transfer_bytes;
+            let timeout = config.handler_timeout;
             let worker = thread::Builder::new()
                 .name(format!("orbite-control-{index}"))
                 .spawn(move || {
@@ -632,7 +650,7 @@ impl ControlService {
                             Ok(queue) => queue.recv_timeout(IO_POLL),
                             Err(_) => return,
                         };
-                        let (stream, deadline) = match request {
+                        let (stream, deadline, tent_endpoint) = match request {
                             Ok(request) => request,
                             Err(mpsc::RecvTimeoutError::Timeout) => continue,
                             Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -646,6 +664,10 @@ impl ControlService {
                             stopping: Some(Stop::Source(&stopping)),
                             nonblocking: false,
                         };
+                        if let Some(endpoint) = tent_endpoint {
+                            let _ = tent::serve(channel, &source, endpoint, max_bytes, timeout);
+                            continue;
+                        }
                         // A failed connection is isolated and closed, never replayed.
                         let _ = serve(
                             channel,
@@ -660,7 +682,30 @@ impl ControlService {
         }
         let stopping = Arc::clone(&service.stopping);
         let timeout = config.handler_timeout;
-        let accept = move || listener.accept().map(|(stream, _)| stream.into());
+        let mut turn = false;
+        let accept = move || {
+            // Both explicitly configured listeners share this acceptor, bounded
+            // queue and worker set. Select by listener, never by sniffing bytes.
+            turn = !turn;
+            for tent in [turn, !turn] {
+                let selected = if tent {
+                    let Some(listener) = &mut tent_listener else {
+                        continue;
+                    };
+                    listener
+                } else {
+                    &mut listener
+                };
+                match selected.accept() {
+                    Ok((stream, _)) => {
+                        return Ok((stream.into(), if tent { tent_endpoint } else { None }));
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(io::ErrorKind::WouldBlock.into())
+        };
         #[cfg(test)]
         let accept = accept::tests::instrument(accept);
         service.acceptor = Some(
@@ -676,6 +721,10 @@ impl ControlService {
                 )?,
         );
         Ok(service)
+    }
+
+    pub(crate) fn tent_endpoint(&self) -> Option<SocketAddr> {
+        self.tent_endpoint
     }
 
     pub(crate) fn endpoint(&self) -> SocketAddr {
@@ -715,7 +764,11 @@ fn serve(
     #[cfg(feature = "cuda")] sessions: Option<&source_sessions::Sessions>,
 ) -> Result<()> {
     let mut bytes = [0; REQUEST_SIZE];
-    channel.read_exact(&mut bytes)?;
+    channel.read_exact(&mut bytes[..8])?;
+    if &bytes[..8] != MAGIC {
+        return Err(Error::Protocol("OrbiTE control magic mismatch"));
+    }
+    channel.read_exact(&mut bytes[8..])?;
     let request = match Request::decode(&bytes) {
         Ok(request) => request,
         Err(error) => {

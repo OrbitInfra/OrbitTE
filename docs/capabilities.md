@@ -85,7 +85,7 @@ fixtures and CPU codec checks are available for the future mixed-peer profile.
 | Device plugin ABI | Implemented (F03) | [Explicit C loader](device-plugins.md), frozen table/layout, bounded retained allocations and fallible CUDA provider. CPU native-library controls; installed GPU profile unqualified |
 | TENT Python API | Implemented (F21) | [Installed wheels](python.md) for CPython 3.10–3.14, Linux x86_64/aarch64. Guarded TCP, GIL release and retained host/CAI/DLPack exporters; native GPU/RDMA Python profiles remain unqualified |
 | TENT configuration and P2P self-description | Configuration implemented (F01), P2P available (F06) | File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Discovery, membership, KV indexes and external metadata stores belong to the consumer; non-P2P configuration is rejected. Rust `close_segment(endpoint, epoch, timeout)` fences and drains one peer; live descriptor/operation references bound the identity table, while failed native cleanup stays charged. CPU sockets/SHM are exercised on Linux; RNIC/CUDA retirement is shim-only, installed profile unqualified |
-| TENT wire interoperability | Planned (P9) | OrbiTE peers use a pre-release protocol and must run the same build. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries) |
+| TENT wire interoperability | Implemented (S23, CPU TCP) | [Explicit cooperative profile](tent-interop.md), directional frozen C++/Rust READ/WRITE on loopback. Consumer-owned epoch fence; TENT cannot validate it remotely. OrbiTE peers keep native framing. RDMA bootstrap is codec-only and unavailable; GPU/RDMA interop unqualified |
 
 ## Provider selection
 

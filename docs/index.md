@@ -66,6 +66,7 @@ capabilities
 :maxdepth: 1
 
 cpu-tcp
+tent-interop
 hp-tcp
 shm
 storage

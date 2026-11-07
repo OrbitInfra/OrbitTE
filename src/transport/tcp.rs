@@ -24,6 +24,17 @@ impl TcpTransport {
             crate::runtime::proxy_manager::ProxyManager,
         >,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
+        if peer.metadata.tent.is_some() {
+            return crate::runtime::control_plane::tent::transfer(
+                operation,
+                peer,
+                request,
+                deadline,
+                posted,
+                #[cfg(feature = "cuda")]
+                proxy,
+            );
+        }
         let mut task = TcpTask::new(
             operation,
             peer,
