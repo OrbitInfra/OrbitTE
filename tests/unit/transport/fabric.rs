@@ -154,11 +154,15 @@ fn cut_spans_honours_max_span_and_bounds() {
 
 #[test]
 fn default_build_never_selects_or_loads_a_fabric_owner() -> crate::Result<()> {
+    #[cfg(feature = "fabric")]
+    let loads = super::sys::loads();
     use crate::*;
     let e = TransferEngine::new(Default::default())?;
     assert!(!e.transport_installed(Transport::Fabric));
     #[cfg(feature = "fabric")]
     assert!(e.stats()?.fabric.is_none());
+    #[cfg(feature = "fabric")]
+    assert_eq!(loads, super::sys::loads());
     Ok(())
 }
 
@@ -176,6 +180,7 @@ mod real {
     #[test]
     fn real_provider_guarded_read_write() -> Result<()> {
         let config = || EngineConfig {
+            tcp: false,
             fabric: Some(FabricConfig {
                 provider: FabricProvider::Tcp,
                 devices: vec!["lo".into()],

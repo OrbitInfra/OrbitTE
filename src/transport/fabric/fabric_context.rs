@@ -328,6 +328,9 @@ impl Context {
         Ok(owned)
     }
     pub fn peer(&self, peer: PeerKey, address: &[u8]) -> Result<u64> {
+        if self.config.tcp() {
+            sys::socket_address(address, self.info.ipv4 != 0)?;
+        }
         if address.len() * 2 != self.nic.addr.len() {
             return Err(Error::Protocol(
                 "fabric peer address size differs from provider",

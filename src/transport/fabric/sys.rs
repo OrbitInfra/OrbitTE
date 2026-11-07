@@ -97,11 +97,31 @@ unsafe impl Send for Handles {}
 // SAFETY: Info contains scalars and fixed character arrays, no native pointers.
 unsafe impl Send for Info {}
 
+#[cfg(test)]
+thread_local! { static LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn loads() -> usize {
+    LOADS.with(std::cell::Cell::get)
+}
+
+pub(super) fn socket_address(bytes: &[u8], ipv4: bool) -> Result<()> {
+    let (length, family) = if ipv4 {
+        (std::mem::size_of::<libc::sockaddr_in>(), libc::AF_INET)
+    } else {
+        (std::mem::size_of::<libc::sockaddr_in6>(), libc::AF_INET6)
+    };
+    if bytes.len() != length || u16::from_ne_bytes([bytes[0], bytes[1]]) != family as u16 {
+        return Err(Error::Protocol("fabric socket address family or length"));
+    }
+    Ok(())
+}
 impl Api {
     pub(super) fn load() -> Result<Arc<Self>> {
         Self::load_from("libfabric.so.1")
     }
     pub(super) fn load_from(path: &str) -> Result<Arc<Self>> {
+        #[cfg(test)]
+        LOADS.with(|n| n.set(n.get() + 1));
         // SAFETY: only an explicitly configured fabric transport loads the SDK.
         // Every live handle retains this library through Api.
         let library = unsafe { libloading::Library::new(path) }

@@ -498,6 +498,21 @@ fn runtime_loading_attributes_and_configuration_are_explicit() {
             .iter()
             .all(|c| c.info.delivery_complete != 0 && c.info.tx_size > 0 && c.info.max_message > 0)
     );
+    for c in &f.contexts {
+        let mut bad = super::super::fabric_attrs::unhex(&c.nic.addr).unwrap();
+        bad[..2].fill(0);
+        assert!(matches!(
+            c.peer(
+                crate::runtime::segment_manager::PeerKey {
+                    endpoint: "127.0.0.1:1".parse().unwrap(),
+                    epoch: SourceEpoch::generate().unwrap()
+                },
+                &bad
+            ),
+            Err(Error::Protocol(_))
+        ));
+        assert_eq!(f.stats().peer_addresses, 0);
+    }
     assert!(f.peer.nics.iter().all(|n| n.name == "lo"));
     assert_eq!(std::env::var_os("FI_HMEM"), env);
     f.close().unwrap();
