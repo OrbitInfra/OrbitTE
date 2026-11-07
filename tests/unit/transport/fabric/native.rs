@@ -361,6 +361,18 @@ fn loopback_permissions_peer_retirement_and_new_epoch_are_scoped() {
         &got[1..8193],
         &(1..8193).map(|i| (i % 251) as u8).collect::<Vec<_>>()
     );
+    let outside = TransferRequest::new(
+        Transport::Fabric,
+        p.local.base_address() + 1,
+        p.remote.base_address() + 8190,
+        8,
+    );
+    assert!(
+        p.engine
+            .submit_and_wait(TransferOp::Write, &p.peer, &[outside], WAIT)
+            .is_err()
+    );
+    p.check(0, 0);
     let private = p
         .source
         .register_memory(vec![0x77; 8].into(), Permission::LocalOnly)

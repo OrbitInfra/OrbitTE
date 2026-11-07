@@ -198,33 +198,45 @@ mod real {
             }
             Err(e) => return Err(e),
         };
-        let requester = TransferEngine::new(config())?;
+        let mut requester_config = config();
+        requester_config.fabric.as_mut().unwrap().max_mr_size = 6144;
+        let requester = TransferEngine::new(requester_config)?;
         let bytes: Vec<_> = (0..16387).map(|n| (n % 251) as u8).collect();
         let remote = source.register_memory(bytes.clone().into(), Permission::RemoteReadWrite)?;
         let local =
             requester.register_memory(vec![0xee; bytes.len()].into(), Permission::LocalOnly)?;
         let peer = requester.open_segment(source.endpoint(), source.source_epoch(), WAIT)?;
-        let r = TransferRequest::new(
-            Transport::Fabric,
-            local.base_address() + 1,
-            remote.base_address() + 3,
-            bytes.len() - 6,
-        );
-        let report =
-            requester.submit_and_wait(TransferOp::Read, &peer, std::slice::from_ref(&r), WAIT)?;
-        assert!(report.is_complete(), "{report:?}");
-        let mut got = vec![0; bytes.len()];
-        local.read(0, &mut got)?;
-        assert_eq!(&got[1..bytes.len() - 5], &bytes[3..bytes.len() - 3]);
-        assert_eq!(got[0], 0xee);
-        assert!(got[bytes.len() - 5..].iter().all(|&b| b == 0xee));
-        local.write(1, &vec![0xa5; bytes.len() - 6])?;
-        let report = requester.submit_and_wait(TransferOp::Write, &peer, &[r], WAIT)?;
-        assert!(report.is_complete(), "{report:?}");
-        remote.read(0, &mut got)?;
-        assert_eq!(&got[..3], &bytes[..3]);
-        assert_eq!(&got[bytes.len() - 3..], &bytes[bytes.len() - 3..]);
-        assert!(got[3..bytes.len() - 3].iter().all(|&b| b == 0xa5));
+        // Different MR chunk sizes exercise both boundaries in the executing
+        // provider; include the frozen single-byte and small unaligned cases.
+        for length in [1, 777, bytes.len() - 6] {
+            local.write(0, &vec![0xee; bytes.len()])?;
+            remote.write(0, &bytes)?;
+            let r = TransferRequest::new(
+                Transport::Fabric,
+                local.base_address() + 1,
+                remote.base_address() + 3,
+                length,
+            );
+            let report = requester.submit_and_wait(
+                TransferOp::Read,
+                &peer,
+                std::slice::from_ref(&r),
+                WAIT,
+            )?;
+            assert!(report.is_complete(), "{report:?}");
+            let mut got = vec![0; bytes.len()];
+            local.read(0, &mut got)?;
+            let mut expected = vec![0xee; bytes.len()];
+            expected[1..1 + length].copy_from_slice(&bytes[3..3 + length]);
+            assert_eq!(got, expected);
+            local.write(1, &vec![0xa5; length])?;
+            let report = requester.submit_and_wait(TransferOp::Write, &peer, &[r], WAIT)?;
+            assert!(report.is_complete(), "{report:?}");
+            remote.read(0, &mut got)?;
+            let mut expected = bytes.clone();
+            expected[3..3 + length].fill(0xa5);
+            assert_eq!(got, expected);
+        }
         requester.close_segment(source.endpoint(), source.source_epoch(), WAIT)?;
         requester.close(WAIT)?;
         source.close(WAIT)?;
