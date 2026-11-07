@@ -13,9 +13,11 @@ TCP and io_uring have matched rows; HP-TCP and SHM have OrbiTE-only rows. HP-TCP
 uses `127.0.0.1` and `127.0.0.2` as two loopback rails.
 
 The default workload is READ and WRITE at 4 KiB, 64 KiB, 1 MiB and 64 MiB, plus
-batches of 8 and 64 four-KiB blocks. Contiguous blocks exercise physical-owner
-merging. Gapped blocks use a stride of twice the block size and must remain
-separate owners. There is one caller, two configured workers per engine,
+batches of 8 and 64 four-KiB blocks. Contiguous memory-target blocks exercise
+physical-owner merging. Gapped blocks use a stride of twice the block size and
+must remain separate owners. File batches preserve one owner per public request
+for independent CQE outcomes, including contiguous blocks; the runner checks
+that mapping too. There is one caller, two configured workers per engine,
 three warmup batches, 100 samples and three independent process trials. Trial
 order alternates the two implementations. Both disable retries, metrics,
 progress workers and runtime queues, and enable merging. The manifest records

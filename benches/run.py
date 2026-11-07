@@ -132,7 +132,8 @@ def main():
                             summary = summarize(row, a.samples, block*batch)
                             if implementation == "orbite" and backend == "io_uring" and row["direct_io"] != profile.endswith("ext4"):
                                 raise ValueError("wrong file route")
-                            if implementation == "orbite" and backend != "cpu" and row["physical_owners"] != (1 if layout=="contiguous" else batch):
+                            expected_owners = 1 if backend != "io_uring" and layout == "contiguous" else batch
+                            if implementation == "orbite" and backend != "cpu" and row["physical_owners"] != expected_owners:
                                 raise ValueError("merge/coalescing path did not match layout")
                             record = dict(trial=trial, implementation=implementation, profile=profile, op=op, block=block, batch=batch, layout=layout, **row, **summary)
                             rows.append(record)
