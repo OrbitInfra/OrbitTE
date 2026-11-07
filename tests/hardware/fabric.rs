@@ -95,10 +95,10 @@ fn main() -> Result<()> {
                 return Err(Error::Protocol("missing native fabric completions"));
             }
             println!("FABRIC {stats:?}");
-            engine.close(WAIT)?;
         }
         _ => return Err(usage()),
     }
+    engine.close(WAIT)?;
     println!("PASS {mode} {LENGTH}");
     Ok(())
 }
