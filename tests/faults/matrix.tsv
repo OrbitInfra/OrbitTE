@@ -1,0 +1,27 @@
+backend	faults	control	expected_owner_state
+TCP	peer-kill,partial-submit,close	p10_killed_tcp_requester_retains_partial_write_until_socket_drain	Partial body is not committed; unregister and close retain 18 bytes until the killed process's socket drains; guards unchanged.
+TCP	timeout,cancel,close	async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners	Wait timeout/cancel do not release the admitted buffer or byte charge; physical worker exit releases them.
+TCP	partial-submit	partial_read_preserves_destination_and_lost_write_ack_is_ambiguous	READ partial prefix and guards are preserved; missing WRITE acknowledgement is Unknown, with no replay.
+TCP	restart	foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch	Old epoch never admits; foreground and worker refresh use only the new authority.
+HP-TCP	peer-kill,partial-submit,close	p10_killed_hp_tcp_requester_releases_only_after_partial_write_drain	Only the four received bytes change; the registration remains charged until the dead socket's handler drains.
+HP-TCP	timeout,partial-submit	fragmented_read_with_tail_truncation_and_stall_preserves_guards	Only the received prefix is copied; stalled/closed tail is terminal with guards intact.
+HP-TCP	cancel	lost_write_ack_and_running_cancel_never_replay_or_release_early	Running cancellation retains the task and byte charge through lane drain; lost ACK is Unknown, never replayed.
+HP-TCP	close	peer_retirement_hp_tcp_waits_for_response_then_drops_only_its_lane	Retirement fences the identity; only its lane closes after the response; unrelated peer works.
+HP-TCP	restart	restart_at_the_same_ports_and_address_rejects_the_old_write_id	Registration generation rejects a stale WRITE despite address/port reuse.
+SHM	peer-kill,timeout,close	unregister_unlink_and_peer_exit_hold_exact_inflight_grants	Live OFD range grant pins bytes/mapping across unregister/unlink; child death releases only its exact grant.
+SHM	restart	killed_source_cannot_regrant_cached_pages_and_restart_reaps_its_name	Mapped pages survive death; stale source cannot regrant them and replacement epoch rejects old authority.
+SHM	partial-submit	rejected_late_relocation_leaves_the_whole_batch_untouched_and_keeps_cached_pages	All-or-nothing preflight; no SQ exists. A late relocation rejection copies no bytes and keeps existing mappings.
+SHM	close	peer_retirement_failed_shm_unmap_is_sticky_and_does_not_fence_other_peers	Failed munmap keeps mapping/fd/charge; destruction is not retried and other peers are unaffected.
+SHM	cancel	N/A	SHM memcpy is synchronous once dispatched, with no cancellable native queue; pre-dispatch cancellation is the shared batch owner contract, exercised by the TCP and file rows. Never interrupt or release a running memcpy.
+io_uring	partial-submit	short_enter_flushes_only_the_tail_or_drains_the_accepted_prefix	Real ring with injected short enter; consumed SQEs drain before ring, fd, iovec and backing can release.
+io_uring	timeout	missing_drain_receipt_quarantines_ring_file_memory_and_admission	Failed drain retains ring/fd/loans/bounce/admission as Unquiesced; no WRITE replay.
+io_uring	timeout	a_missing_cqe_at_the_drain_deadline_quarantines_the_submitted_span	Actual deadline plus destruction window with withheld CQE; submitted span and owners stay quarantined.
+io_uring	cancel,close	file_io_shares_qos_queue_deadline_and_close_but_needs_no_receiver_credit	Queued cancellation posts no bytes; running cancel/close/unregister retain the fd and buffer until CQE; then charges return.
+io_uring	restart	direct_reopen_uses_the_admitted_inode_and_honors_read_only_access	Local path replacement cannot switch the admitted inode; closed segment cannot gain a new fd from its old handle.
+io_uring	peer-kill	N/A	Local files have no peer process or epoch. Killing this process destroys its address space; kernel io_uring teardown, not a network release receipt, owns that exit.
+fabric	peer-kill	peer_exit_after_post_is_not_a_release_receipt	Real tcp provider and killed child, CQ interception; missing finish retains local MR/loan/admission and guards.
+fabric	timeout,cancel,close	held_completion_cancel_and_peer_retirement_keep_owners_until_drain	Real provider with held CQE; timeout/cancel/retirement cannot release owners before consumed completion and finish.
+fabric	partial-submit	partial_post_cq_error_and_poll_error_never_replay_a_write	Fallible vtable over real tcp provider; accepted prefix and CQ error do not permit WRITE replay.
+fabric	timeout	expired_drain_quarantines_posted_slices_and_source_grant	Non-terminal provider debt quarantines slices/MRs/AV/grant charges.
+fabric	close	mr_destroy_failure_is_sticky_and_keeps_backing_and_admission	Failed fi_close pins backing and charge and is attempted only once.
+fabric	restart	loopback_permissions_peer_retirement_and_new_epoch_are_scoped	Retired epoch rejects stale work, other peers remain live, and explicit new epoch opens.
