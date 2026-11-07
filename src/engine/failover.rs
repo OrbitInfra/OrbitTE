@@ -39,6 +39,23 @@ impl TransferEngine {
                 "remote staging requires --features cuda",
             ));
         }
+        if transport == Transport::Fabric {
+            if staging
+                || local.memory_type() != crate::MemoryType::Cpu
+                || selection.device_mask != u64::MAX
+            {
+                return Err(selection
+                    .rejected("libfabric requires host DRAM and its configured domain list"));
+            }
+            #[cfg(feature = "fabric")]
+            self.source
+                .fabric
+                .as_ref()
+                .ok_or_else(|| selection.rejected("libfabric is unavailable"))?
+                .ready()?;
+            #[cfg(not(feature = "fabric"))]
+            return Err(selection.rejected("build with --features fabric"));
+        }
         if transport == Transport::Rdma {
             #[cfg(feature = "rdma")]
             {
@@ -245,6 +262,27 @@ impl TransferEngine {
                 {
                     single(Err((
                         Error::Unavailable("build with --features cuda"),
+                        RemoteEffect::None,
+                    )))
+                }
+            }
+            Transport::Fabric => {
+                #[cfg(feature = "fabric")]
+                {
+                    single(match &self.source.fabric {
+                        Some(transport) => {
+                            transport.transfer(operation, peer, request, owner_deadline, posted)
+                        }
+                        None => Err((
+                            Error::Unavailable("libfabric is not configured"),
+                            RemoteEffect::None,
+                        )),
+                    })
+                }
+                #[cfg(not(feature = "fabric"))]
+                {
+                    single(Err((
+                        Error::Unavailable("build with --features fabric"),
                         RemoteEffect::None,
                     )))
                 }

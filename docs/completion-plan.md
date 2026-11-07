@@ -46,7 +46,7 @@ artifacts and hardware profiles.
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Complete at source level for the frozen cooperative profile. Current installed GPU/RDMA profiles remain in the verification queue |
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
-| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
+| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm remains planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | C ABI, C++ source adapters, Python wheels and configuration implemented |
 | P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Planned |
@@ -104,7 +104,7 @@ controls, and CPython 3.10–3.14 packaging. S21b adds driver-validated retained
 CUDA Array Interface/DLPack owners; its installed GPU profile is unqualified.
 S22 implements the checked [device plugin ABI](device-plugins.md), CPU shared-library
 controls and a CUDA provider using the fallible driver table. Its installed GPU
-profile remains unqualified. S23 implements the explicit [cooperative TENT TCP profile](tent-interop.md), with directional mixed-peer CPU controls. Native OrbiTE framing stays the default; the frozen peer cannot validate consumer epochs. S24–S26 retain their order.
+profile remains unqualified. S23 implements the explicit [cooperative TENT TCP profile](tent-interop.md), with directional mixed-peer CPU controls. Native OrbiTE framing stays the default; the frozen peer cannot validate consumer epochs. S24 implements the opt-in [libfabric host path](fabric.md), with real software-provider controls and an unrun EFA gate. S25 and S26 follow.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -385,7 +385,7 @@ unavailable instead of instantiating stubs.
 | Substage | Required implementation | Parity IDs | Hardware acceptance |
 | --- | --- | --- | --- |
 | P8.1 | MPComm adapter, host/NVIDIA registration, peer registry and completion mapping | B15 | Compatible endpoints; NVIDIA GDR only with the frozen provider's required capability |
-| P8.2 | Libfabric attributes, registration, endpoint and host data path | B17 | Real compatible provider; EFA on EFA hosts |
+| P8.2 | Implemented: libfabric attributes, bounded exact-range registration, domain progress and host READ/WRITE | B17 | Software `tcp;ofi_rxm` exercised in Linux CI; EFA installed gate written but unrun |
 
 Exit per row: build without the provider, explicit unavailable result,
 fake-provider contract tests, then real installed bytes, permissions, faults,

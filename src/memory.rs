@@ -72,7 +72,12 @@ struct HostAccess {
     cuda_inflight: bool,
     #[cfg(feature = "cuda")]
     fabric_pin: std::sync::Weak<crate::cuda::fabric::HostPin>,
-    #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
+    #[cfg(any(
+        feature = "cuda",
+        feature = "rdma",
+        feature = "io-uring",
+        feature = "fabric"
+    ))]
     dma: Vec<Range<usize>>,
 }
 
@@ -132,7 +137,12 @@ impl HostAccess {
                 return Err(Error::Unavailable("host allocation is owned by CUDA IPC"));
             }
         }
-        #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
+        #[cfg(any(
+            feature = "cuda",
+            feature = "rdma",
+            feature = "io-uring",
+            feature = "fabric"
+        ))]
         if self
             .dma
             .iter()
@@ -142,7 +152,12 @@ impl HostAccess {
                 "host range has an active native I/O loan",
             ));
         }
-        #[cfg(not(any(feature = "cuda", feature = "rdma", feature = "io-uring")))]
+        #[cfg(not(any(
+            feature = "cuda",
+            feature = "rdma",
+            feature = "io-uring",
+            feature = "fabric"
+        )))]
         let _ = range;
         Ok(())
     }
@@ -311,7 +326,12 @@ impl HostMemory {
                 cuda_inflight: false,
                 #[cfg(feature = "cuda")]
                 fabric_pin: Default::default(),
-                #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
+                #[cfg(any(
+                    feature = "cuda",
+                    feature = "rdma",
+                    feature = "io-uring",
+                    feature = "fabric"
+                ))]
                 dma: Vec::new(),
             }),
         }
@@ -469,7 +489,12 @@ impl HostMemory {
                 cuda_inflight: false,
                 #[cfg(feature = "cuda")]
                 fabric_pin: Default::default(),
-                #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
+                #[cfg(any(
+                    feature = "cuda",
+                    feature = "rdma",
+                    feature = "io-uring",
+                    feature = "fabric"
+                ))]
                 dma: Vec::new(),
             }),
         }
@@ -552,7 +577,12 @@ impl HostMemory {
                 cuda_inflight: false,
                 #[cfg(feature = "cuda")]
                 fabric_pin: Default::default(),
-                #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
+                #[cfg(any(
+                    feature = "cuda",
+                    feature = "rdma",
+                    feature = "io-uring",
+                    feature = "fabric"
+                ))]
                 dma: Vec::new(),
             }),
         }
@@ -603,7 +633,12 @@ impl HostMemory {
                 cuda_inflight: false,
                 #[cfg(feature = "cuda")]
                 fabric_pin: Default::default(),
-                #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
+                #[cfg(any(
+                    feature = "cuda",
+                    feature = "rdma",
+                    feature = "io-uring",
+                    feature = "fabric"
+                ))]
                 dma: Vec::new(),
             }),
         })
@@ -671,7 +706,12 @@ impl HostMemory {
     }
 }
 
-#[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+#[cfg(any(
+    feature = "rdma",
+    feature = "io-uring",
+    feature = "gds",
+    feature = "fabric"
+))]
 pub(crate) struct DmaLease {
     #[cfg(target_os = "linux")]
     _shared_access: Option<crate::transport::shm::RangeLock>,
@@ -681,7 +721,12 @@ pub(crate) struct DmaLease {
     address: NonNull<u8>,
 }
 
-#[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+#[cfg(any(
+    feature = "rdma",
+    feature = "io-uring",
+    feature = "gds",
+    feature = "fabric"
+))]
 impl DmaLease {
     #[cfg(feature = "rdma")]
     pub(crate) fn registration(&self) -> RegisteredMemory {
@@ -699,13 +744,18 @@ impl DmaLease {
     pub(crate) fn address(&self) -> NonNull<u8> {
         self.address
     }
-    #[cfg(any(feature = "rdma", feature = "io-uring"))]
+    #[cfg(any(feature = "rdma", feature = "io-uring", feature = "fabric"))]
     pub(crate) fn len(&self) -> usize {
         self.range.len()
     }
 }
 
-#[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+#[cfg(any(
+    feature = "rdma",
+    feature = "io-uring",
+    feature = "gds",
+    feature = "fabric"
+))]
 impl Drop for DmaLease {
     fn drop(&mut self) {
         match &self.allocation {
@@ -841,7 +891,12 @@ impl RegisteredMemory {
         self.memory_type() == MemoryType::Cuda
     }
 
-    #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+    #[cfg(any(
+        feature = "rdma",
+        feature = "io-uring",
+        feature = "gds",
+        feature = "fabric"
+    ))]
     pub(crate) fn dma_lease(&self, offset: usize, length: usize) -> Result<DmaLease> {
         checked_range(offset, length, self.len())?;
         let offset = self

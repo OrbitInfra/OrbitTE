@@ -34,7 +34,8 @@ fixtures and CPU codec checks are available for the future mixed-peer profile.
 | [HP-TCP](hp-tcp.md) | Qualified on Linux loopback | Least-loaded single-operation lanes and striped READs on multiple loopback IPv4 rails. Physical rail gate unrun |
 | [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
 | [MNNVL / EGM](cuda-ipc.md#multi-node-nvlink-and-egm) | Implemented; installed profile unqualified | CUDA VMM fabric handles, GPU and host-NUMA exports, bounded imports and checked close. The multi-node device and EGM gates are unrun |
-| MPComm, libfabric/EFA | Planned (P8) | Optional network providers |
+| [Libfabric host DRAM](fabric.md) | Implemented (P8.2); software TCP provider tested in Linux CI | Runtime-loaded opt-in provider, bounded RMA grants and sticky native retention. EFA is implemented; installed profile unqualified |
+| MPComm | Planned (P8.1) | Optional network provider |
 
 ## Memory and batches
 

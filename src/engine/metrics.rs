@@ -71,6 +71,8 @@ impl TransferEngine {
         }
         #[cfg(feature = "rdma")]
         let rdma = self.source.rdma.as_ref().map(Arc::downgrade);
+        #[cfg(feature = "fabric")]
+        let fabric = self.source.fabric.as_ref().map(Arc::downgrade);
         let queue = self.runtime_queue.clone();
         let credits = self.receiver_credits.clone();
         let issuer = self.source.credit_issuer.clone();
@@ -198,6 +200,21 @@ impl TransferEngine {
                     ("orbite_rdma_rail_errors_total", s.rail_errors),
                     ("orbite_rdma_rail_probes_total", s.rail_probes),
                     ("orbite_rdma_rail_recoveries_total", s.rail_recoveries),
+                ]);
+            }
+            #[cfg(feature = "fabric")]
+            if let Some(f) = fabric.as_ref().and_then(std::sync::Weak::upgrade) {
+                let s = f.stats();
+                snapshot.gauges.extend([
+                    ("orbite_fabric_registered_bytes", s.registered_bytes),
+                    ("orbite_fabric_memory_regions", s.memory_regions as u64),
+                    ("orbite_fabric_posted_slices", s.posted_slices as u64),
+                    ("orbite_fabric_retained_slices", s.retained_slices as u64),
+                    ("orbite_fabric_peer_addresses", s.peer_addresses as u64),
+                ]);
+                snapshot.counters.extend([
+                    ("orbite_fabric_quarantine_events_total", s.quarantined),
+                    ("orbite_fabric_cq_errors_total", s.cq_errors),
                 ]);
             }
             snapshot

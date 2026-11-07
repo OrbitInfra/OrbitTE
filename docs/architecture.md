@@ -328,6 +328,41 @@ The pool layout is immutable across admitted work. See
 Library diagnostics use the shared `log` facade. OrbiTE installs no logger.
 Consumers can enable selector warnings and errors through their own logger.
 
+## Libfabric ownership
+
+`transport/fabric/{fabric_attrs,fabric_context,fabric_transport}.rs` follows the
+frozen TENT host path. The Linux-only feature builds a C inline-table bridge
+against libfabric headers; every SDK object is opaque across that bridge and
+`libfabric.so.1` is loaded at runtime. There is no libfabric link dependency.
+Each installed domain has one joined progress worker, bounded MR and slice
+charges, a CQ and an address-vector cache. [Libfabric](fabric.md) documents
+configuration, grant framing and limits.
+
+Deliberate differences have negative controls:
+
+- Installation is opt-in; `default_build_never_selects_or_loads_a_fabric_owner`
+  and `runtime_loading_attributes_and_configuration_are_explicit` check default
+  isolation, absent libraries/symbols, exact domain filtering and delivery mode.
+- TENT advertises long-lived whole-buffer keys. OrbiTE registers exact,
+  operation-permitted source grants and requires their completion-bound nonce.
+  `malformed_finish_cannot_release_a_published_grant` and
+  `peer_exit_after_post_is_not_a_release_receipt` keep grants charged without a
+  receipt. A completed source loan is released before its ACK; the real byte
+  controls immediately reuse both ranges to check that publication boundary.
+- EFA also requires delivery-complete WRITEs. Local transmit completion alone
+  cannot authorize release at the target. Unsupported modes fail discovery.
+- Partial post, CQ errors and timeout never replay a posted WRITE or claim a
+  partial physical request succeeded. The partial-post/CQ-error control checks
+  unknown effect and retained loans; the held-drain control keeps cookies and
+  admission after the destruction window. Failed `fi_close` and `fi_av_remove`
+  are sticky, with single-call counters and retained backing controls.
+- MR/slice/address limits supplement TENT's PTE and TX depth limits. The queued
+  cancellation/capacity control proves rejection before payload. Provider
+  environment is not mutated; the configuration control preserves `FI_HMEM`.
+
+The configured EFA path remains implemented but unqualified. Software-provider
+results establish neither EFA DMA safety nor physical-network performance.
+
 ## Batch progress and notification ownership
 
 The batch executor runs each admitted transport to its receipt. Submitting

@@ -315,7 +315,7 @@ fn materialize(root: Value, mnnvl: bool) -> Result<EngineConfig> {
         }
         Ok(())
     })?;
-    providers.finish(&mut c);
+    providers.finish(&mut c)?;
     #[cfg(feature = "rdma")]
     rdma.finish(&mut c)?;
     c.bind_addr = if host.is_empty() {

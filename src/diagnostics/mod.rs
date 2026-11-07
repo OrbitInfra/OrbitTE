@@ -120,6 +120,7 @@ pub fn version_snapshot() -> Snapshot {
                 ("tpu", false),
                 ("cuda", cfg!(feature = "cuda")),
                 ("rdma", cfg!(feature = "rdma")),
+                ("fabric", cfg!(feature = "fabric")),
                 ("uring", cfg!(feature = "io-uring")),
                 ("gds", cfg!(feature = "gds")),
                 ("metrics", cfg!(feature = "metrics")),

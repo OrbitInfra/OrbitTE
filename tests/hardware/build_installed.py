@@ -22,6 +22,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
+        "fabric": (["fabric"], "orbite-fabric", "orbite-installed-fabric", "tests/hardware/fabric.rs"),
         "device-plugin": (["cuda", "device-plugin"], "orbite-device-plugin", "libtent-device-plugin", "tests/hardware/device_plugin.c"),
         "python-cuda": (["cuda"], "orbite-python-cuda", "orbite-installed-python-cuda", "tests/hardware/python_cuda.py"),
         "cpp-abi": (["rdma", "cuda"], "orbite-cpp-hardware", "libtent-cpp", "tests/hardware/cpp_abi.cpp"),
@@ -157,6 +158,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         if consumer_kind == 'mixed-gpu':
             fixture_files.extend(library / 'tests/hardware' / name
                                  for name in ('mixed_gpu.py', 'run.py', 'supervise.py'))
+        if consumer_kind == 'fabric':
+            fixture_files.append(library / 'tests/hardware/fabric_run.py')
         fixture_hashes = {}
         for path in fixture_files:
             relative = path.relative_to(library)
@@ -267,7 +270,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         if probe != protocol:
             raise ValueError('unexpected installed consumer protocol')
         linkage = run('ldd', ['ldd', str(binary)], cwd=output)
-        if 'not found' in linkage or ('libibverbs' in linkage) != ('rdma' in features) or 'libcuda' in linkage or (storage and ('liburing' in linkage or 'libcufile' in linkage)):
+        if 'libfabric' in linkage or 'not found' in linkage or ('libibverbs' in linkage) != ('rdma' in features) or 'libcuda' in linkage or (storage and ('liburing' in linkage or 'libcufile' in linkage)):
             raise ValueError('installed consumer has unexpected native linkage')
         libraries = {word: digest(Path(word)) for word in linkage.split() if word.startswith('/') and Path(word).is_file()}
         manifest.update(status='passed', native_libraries=libraries, archive=str(archive), archive_sha256=digest(archive),
@@ -288,6 +291,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('device-plugin', 'python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
+    parser.add_argument('--consumer', choices=('fabric', 'device-plugin', 'python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

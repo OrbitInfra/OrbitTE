@@ -11,10 +11,11 @@ use crate::{Error, MemoryType, Priority, RemoteRegion, Result, Transport};
 pub use config::{IntentType, SegmentType, SelectionPolicy, TransportSelectorConfig};
 pub use qp_pools::QpPool;
 
-const DEFAULT_TRANSPORTS: [Transport; 6] = [
+const DEFAULT_TRANSPORTS: [Transport; 7] = [
     Transport::Mnnvl,
     Transport::Nvlink,
     Transport::Rdma,
+    Transport::Fabric,
     Transport::Shm,
     Transport::HpTcp,
     Transport::Tcp,
@@ -49,6 +50,13 @@ impl SelectionContext<'_> {
         }
         match transport {
             Transport::Unspec | Transport::IoUring | Transport::Gds => false,
+            Transport::Fabric => {
+                cfg!(feature = "fabric")
+                    && self.local_memory == MemoryType::Cpu
+                    && self.remote.memory_type == MemoryType::Cpu
+                    && self.local_segment.libfabric
+                    && self.remote_segment.libfabric
+            }
             Transport::Shm => {
                 cfg!(target_os = "linux")
                     && self.local_memory == MemoryType::Cpu
@@ -135,7 +143,7 @@ pub(crate) struct SelectionResult {
     pub(crate) transport: Transport,
     // Ordered once against the original public request, before merge. Slots
     // past the end contain Unspec. Engine failover alone advances this cursor.
-    ranked: [Transport; 6],
+    ranked: [Transport; 7],
     pub(crate) initial_attempts: usize,
     pub(crate) cancellable_only: bool,
     pub(crate) device_mask: u64,
@@ -153,7 +161,7 @@ impl SelectionResult {
     pub(crate) fn plain(transport: Transport) -> Self {
         Self {
             transport,
-            ranked: [Transport::Unspec; 6],
+            ranked: [Transport::Unspec; 7],
             initial_attempts: 0,
             cancellable_only: false,
             device_mask: u64::MAX,
@@ -176,7 +184,7 @@ impl SelectionResult {
     }
 
     pub(crate) fn pin_cancellable(&mut self) {
-        self.ranked = [Transport::Unspec; 6];
+        self.ranked = [Transport::Unspec; 7];
         self.ranked[0] = self.transport;
         self.cancellable_only = true;
     }

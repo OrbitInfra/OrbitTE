@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive', device-plugin, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive', device-plugin, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin', fabric, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin,fabric']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITE_FEATURES: ${{ matrix.features }}
@@ -34,6 +34,13 @@ jobs:
         if: contains(matrix.features, 'rdma')
         timeout-minutes: 10
         run: .github/scripts/install-native-deps.sh g++ cmake pkg-config clang-18 libclang-18-dev libibverbs-dev
+      - name: Install the required real libfabric TCP provider
+        if: contains(matrix.features, 'fabric')
+        run: |
+          .github/scripts/install-native-deps.sh g++ clang-18 libclang-18-dev libfabric-dev libfabric-bin
+          echo "FI_PROVIDER=tcp" >> "$GITHUB_ENV"
+          echo "ORBITE_REQUIRE_FABRIC=1" >> "$GITHUB_ENV"
+          FI_PROVIDER=tcp fi_info -p 'tcp;ofi_rxm' -t FI_EP_RDM
       - name: Verify the shipped local-copy PTX with the generating compiler
         if: matrix.toolchain == 'stable' && matrix.features == 'cuda'
         run: |
@@ -51,7 +58,7 @@ jobs:
           target=aarch64-apple-darwin
           rustup target add "$target"
           cargo check --locked --target "$target" --no-default-features
-          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive device-plugin; do
+          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive device-plugin fabric; do
             log="$RUNNER_TEMP/non-linux-$features.log"
             if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
               echo "unexpected success for $target with $features"
@@ -91,6 +98,14 @@ jobs:
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"
       - name: Test CPU TCP and ownership
         run: cargo test --workspace --locked --features "$ORBITE_FEATURES"
+      - name: Repeat fabric ownership and real-process controls
+        if: matrix.features == 'fabric'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          bash .github/scripts/repeat-fabric.sh "$binary" "$RUNNER_TEMP/fabric-repeats"
+          if ldd "$binary" | grep -F libfabric; then exit 1; fi
+          python3 tests/hardware/build_installed.py --consumer fabric --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/fabric-installed"
       - name: Repeat cooperative TENT requester ownership controls
         if: matrix.features == ''
         run: |

@@ -674,7 +674,7 @@ fn default_order_legacy_force_tcp_and_strict_hints() -> Result<()> {
         ))?;
         assert_eq!(config.policy[0].transports, [expected]);
     }
-    for provider in ["ub", "xpu", "mlu", "hylink", "fabric", "mpcomm"] {
+    for provider in ["ub", "xpu", "mlu", "hylink", "mpcomm"] {
         let json = format!(
             r#"{{"policy":[{{"name":"unsupported","segment_type":"memory","transports":["{provider}"]}}]}}"#
         );
