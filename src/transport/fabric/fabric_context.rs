@@ -522,15 +522,13 @@ pub(super) struct Task {
     operation: TransferOp,
     peer: PeerKey,
     until: Instant,
+    drain_until: Instant,
     posted_at: Instant,
     context: Arc<Context>,
 }
 impl Task {
     pub fn wait(&self, posted: &mut bool) -> Result<()> {
-        let end = self
-            .until
-            .checked_add(self.context.config.quiesce())
-            .ok_or(Error::InvalidRange)?;
+        let end = self.drain_until;
         let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
         loop {
             *posted |= s.posted;
@@ -583,6 +581,13 @@ impl Context {
         peer: PeerKey,
         until: Instant,
     ) -> Result<Arc<Task>> {
+        // Validate before commit can post anything. A failed drain-deadline
+        // calculation after posting must never masquerade as unposted work.
+        let drain_until = until
+            .checked_add(self.config.quiesce())
+            .ok_or(Error::InvalidConfig(
+                "fabric drain deadline overflows monotonic clock",
+            ))?;
         let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(e) = s.failure {
             return Err(unquiesced(e));
@@ -609,6 +614,7 @@ impl Context {
             operation,
             peer,
             until,
+            drain_until,
             posted_at: Instant::now(),
             context: self.clone(),
         });

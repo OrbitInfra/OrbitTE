@@ -89,6 +89,8 @@ establish remote quiescence. This deliberately reports no successful request
 prefix for a partially failed physical owner, even if later slices completed.
 Public aliases share that result. Queued batch cancellation is supported;
 running fabric work drains and does not claim cancellation support.
+The drain deadline is checked before any slice can be posted; an overflowing
+caller deadline cannot turn running work into a provably unposted result.
 
 `close_segment(endpoint, epoch, timeout)` fences and drains the peer before
 removing its address-vector entries. Other peers continue. Native close/remove
