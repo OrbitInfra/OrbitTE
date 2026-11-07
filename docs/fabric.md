@@ -31,7 +31,8 @@ Use `Transport::Fabric` or a selector rule with `"transports": ["fabric"]`.
 The configured domain whitelist supplies fabric NIC selection; RDMA policy
 masks and remote staging do not apply. There is no hidden switch to another
 provider or transport. The existing explicit policy walk may recover a
-provably unposted rejection on a later candidate.
+provably unposted rejection on a later candidate for `Unspec`. An explicit
+`Transport::Fabric` keeps only that candidate, even with a retry budget.
 
 The TENT loader accepts the following keys under `transports/fabric`. Typed
 fields have the same names. Defaults match the frozen transport except that

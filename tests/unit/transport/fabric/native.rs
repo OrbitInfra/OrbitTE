@@ -260,7 +260,9 @@ fn endpoint_and_address_destroy_failures_are_never_retried() {
 fn registration_rejection_is_unposted_and_never_touches_bytes() {
     let f = Arc::new(Faults::default());
     f.register_error.store(true, SeqCst);
-    let p = Pair::new(f.clone(), |_| {});
+    let p = Pair::new(f.clone(), |c| {
+        c.max_failover_attempts = 3;
+    });
     let b = p.submit(TransferOp::Read, &[p.request(1, 8)]);
     assert_eq!(b.wait(WAIT).unwrap().state, BatchState::Failed);
     assert_eq!(f.posts.load(SeqCst), 0);

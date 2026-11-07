@@ -487,10 +487,14 @@ impl TransportSelector {
         };
         result.ranked[0] = result.transport;
         let mut count = 1;
-        for &t in candidates {
-            if !result.ranked[..count].contains(&t) && available(t) {
-                result.ranked[count] = t;
-                count += 1;
+        // An explicit fabric hint promises that provider, not a silent socket
+        // substitute. Unspec still carries the policy's explicit fallback order.
+        if hint != Transport::Fabric {
+            for &t in candidates {
+                if !result.ranked[..count].contains(&t) && available(t) {
+                    result.ranked[count] = t;
+                    count += 1;
+                }
             }
         }
         result.named = named.is_some();

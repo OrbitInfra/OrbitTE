@@ -356,6 +356,9 @@ Deliberate differences have negative controls:
   unknown effect and retained loans; the held-drain control keeps cookies and
   admission after the destruction window. Failed `fi_close` and `fi_av_remove`
   are sticky, with single-call counters and retained backing controls.
+- Explicit fabric hints never substitute another transport, even on a clean
+  registration rejection. The registration-rejection control enables retries
+  and proves no payload moved; `Unspec` policy fallback has its own byte check.
 - MR/slice/address limits supplement TENT's PTE and TX depth limits. The queued
   cancellation/capacity control proves rejection before payload. Provider
   environment is not mutated; the configuration control preserves `FI_HMEM`.
