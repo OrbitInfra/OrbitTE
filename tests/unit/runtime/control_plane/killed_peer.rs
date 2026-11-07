@@ -1,5 +1,6 @@
 //! A real requester process killed after a partial payload, before its TCP socket closes.
 use crate::test_support::EVENTUAL_PROGRESS;
+use std::fmt::Write as _;
 use std::{
     fs,
     io::{Read, Write},
@@ -20,6 +21,10 @@ impl KilledPeer {
             "orbite-p10-{}",
             crate::SourceEpoch::generate().unwrap()
         ));
+        let mut encoded = String::with_capacity(header.len() * 2);
+        for byte in header {
+            write!(&mut encoded, "{byte:02x}").unwrap();
+        }
         let child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -27,13 +32,7 @@ impl KilledPeer {
                 "--ignored",
             ])
             .env("ORBITE_P10_PEER", endpoint.to_string())
-            .env(
-                "ORBITE_P10_HEADER",
-                header
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>(),
-            )
+            .env("ORBITE_P10_HEADER", encoded)
             .env("ORBITE_P10_REPLY", reply_bytes.to_string())
             .env("ORBITE_P10_MARKER", &marker)
             .stdin(Stdio::piped())

@@ -203,7 +203,10 @@ external output directory; failed runs are kept.
 | Per-peer NVLink IPC retirement | Implemented; installed profile unqualified | With the same packaged consumer on a reserved NVLink host: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile nvlink --source-bind 127.0.0.1:19091 --other-bind 127.0.0.1:19092 --bind 127.0.0.1:0 --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --output "$RUN/nvlink"` | Import/export release and guards; shim controls supply delayed-event and failed-close evidence |
 | Per-peer MNNVL retirement | Implemented; installed profile unqualified | On a reserved fabric pair: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile mnnvl --source-host "$SOURCE_HOST" --source-binary "$SOURCE_BINARY" --source-bind "$SOURCE_ADDR:19091" --other-bind "$SOURCE_ADDR:19092" --bind "$REQUESTER_ADDR:0" --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --domain "$FABRIC_DOMAIN" --output "$RUN/mnnvl"` | Native VMM import release, guarded bytes and fresh epoch; actual fabric domain comes from the platform owner |
 | EFA host DRAM (S24, B17) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer fabric --toolchain stable --output "$ART"`, then copy that clean artifact to the same path on both hosts and run `python3 tests/hardware/fabric_run.py --artifact "$ART" --source-ssh "$SOURCE_SSH" --source-ip "$SOURCE_IP" --requester-ip "$REQUESTER_IP" --source-domain "$SOURCE_DOMAIN" --requester-domain "$REQUESTER_DOMAIN" --source-device "$SOURCE_EFA" --requester-device "$REQUESTER_EFA" --output "$OUT/efa.json"`. Repeat with 1.85.0 and a fresh artifact. | Two EFA hosts with delivery-complete support; exact provider/domain, native EFA byte-counter deltas, guarded READ/WRITE and checked close. Written, not run. |
-| [P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration]{#queue-release} | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
+| [P10 native GDS receipt faults]{#queue-p10-gds} | Written and compiled; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer gds-p10 --toolchain stable --output "$ART"`. For each `MODE` in `drain quarantine`, run `python3 "$ART/gds_p10_run.py" --artifact "$ART" --directory "$NVME_EXT4_DIR" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --mode "$MODE" --output "$RUN/$MODE"`. Repeat with 1.85.0 and a fresh artifact. | Real cuFile submit with withheld status receipts; native-route counters, guarded READ, retained fd/GPU/charges. Not run. |
+| P10 RDMA posted-work faults | Prepared; installed rerun required | Use the [installed host runner](installed-host.md#in-flight-dma-interruption) with `installed-inflight-dma`, `installed-lost-completion`, `installed-cleanup-failure` and restart profile cases: `python3 tests/hardware/run.py --profile "$P10_RDMA_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbite-rdma-host" --output "$RUN"`. Build with `python3 tests/hardware/build_installed.py --consumer host --output "$ART"`. | Existing exact WR/CQE/retirement and byte controls; no new hardware run. |
+| P10 cooperative CUDA IPC faults | Prepared; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer nvlink --output "$ART"`. For each `MODE` in `batch-graceful batch-requester-exit`, run `python3 "$ART/nvlink_run.py" --binary "$ART/installed/bin/orbite-nvlink" --observer "$ART/libnvlink_observer.so" --binary-sha256 "$BIN_SHA" --observer-sha256 "$OBSERVER_SHA" --devices 0,1 --lock-root "$GPU_LOCK_ROOT" --output "$RUN/$MODE" --mode "$MODE" --memory device --payload 65536`. | Reuses native copy/event observer and grouped lifetime controls; no exporter-crash claim. Not run. |
+| [P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration]{#queue-release} | CPU preparation implemented; hardware acceptance open | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
 qualified in CI and do not wait here.
@@ -231,6 +234,14 @@ byte and guard for H2D and D2H. Four matched reverse-order layouts cover
 1, 16, 257 and 1,024 fragments. After five warmups the driver records 30
 submit-to-drain wall times per direction and backend and their medians. The
 unrun gate reserves qualification and timing claims for the named GPU.
+
+## CPU benchmark evidence
+
+S26's [method and reproduction commands](benchmarks.md) pin the workload,
+compiler and host in external CI artifacts. The raw `cpu-bench-*` artifacts
+include every checked sample, process CPU time, p50/p99 and throughput. The
+`p10-cpu-*` artifacts record the executable fault matrix and repeat counts.
+The summary below is scoped to those artifacts; it is not hardware qualification.
 
 ## Metrics
 

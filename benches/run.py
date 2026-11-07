@@ -62,6 +62,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("MC_", "TENT_", "MOONCAKE_")) and k not in ("LD_PRELOAD", "LD_LIBRARY_PATH", "ORBITE_BENCH_CORRUPT_BYTE")}
     commands = []
+    tent_env = {"MC_RPC_CLIENT_IO_THREADS": str(a.workers), "MC_TE_RPC_CLIENT_IO_THREADS": str(a.workers)}
 
     def run(name, cmd, timeout=1200, overrides=None, expect_failure=False):
         cmd = list(map(str, cmd))
@@ -96,7 +97,7 @@ def main():
                 "cpu": run("cpu", ["lscpu"]), "affinity": sorted(os.sched_getaffinity(0)),
                 "rustc": run("rustc", ["rustc", "-Vv"]), "cxx": run("cxx", ["c++", "--version"]),
                 "parameters": {k: str(v) if isinstance(v, Path) else v for k, v in vars(a).items()},
-                "caller_threads": 1, "workers_per_engine": a.workers, "merge": True, "retries": 0,
+                "caller_threads": 1, "workers_per_engine": a.workers, "tent_rpc_pools": tent_env, "merge": True, "retries": 0,
                 "poll": "128 hot then 1,2,4,...,128,200 us capped", "metrics": False,
                 "timing": "allocate batch + submit + poll + free; per-batch wall and whole-process CPU",
                 "checks": "every warmup and sample; changed pattern, reset destination, full bytes and guards; excluded from time",
@@ -107,7 +108,7 @@ def main():
                 "status": "running"}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
     for name, exe in [("orbite", rust), ("tent", tent)]:
-        text = run(name+"-bad-byte", [exe, "tcp", "read", 4096, 1, "contiguous", 1, 1, a.workers, "-"], overrides={"ORBITE_BENCH_CORRUPT_BYTE": "1"}, expect_failure=True)
+        text = run(name+"-bad-byte", [exe, "tcp", "read", 4096, 1, "contiguous", 1, 1, a.workers, "-"], overrides=({**(tent_env if name == "tent" else {}), "ORBITE_BENCH_CORRUPT_BYTE": "1"}), expect_failure=True)
         if '"verified":true' in text:
             raise ValueError("corrupted guard produced a report")
     shapes = [(size, 1, "contiguous") for size in a.sizes]
@@ -126,7 +127,7 @@ def main():
                         path = directory.resolve() / ("orbite-bench-"+name)
                         if path.exists(): raise FileExistsError(path)
                         try:
-                            text = run(name, [exe, backend, op, block, batch, layout, a.warmup, a.samples, a.workers, path])
+                            text = run(name, [exe, backend, op, block, batch, layout, a.warmup, a.samples, a.workers, path], overrides=tent_env if implementation == "tent" else None)
                             row = json.loads(text)
                             summary = summarize(row, a.samples, block*batch)
                             if implementation == "orbite" and backend == "io_uring" and row["direct_io"] != profile.endswith("ext4"):

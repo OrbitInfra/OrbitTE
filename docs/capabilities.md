@@ -67,10 +67,14 @@ fixtures and CPU codec checks support the independent frozen oracle.
 | Receiver credits | Implemented | Four named cumulative grants, configured receiver windows and drain-fenced epoch retirement. See [credits](async-batches.md#receiver-credit-gating) |
 | Transport failover | Implemented | Bounded physical retries, epoch-pinned Describe and release evidence. Installed RNIC profile unqualified. See [transport attempts](async-batches.md#transport-attempts) |
 | RDMA rail cooldown and recovery | Implemented; installed gate unrun | [Rail health](rdma-cuda.md#rail-health) |
-| Offline version diagnostics | Implemented | Packaged CLI, Rust API and native header. See [diagnostics](diagnostics.md). |
+| Offline version diagnostics | Implemented | Packaged CLI and Rust API. See [diagnostics](diagnostics.md). |
 | TENT metrics, request/attempt accounting and exporter health | Implemented (P6, opt-in) | [Metrics](metrics.md) |
 
 ## Failure handling
+
+[CPU benchmark and fault fixtures](benchmarks.md) cover verified size/batch
+sweeps and the software backend lifetime matrix. They add no hardware
+qualification; GPU/RDMA/GDS installed fault fixtures remain queued.
 
 | Capability | Status | Limits |
 | --- | --- | --- |

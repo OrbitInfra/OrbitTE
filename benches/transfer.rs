@@ -132,23 +132,38 @@ fn result(
     );
 }
 fn cpu(p: &Parameters) -> Result<()> {
-    let mut src = vec![0xa5; p.extent() + 2 * PAGE];
+    let mut src = vec![0xa5; p.extent() + 3 * PAGE];
     let mut dst = src.clone();
+    let aligned = |data: &[u8]| {
+        let base = data.as_ptr() as usize;
+        base.next_multiple_of(PAGE) - base + PAGE
+    };
+    let so = aligned(&src);
+    let to = aligned(&dst);
     let mut ns = Vec::new();
     let mut cpus = Vec::new();
     for i in 0..p.warmup + p.samples {
         let image = p.image(i);
-        src[PAGE..PAGE + p.extent()].copy_from_slice(&image);
+        src[so..so + p.extent()].copy_from_slice(&image);
         dst.fill(0xa5);
         let c = cpu_ns()?;
         let start = Instant::now();
         for b in 0..p.batch {
-            let range = PAGE + b * p.stride()..PAGE + b * p.stride() + p.block;
-            dst[range.clone()].copy_from_slice(&src[range]);
+            let off = b * p.stride();
+            dst[to + off..to + off + p.block].copy_from_slice(&src[so + off..so + off + p.block]);
         }
         let elapsed = start.elapsed().as_nanos() as u64;
         let c = cpu_ns()? - c;
-        check(dst == src, "CPU bytes or guards differ")?;
+        for (buffer, offset) in [(&src, so), (&dst, to)] {
+            check(
+                buffer[offset..offset + p.extent()] == image
+                    && buffer[..offset]
+                        .iter()
+                        .chain(buffer[offset + p.extent()..].iter())
+                        .all(|b| *b == 0xa5),
+                "CPU bytes or guards differ",
+            )?;
+        }
         if i >= p.warmup {
             ns.push(elapsed);
             cpus.push(c);

@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
         tent_set_config("transports/io_uring/pinned_staging", "false");
         for (const auto* name : {"tcp", "rdma", "shm", "hp_tcp", "io_uring", "nvlink", "mnnvl", "gds", "ascend_direct", "sunrise_link", "mpcomm", "tpu", "ub", "xpu", "hylink", "fabric", "mlu", "memfabric"}) {
             const auto key=std::string("transports/")+name+"/enable";
-            tent_set_config(key.c_str(), backend==name ? "true" : "false");
+            tent_set_config(key.c_str(), (backend==name || (file && std::string(name)=="tcp")) ? "true" : "false");
         }
         source=tent_create_engine(); requester=tent_create_engine();
         check(source && requester && tent_available(source)>0 && tent_available(requester)>0, "TENT engines unavailable");
