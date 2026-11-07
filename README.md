@@ -3,7 +3,7 @@
     <source media="(prefers-color-scheme: dark)" srcset="docs/_static/orbite-logo-dark.svg">
     <img src="docs/_static/orbite-logo.svg" width="60%" alt="OrbiTE">
   </picture>
-  <h2>A Rust-native transfer engine for AI infrastructure</h2>
+  <h2>The KV data plane for LLM inference on NVIDIA</h2>
   <a href="https://orbitinfra.github.io/OrbiTE/"><strong>Documentation</strong></a>
   | <a href="https://orbitinfra.github.io/OrbiTE/getting-started.html"><strong>Quick Start</strong></a>
   | <a href="https://orbitinfra.github.io/OrbiTE/architecture.html"><strong>Architecture</strong></a>
@@ -18,12 +18,31 @@
 
 ## Overview
 
-OrbiTE is the transfer engine for [OrbitKV](https://github.com/OrbitInfra/OrbitKV)'s
-KV cache, replacing its earlier Mooncake TENT dependency. It moves bytes between
-CPU memory, NVIDIA GPUs and local SSDs, within and across machines, so every
-end-to-end cache path, including GPU↔DRAM and GPU↔SSD, runs through one engine.
+OrbiTE is the KV data plane for LLM inference on NVIDIA. It moves KV between
+GPUs, DRAM, local SSD and peer hosts with two guarantees: memory, registrations
+and staging are never released before the hardware provably stops accessing
+them, and transfers are scheduled by inference intent (decode-critical first,
+prefetch and write-back yield).
+
+[OrbitKV](https://github.com/OrbitInfra/OrbitKV) is the first consumer, for cache
+tiering and cross-node reuse. Prefill→decode (P/D) KV transfer is the second
+target use case, using the same transfer and lifetime primitive. The
+[post-0.1.0 plan](docs/completion-plan.md#release-ladder) starts with a NIXL
+backend design, after the GDR and NVLink installed profiles qualify.
+
 The design follows Mooncake TENT's engine, transport, context, buffer, endpoint
-and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
+and worker boundaries in Rust. Intent scheduling uses configured admission and
+QoS policies; transport-specific priority remains as documented in
+[transport selection](docs/transport-selection.md). Current support and
+hardware evidence are listed in [capabilities](docs/capabilities.md).
+
+Non-goals:
+
+- Cluster discovery and metadata, which belong to the consumer.
+- Collectives.
+- Non-NVIDIA accelerators.
+- TENT wire interoperability.
+- General-purpose RPC.
 
 <div align="center">
   <img src="docs/_static/architecture.svg" width="95%" alt="OrbiTE network transports and the implemented DRAM and GPU paths to local SSD">

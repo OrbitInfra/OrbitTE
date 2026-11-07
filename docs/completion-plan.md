@@ -1,12 +1,11 @@
 # OrbiTE completion plan
 
-Build an independently maintained Rust transfer engine for CPU DRAM, NVIDIA
-GPUs and local SSDs against the [frozen latest TENT contract](tent-parity.md).
-OrbiTE replaces OrbitKV's earlier Mooncake TENT dependency and must carry every
-end-to-end KV cache path, including GPU↔DRAM and GPU↔SSD. CPU and CUDA are the
-selected platforms; other accelerator vendors are outside scope. The target
-keeps TENT's applicable runtime, language and operational behavior and the selected
-transport types; MPComm is deferred.
+Follow the [product positioning and non-goals](https://github.com/OrbitInfra/OrbiTE#overview):
+OrbiTE is the KV data plane for LLM inference on NVIDIA, with OrbitKV cache
+tiering and cross-node reuse as its first use case. This plan delivers the
+[frozen TENT design](tent-parity.md) through Rust and Python, and records the
+evidence for each owner and profile. P/D integration follows the release gates
+below; it is not a current capability claim. MPComm remains deferred.
 
 Storage and optional network providers are opt-in builds, like `rdma` and
 `cuda`: a network/memory-only build must run without file/SSD executors,
@@ -455,7 +454,9 @@ publish packages.
 | --- | --- |
 | `0.1.0-alpha.N` | Maintainer-published milestones during early development; APIs remain unstable. The current release is `0.1.0-alpha.1`, published from main [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490). |
 | `0.1.0-beta.1` | S21, S24 and S26 and per-peer retirement are complete; S25 is deferred. The Rust API and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration and Python must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
+| Test consolidation (after the beta.1 API freeze) | Audit `tests/unit` (about 72k lines) for repeated assertions of the same invariant through the same owner, often added by different steps; merge them into table-driven tests. Preserve every negative control and distinct failure path: timeout, cancel, partial submit, `Unquiesced`, stale epoch and each deliberate TENT difference. CPU shims and `tests/hardware` gates are out of scope. Report source/test line deltas and invariant counts before/after; the invariant count must be unchanged. Tests-only refactor: no production change and no coverage drop. |
 | `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
+| Post-0.1.0 P/D integration design | Begin after the GDR and NVLink installed profiles qualify. Prefer an OrbiTE NIXL backend plugin so the official vLLM `NixlConnector`, SGLang NIXL backend and Dynamo can select it without engine changes or forks; OrbiTE does not ship custom P/D connectors. Write a design document first: capability gap; NIXL descriptors, notifications and release semantics versus physical quiescence; abort safety for in-flight WRITEs into decode pages; joint arbitration of P/D and cache traffic; and TTFT/ITL against NIXL+UCX and Mooncake. Any C/C++ glue is purpose-built for that plugin. This is a plan, not implemented code. |
 
 Beta evidence uses the existing [source and oracle checks](qualification.md#reproduce-and-review),
 [HP-TCP](qualification.md#hp-tcp-rail-verification),

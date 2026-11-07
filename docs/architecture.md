@@ -2,6 +2,11 @@
 
 OrbiTE follows frozen Mooncake TENT's engine, transport, context, registered
 buffer, endpoint and worker boundaries, implemented as Rust resource owners.
+The [product positioning](https://github.com/OrbitInfra/OrbiTE#overview) defines
+the consumer and non-goal boundary. The [release ladder](completion-plan.md#release-ladder)
+places test consolidation after the beta API freeze and a NIXL-based P/D
+design after installed GDR/NVLink qualification. Neither adds a current
+transport, connector or performance claim.
 Architectural alignment does not by itself establish behavior, ABI, wire or
 performance parity. See [capabilities](capabilities.md) for support and the
 [completion plan](completion-plan.md#p4-remaining-delivery) for open work.

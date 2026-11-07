@@ -14,12 +14,11 @@ do not turn this file into a second status diary.
 
 ## 1. What OrbiTE is
 
-- OrbiTE is the transfer engine for
-  [OrbitKV](https://github.com/OrbitInfra/OrbitKV)'s KV cache. It replaces
-  OrbitKV's earlier Mooncake TENT dependency, because OrbitKV needed many
-  changes TENT did not allow.
-- Every end-to-end cache path must run through OrbiTE: CPU DRAM, NVIDIA GPU,
-  local SSD, within and across hosts, including GPU↔DRAM and GPU↔SSD.
+- Follow the [product positioning and non-goals](README.md#overview): OrbiTE is
+  the KV data plane for LLM inference on NVIDIA. OrbitKV cache tiering and
+  cross-node reuse come first; P/D is a later integration target, not a current
+  qualification claim. The [release ladder](docs/completion-plan.md#release-ladder)
+  fixes the test-consolidation and post-0.1.0 NIXL design sequence.
 - The capability and architecture reference is Mooncake v0.3.14, frozen at
   `OrbitInfra/Mooncake@e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`, directory
   `mooncake-transfer-engine/tent/`. README, docs site, doc style, module
