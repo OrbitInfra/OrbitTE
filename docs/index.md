@@ -45,7 +45,7 @@ boundaries, implemented in Rust with no Mooncake C++ dependency.
 ## Status
 
 OrbiTE is in alpha. TCP, RDMA, CUDA IPC and local file segment handles are
-implemented, along with Linux io_uring and GDS file transfers. HP-TCP persistent lanes and same-host SHM are implemented. MNNVL and EGM are implemented with CUDA shim coverage. Their installed fabric profiles await qualification. The optional network providers are planned.
+implemented, along with Linux io_uring and GDS file transfers. HP-TCP persistent lanes and same-host SHM are implemented. MNNVL and EGM are implemented with CUDA shim coverage. Their installed fabric profiles await qualification. Libfabric host DRAM is implemented with real software-provider controls; EFA is unqualified and MPComm remains planned.
 [Capabilities](capabilities.md) lists each path and its limits,
 [qualification](qualification.md) records the evidence, and the
 [completion plan](completion-plan.md) is the work queue.
@@ -68,6 +68,7 @@ capabilities
 cpu-tcp
 tent-interop
 hp-tcp
+fabric
 shm
 storage
 transport-selection

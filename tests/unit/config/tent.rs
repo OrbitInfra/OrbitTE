@@ -36,6 +36,7 @@ fn config(root: Value) -> Result<EngineConfig> {
 fn feature(owner: &str) -> bool {
     match owner {
         "rdma" => cfg!(feature = "rdma"),
+        "fabric" => cfg!(feature = "fabric"),
         "cuda" => cfg!(feature = "cuda"),
         "gds" => cfg!(feature = "gds"),
         "io-uring" => cfg!(feature = "io-uring"),
@@ -116,7 +117,7 @@ fn every_config_row_reaches_its_schema_or_fails_closed() {
             }
         }
     }
-    assert_eq!(counts, [144, 46, 33]);
+    assert_eq!(counts, [157, 33, 33]);
 }
 
 #[test]
@@ -129,7 +130,7 @@ fn every_environment_row_has_a_parser_or_an_inactive_or_rejected_owner() {
         let mut text = "2";
         let mut expected = json!(2);
         match disposition.split(':').next().unwrap() {
-            "excluded" | "inactive" => {
+            "excluded" | "inactive" | "provider-owned" => {
                 // In particular, P2P never even requests Redis credentials.
                 let _ = environment::resolve(base, |k| {
                     assert_ne!(k, name);

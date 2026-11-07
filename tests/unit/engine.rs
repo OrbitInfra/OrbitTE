@@ -197,6 +197,8 @@ pub(crate) fn rdma_fixture_with_config(
         .enable
         .then(|| config.hp_tcp.bind(config.bind_addr).unwrap());
     let source = Arc::new(Source {
+        #[cfg(feature = "fabric")]
+        fabric: None,
         #[cfg(target_os = "linux")]
         shm: config.shm.enable.then(|| {
             crate::transport::shm::ShmTransport::new(
@@ -1193,6 +1195,8 @@ pub(crate) fn staging_fixture(
     config.validate().unwrap();
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
+        #[cfg(feature = "fabric")]
+        fabric: None,
         #[cfg(target_os = "linux")]
         shm: None,
         metadata: SegmentMetadata {

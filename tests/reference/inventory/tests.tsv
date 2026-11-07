@@ -14,8 +14,8 @@ tests/diagnostic_test.cpp	DiagnosticExitCodeTest.*:DiagnosticRedactionTest.*:Dia
 tests/endpoint_lifecycle_test.cpp	EndpointLifecycleTest.*:RdmaTeardownTest.*	tests/unit/transport/rdma/lifecycle.rs	RDMA shim / installed RNIC	Invalidate, cancel and retire endpoints; uncertain teardown retains actual owners
 tests/endpoint_store_test.cpp	AllStoreTypes/EndpointStoreTest.*	tests/unit/transport/rdma/endpoint_store.rs	RDMA shim	Reclaim only quiescent endpoints; repeat sweep is idempotent
 tests/engine_failover_e2e_test.cpp	EngineFailoverE2E.*:EngineFailoverE2E/PinnedFailoverPolicyTest.*:EngineFailoverE2E/PollStageRejectedFallbackTest.*:TransferStatusSeverityTest.*	tests/unit/engine/failover.rs	CPU TCP / RDMA shim	Retry bounded owner only with release proof; never replay uncertain WRITE
-tests/fabric_attrs_test.cpp	FabricAttrsTest.*	tests/reference/wire/native.cpp	native CPU codec / S24	Round-trip provider, binary NIC addresses and per-chunk keys; reject uncovered bytes
-tests/fabric_transport_test.cpp	FabricTransportTest.*	src/transport	S24 planned / real libfabric tcp then EFA	Guarded WRITE/READ, unaligned slices, permissions and teardown under load
+tests/fabric_attrs_test.cpp	FabricAttrsTest.*	tests/unit/transport/fabric.rs	10 CPU attribute/layout controls	Round-trip provider, binary NIC addresses and per-chunk keys; reject uncovered bytes
+tests/fabric_transport_test.cpp	FabricTransportTest.*	tests/unit/transport/fabric/	real libfabric tcp + table faults; EFA unqualified	Guarded WRITE/READ, unaligned slices, permissions and teardown under load
 tests/fault_proxy_test.cpp	FaultPolicyTest.*:FaultProxyFailoverTest.*:FaultProxyTest.*	tests/unit/engine/failover.rs	CPU / RDMA shim	Inject a definitely unposted or ambiguous failure; preserve actual transport's retirement
 tests/gds_transport_status_test.cpp	GdsTransportStatusTest.*	tests/unit/transport/gds.rs	cuFile shim / installed NVMe	Aggregate per-cookie terminals; a failed slice cannot destroy an active sibling
 tests/hp_tcp_buffer_registry_test.cpp	HighPerformanceTcpBufferRegistryTest.*	tests/unit/transport/hp_tcp/mod.rs	CPU sockets	Validate permission, registration generation and server lifetime

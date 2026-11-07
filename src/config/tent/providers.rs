@@ -1,4 +1,9 @@
-#[cfg(any(feature = "io-uring", feature = "gds", feature = "cuda"))]
+#[cfg(any(
+    feature = "io-uring",
+    feature = "gds",
+    feature = "cuda",
+    feature = "fabric"
+))]
 use super::typed;
 use super::{EngineConfig, Result, invalid};
 use serde_json::Value;
@@ -16,6 +21,10 @@ fn known_enable(path: &str) -> bool {
 }
 
 pub(super) struct Providers {
+    #[cfg(feature = "fabric")]
+    libfabric: crate::FabricConfig,
+    #[cfg(feature = "fabric")]
+    libfabric_enabled: bool,
     #[cfg(feature = "cuda")]
     fabric: crate::MnnvlConfig,
     #[cfg(feature = "cuda")]
@@ -42,6 +51,10 @@ impl Providers {
         }
         let _ = (c, root);
         Ok(Self {
+            #[cfg(feature = "fabric")]
+            libfabric: Default::default(),
+            #[cfg(feature = "fabric")]
+            libfabric_enabled: false,
             #[cfg(feature = "cuda")]
             fabric: Default::default(),
             #[cfg(feature = "cuda")]
@@ -51,9 +64,45 @@ impl Providers {
         })
     }
     pub(super) fn set(&mut self, c: &mut EngineConfig, p: &str, v: Value) -> Result<()> {
-        #[cfg(not(any(feature = "cuda", feature = "io-uring", feature = "gds")))]
-        let _ = c;
+        let _ = &c;
         match p {
+            #[cfg(feature = "fabric")]
+            "transports/fabric/provider" => {
+                self.libfabric.provider = match typed::<String>(p, v)?.as_str() {
+                    "auto" => crate::FabricProvider::Auto,
+                    "efa" => crate::FabricProvider::Efa,
+                    "tcp" => crate::FabricProvider::Tcp,
+                    _ => return Err(invalid(p, "expected auto, efa or tcp")),
+                }
+            }
+            #[cfg(feature = "fabric")]
+            "transports/fabric/enable" => self.libfabric_enabled = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/devices" => self.libfabric.devices = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/fabric_name" => self.libfabric.fabric_name = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/idle_sleep_us" => self.libfabric.idle_sleep_us = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/max_mr_size" => self.libfabric.max_mr_size = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/max_posted_ops" => self.libfabric.max_posted_ops = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/max_pte_entries" => self.libfabric.max_pte_entries = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/max_register_threads" => {
+                self.libfabric.max_register_threads = typed(p, v)?
+            }
+            #[cfg(feature = "fabric")]
+            "transports/fabric/op_timeout_ms" => self.libfabric.op_timeout_ms = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/post_timeout_ms" => self.libfabric.post_timeout_ms = typed(p, v)?,
+            #[cfg(feature = "fabric")]
+            "transports/fabric/quiesce_timeout_ms" => {
+                self.libfabric.quiesce_timeout_ms = typed(p, v)?
+            }
+            #[cfg(feature = "fabric")]
+            "transports/fabric/slice_size" => self.libfabric.slice_size = typed(p, v)?,
             #[cfg(feature = "metrics")]
             "metrics/enabled"
             | "metrics/http_host"
@@ -113,12 +162,18 @@ impl Providers {
         }
         Ok(())
     }
-    pub(super) fn finish(self, c: &mut EngineConfig) {
+    pub(super) fn finish(self, c: &mut EngineConfig) -> Result<()> {
+        #[cfg(feature = "fabric")]
+        {
+            self.libfabric.validate()?;
+            c.fabric = self.libfabric_enabled.then_some(self.libfabric);
+        }
         let _ = &c;
         #[cfg(feature = "cuda")]
         if self.fabric_branch {
             c.nvlink = false;
             c.mnnvl = self.fabric_enabled.then_some(self.fabric);
         }
+        Ok(())
     }
 }

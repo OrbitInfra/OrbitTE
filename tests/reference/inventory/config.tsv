@@ -75,19 +75,19 @@ transports/ascend_direct/rdma_sl	""	config.excluded	src/transport/ascend/resourc
 transports/ascend_direct/rdma_tc	""	config.excluded	src/transport/ascend/resource_config.cpp:267	bootstrap	merged config	excluded:vendor backend	true
 transports/ascend_direct/store_te_init	false	config.excluded	src/platform/ascend/ascend_allocator.cpp:48	bootstrap	restore explicit value	excluded:vendor backend	true
 transports/ascend_direct/transfer_timeout_ms	10000; explicit leaf precedes ASCEND_TRANSFER_TIMEOUT	config.excluded	src/transport/ascend/resource_config.cpp:244	bootstrap	merged config	excluded:vendor backend	true
-transports/fabric/devices	[]	config.optional	src/transport/fabric/fabric_transport.cpp:122	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/enable	true	config.optional	src/runtime/transport_loader.cpp:168	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/fabric_name	""	config.optional	src/transport/fabric/fabric_transport.cpp:120	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/idle_sleep_us	50	config.optional	src/transport/fabric/fabric_transport.cpp:126	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/max_mr_size	0 (provider-limited)	config.optional	src/transport/fabric/fabric_transport.cpp:140	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/max_posted_ops	0	config.optional	src/transport/fabric/fabric_transport.cpp:133	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/max_pte_entries	22 * 1024 * 1024	config.optional	src/transport/fabric/fabric_transport.cpp:135	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/max_register_threads	8	config.optional	src/transport/fabric/fabric_transport.cpp:138	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/op_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:132	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/post_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:127	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/provider	"auto"	config.optional	src/transport/fabric/fabric_transport.cpp:118	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/quiesce_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:129	bootstrap	merged config	unsupported:provider deferred	true
-transports/fabric/slice_size	512 * 1024	config.optional	src/transport/fabric/fabric_transport.cpp:124	bootstrap	merged config	unsupported:provider deferred	true
+transports/fabric/devices	[]	config.optional	src/transport/fabric/fabric_transport.cpp:122	bootstrap	merged config	fabric	["lo"]
+transports/fabric/enable	true	config.optional	src/runtime/transport_loader.cpp:168	bootstrap	merged config	fabric	true
+transports/fabric/fabric_name	""	config.optional	src/transport/fabric/fabric_transport.cpp:120	bootstrap	merged config	fabric	""
+transports/fabric/idle_sleep_us	50	config.optional	src/transport/fabric/fabric_transport.cpp:126	bootstrap	merged config	fabric	50
+transports/fabric/max_mr_size	0 (provider-limited)	config.optional	src/transport/fabric/fabric_transport.cpp:140	bootstrap	merged config	fabric	4096
+transports/fabric/max_posted_ops	0	config.optional	src/transport/fabric/fabric_transport.cpp:133	bootstrap	merged config	fabric	8
+transports/fabric/max_pte_entries	22 * 1024 * 1024	config.optional	src/transport/fabric/fabric_transport.cpp:135	bootstrap	merged config	fabric	1024
+transports/fabric/max_register_threads	8	config.optional	src/transport/fabric/fabric_transport.cpp:138	bootstrap	merged config	fabric	2
+transports/fabric/op_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:132	bootstrap	merged config	fabric	10000
+transports/fabric/post_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:127	bootstrap	merged config	fabric	10000
+transports/fabric/provider	"auto"	config.optional	src/transport/fabric/fabric_transport.cpp:118	bootstrap	merged config	fabric	"tcp"
+transports/fabric/quiesce_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:129	bootstrap	merged config	fabric	10000
+transports/fabric/slice_size	512 * 1024	config.optional	src/transport/fabric/fabric_transport.cpp:124	bootstrap	merged config	fabric	4096
 transports/force_tcp	false	config.network	src/runtime/transfer_engine_impl.cpp:229	bootstrap	restore true by forcing TCP	core	true
 transports/gds/enable	false	config.storage	src/runtime/transport_loader.cpp:124	bootstrap	merged config	gds	true
 transports/gds/io_batch_depth	32	config.storage	src/transport/gds/gds_transport.cpp:268	bootstrap	merged config	gds	8

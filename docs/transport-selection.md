@@ -42,7 +42,7 @@ let named = request.with_policy_name("small_host")?;
 An explicit transport must appear in the matching policy's candidate list and
 be eligible. A rejected or unavailable hint fails the request. With
 `selector: None`, explicit routing keeps its existing behavior and `Unspec`
-tries the configured MNNVL or NVLink profile, RDMA, SHM, then the configured socket transport for memory targets.
+tries the configured MNNVL or NVLink profile, RDMA, configured libfabric, SHM, then the configured socket transport for memory targets.
 A file target tries eligible GDS, then io_uring.
 
 An unnamed request uses the first matching rule. Within that rule, `Unspec`
@@ -63,7 +63,7 @@ When no custom rules exist the default names are `memory_default` and `file_stor
 | `min_size`, `max_size` | Inclusive byte bounds |
 | `priority` | Exact effective QoS or request priority. Accepts high/medium/low or 0/1/2 |
 | `intent_type` | Case-insensitive `unspec` (also `intent_unspec`), `foreground_get`, `background_prefetch`, `migration`, `checkpoint`, `weight_loading`, `staging_internal`, or the corresponding integer 0–6. Omission matches any intent |
-| `transports` | Ordered unique candidates. Memory accepts `tcp`, `hp_tcp`, `shm`, `rdma`, `nvlink` and `mnnvl`. Local files accept `gds` and `io_uring` |
+| `transports` | Ordered unique candidates. Memory accepts `tcp`, `hp_tcp`, `shm`, `rdma`, `nvlink`, `mnnvl` and `fabric`. Local files accept `gds` and `io_uring` |
 | `devices` | RDMA NIC names compiled to a 64-bit mask using stable discovered IDs and the custom topology's verified mapping |
 | `qp_pool` | Selects a contiguous endpoint QP range. An omitted, empty or unknown name permits every index |
 | `service_level`, `traffic_class` | Policy values are diagnostic. Only the endpoint pool changes native SL/TC |
@@ -74,6 +74,10 @@ for unnamed requests. Explicit name binding stays strict, and memory force-TCP
 takes precedence. JSON input is bounded to 1 MiB and 256 policies. Unknown
 policy fields and invalid intent reject the configuration. Frozen TENT skips a
 rule with an invalid intent.
+
+The optional `fabric` candidate requires installed host capabilities on both peers.
+Its domain whitelist is configured through `FabricConfig`; per-request RDMA
+masks and remote staging are rejected for this route. See [libfabric](fabric.md).
 
 ## RDMA device and QP selection
 
@@ -173,7 +177,7 @@ candidates can run only after a safe failure. Caller-supplied fallback indices,
 local recompute and compression remain unsupported. See
 [transport attempts](async-batches.md#transport-attempts).
 
-The selector scans at most 256 compiled rules and six candidates, once per
+The selector scans at most 256 compiled rules and seven candidates, once per
 public request. The compiled rule scan allocates no strings, takes no selector lock and calls
 no driver; no selector work is added per slice, WR or CQ completion. Existing
 registration resolution, admission and transport owners keep their own costs.
@@ -188,7 +192,8 @@ when NVLink is disabled. Bit 4 disables ordinary TCP payloads and bit 5
 announces the SHM trailer. Bit 6 announces MNNVL fabric capabilities. Bytes 4–19 hold the boot identity when known and
 20–35 hold the process nonce only for NVLink. Bytes 36–43 give the maximum
 accepted transfer length as a big-endian unsigned integer. An unknown limit
-prevents folding two requests. Bytes 1–3 are reserved. Region
+prevents folding two requests. Byte 1 bit 0 advertises configured libfabric;
+its remaining bits and bytes 2–3 are reserved. Region
 bytes 25–27 carry memory type, IPC export consent and HP-TCP registration.
 The [Describe layout](cpu-tcp.md#development-wire-contract) gives the trailer order and SHM fields.
 

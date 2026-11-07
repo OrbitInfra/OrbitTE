@@ -203,7 +203,7 @@ negative cases, teardown, installed-artifact and applicable mixed-peer gates.
 | B14 `MLU` | Host-device copy/staging, allocation and process ownership | Cambricon MLU runtime/devices | Excluded accelerator |
 | B15 `MPCOMM` | Host and supported NVIDIA GDR; peer registry, registration and completion mapping | Compatible provider/endpoints; frozen GPU support requires `nvidia_peermem` | Optional network, P8.1 |
 | B16 `HYLINK` | HIP-backed host/device directions, endpoint and registered-region lifecycle | HIP devices and compatible Hylink provider | Excluded accelerator |
-| B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | Optional network, P8.2 |
+| B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | Implemented, P8.2; real software TCP-provider controls, EFA installed profile unqualified. See [libfabric](fabric.md) |
 | B18 `MEMFABRIC` | Ascend-backed host/device directions, dynamically loaded provider ABI, memory allocator and completion lifecycle | Ascend ACL and compatible MemFabric provider | Excluded accelerator |
 
 Source authority: [transport types][types], [runtime loader][loader],

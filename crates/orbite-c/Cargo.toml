@@ -26,6 +26,7 @@ io-uring = ["orbite/io-uring"]
 gds = ["cuda", "orbite/gds"]
 metrics = ["orbite/metrics"]
 rdma-adaptive = ["rdma", "orbite/rdma-adaptive"]
+fabric = ["orbite/fabric"]
 
 [dependencies]
 # Shared facade: compatible minimum; Cargo.lock fixes the tested MSRV resolution.

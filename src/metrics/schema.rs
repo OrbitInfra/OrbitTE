@@ -2,8 +2,8 @@
 use crate::{TransferOp, Transport};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 
-pub(super) const TRANSPORTS: [&str; 9] = [
-    "unspec", "tcp", "rdma", "nvlink", "io_uring", "gds", "hp_tcp", "shm", "mnnvl",
+pub(super) const TRANSPORTS: [&str; 10] = [
+    "unspec", "tcp", "rdma", "nvlink", "io_uring", "gds", "hp_tcp", "shm", "mnnvl", "fabric",
 ];
 pub(super) const OPS: [&str; 2] = ["read", "write"];
 pub(super) const OUTCOMES: [&str; 4] = ["success", "failed", "timeout", "canceled"];
@@ -20,6 +20,7 @@ pub(crate) fn slot(t: Transport) -> usize {
         Transport::HpTcp => 6,
         Transport::Shm => 7,
         Transport::Mnnvl => 8,
+        Transport::Fabric => 9,
     }
 }
 pub(super) fn attempt_slot(t: usize, op: TransferOp) -> usize {

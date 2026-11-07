@@ -216,7 +216,7 @@ impl TransportSelectorConfig {
             {
                 return Err(invalid(policy, "min_size exceeds max_size"));
             }
-            if policy.transports.len() > 6
+            if policy.transports.len() > 7
                 || policy.transports.iter().enumerate().any(|(i, transport)| {
                     *transport == Transport::Unspec
                         || matches!(transport, Transport::IoUring | Transport::Gds)
@@ -293,6 +293,7 @@ fn transports<'de, D: Deserializer<'de>>(
             "rdma" => Ok(Transport::Rdma),
             "nvlink" => Ok(Transport::Nvlink),
             "mnnvl" => Ok(Transport::Mnnvl),
+            "fabric" => Ok(Transport::Fabric),
             "io_uring" => Ok(Transport::IoUring),
             "gds" => Ok(Transport::Gds),
             _ => Err(serde::de::Error::custom(format!(

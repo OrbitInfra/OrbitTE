@@ -73,7 +73,8 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 | [HP-TCP](docs/hp-tcp.md) | DRAM over persistent IPv4 lanes | Qualified on Linux loopback. Physical rails unqualified |
 | [SHM](docs/shm.md) | Same-host DRAM over POSIX SHM | Qualified on Linux CI. Physical CXL unqualified |
 | [MNNVL / EGM](docs/cuda-ipc.md#multi-node-nvlink-and-egm) | GPU and host-NUMA memory over an NVLink fabric | Implemented. Installed profile unqualified |
-| MPComm, libfabric | Optional network providers | Planned (P8) |
+| libfabric | Host DRAM RMA, opt-in software TCP/EFA profiles | Implemented; EFA installed profile unqualified |
+| MPComm | Optional network provider | Planned (P8.1) |
 
 TENT's C/C++ adapters and [Python API](docs/python.md) are implemented; TENT wire interoperability remains planned.
 [Capabilities](docs/capabilities.md) lists the exact limits of each path.

@@ -18,3 +18,4 @@ pub(crate) mod tcp;
     feature = "gds"
 ))]
 pub(crate) const DESTRUCTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) mod fabric;

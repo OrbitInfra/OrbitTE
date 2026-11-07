@@ -78,6 +78,12 @@ impl TransferEngine {
                 failure.get_or_insert(e);
             }
         }
+        #[cfg(feature = "fabric")]
+        if let Some(fabric) = &self.source.fabric {
+            if let Err(e) = fabric.close_peer(peer) {
+                failure.get_or_insert(e);
+            }
+        }
         // TCP has no persistent requester sockets. Their admitted call owns the
         // socket and backing until drain. Shared registration MRs, contexts and
         // worker pools belong to the engine, not to this peer.

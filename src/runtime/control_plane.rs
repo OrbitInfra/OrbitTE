@@ -61,6 +61,8 @@ pub(crate) enum Operation {
     CreditSync = 20,
     CreditClose = 21,
     NotifyRpc = 22,
+    FabricRead = 23,
+    FabricWrite = 24,
 }
 
 #[derive(Clone, Copy)]
@@ -111,6 +113,8 @@ impl Request {
             20 => Operation::CreditSync,
             21 => Operation::CreditClose,
             22 => Operation::NotifyRpc,
+            23 => Operation::FabricRead,
+            24 => Operation::FabricWrite,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -754,6 +758,12 @@ impl Drop for ControlService {
         for worker in self.session_workers.drain(..) {
             let _ = worker.join();
         }
+        #[cfg(feature = "fabric")]
+        if let Some(fabric) = &self.source.fabric {
+            if let Err(error) = fabric.close() {
+                log::error!("libfabric shutdown retained owners: {error}");
+            }
+        }
     }
 }
 
@@ -961,6 +971,16 @@ fn serve(
                 #[cfg(not(feature = "cuda"))]
                 return Err(Error::Unavailable("build with --features cuda"));
             }
+            Operation::FabricRead | Operation::FabricWrite => {
+                #[cfg(feature = "fabric")]
+                return source
+                    .fabric
+                    .as_ref()
+                    .ok_or(Error::Unavailable("libfabric is not configured"))?
+                    .serve(channel, source.epoch, &request, memory, offset, length);
+                #[cfg(not(feature = "fabric"))]
+                return Err(Error::Unavailable("build with --features fabric"));
+            }
             Operation::RdmaRead
             | Operation::RdmaWrite
             | Operation::RdmaReadSlices
@@ -1006,6 +1026,7 @@ fn resolve_payload(
     let profile = memory.0.descriptor.profile;
     let permitted = match request.operation {
         Operation::TcpRead | Operation::TcpWrite => profile.permits(Transport::Tcp),
+        Operation::FabricRead | Operation::FabricWrite => profile.permits(Transport::Fabric),
         Operation::RdmaRead
         | Operation::RdmaWrite
         | Operation::RdmaReadSlices
@@ -1030,6 +1051,7 @@ fn resolve_payload(
     if !memory.0.descriptor.permission.allows(matches!(
         request.operation,
         Operation::TcpWrite
+            | Operation::FabricWrite
             | Operation::RdmaWrite
             | Operation::RdmaWriteSlices
             | Operation::NvlinkWrite
