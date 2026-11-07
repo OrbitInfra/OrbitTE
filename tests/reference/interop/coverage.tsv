@@ -1,0 +1,35 @@
+inventory	row	disposition	control
+rpc.tsv	GetSegmentDesc	Implemented P2P memory snapshot	interop/run.py; frozen_metadata_is_retained_as_a_restart_signal_without_inventing_an_epoch
+rpc.tsv	BootstrapRdma	Source envelope only; explicit unavailable, no keys or QPs	metadata_rejects_redirects_overflow_and_excluded_memory_and_bootstrap_matches_fixture; tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+rpc.tsv	SendData	Implemented CPU TCP; no uncertain replay	interop/run.py; lost_write_ack_is_unknown_and_never_replayed_and_bad_responses_are_rejected
+rpc.tsv	RecvData	Implemented CPU TCP; complete reply required	interop/run.py; truncated_read_response_and_partial_write_frame_leave_destinations_unchanged
+rpc.tsv	Notify	Implemented bounded per-segment delivery	tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+rpc.tsv	Probe	Implemented	listener_rejects_bad_magic_version_and_oversized_attachment_without_touching_bytes
+rpc.tsv	Delegate	Unavailable; no TENT staging lease owner	frozen_rpc_fixtures_match_request_and_response_serialization; tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+rpc.tsv	Pin	Unavailable; no TENT staging lease owner	frozen_rpc_fixtures_match_request_and_response_serialization; tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+rpc.tsv	Unpin	Unavailable; no TENT staging lease owner	frozen_rpc_fixtures_match_request_and_response_serialization; tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+rpc.tsv	SubscribeSegmentUpdate	Rejected; bounded descriptor recheck and consumer retirement replace subscriptions	changed_metadata_fences_writes_and_consumer_epoch_change_retires_old_identity; tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+rpc.tsv	NotifySegmentUpdated	Rejected; no successful subscription to invalidate	changed_metadata_fences_writes_and_consumer_epoch_change_retires_old_identity; tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+rpc.tsv	BootstrapUb	N/A excluded provider; explicit rejection	frozen_rpc_fixtures_match_request_and_response_serialization; tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+metadata.tsv	SegmentDesc	Implemented memory profile; no file target	metadata::tests; interop/run.py
+metadata.tsv	MemorySegmentDesc	Implemented bounded snapshot with optional fields	metadata::tests; interop/run.py
+metadata.tsv	FileSegmentDesc	N/A remote files lack an owner; local files use native S1-A2 API	wire/check.py native frozen file codec; metadata::tests
+metadata.tsv	BufferDesc	Implemented TCP eligibility and bounds; no remote key import	metadata::tests; interop/run.py
+metadata.tsv	Region	Preserved in immutable snapshot; CPU TCP uses enclosing buffer bounds	metadata::tests
+metadata.tsv	DeviceDesc	Preserved as metadata; RNIC paths unavailable	metadata::tests; wire/check.py
+metadata.tsv	Topology	Preserved as metadata; native topology selection unchanged	metadata::tests; wire/check.py
+metadata.tsv	snapshot	Immutable; change fences before WRITE	changed_metadata_fences_writes_and_consumer_epoch_change_retires_old_identity
+metadata.tsv	central-key	N/A P2P-only boundary	config/tent CPU and installed C/C++ negative controls
+metadata.tsv	store-selection	N/A P2P-only boundary	config/tent CPU and installed C/C++ negative controls
+metadata.tsv	p2p	Implemented lookup; no subscription, consumer owns epoch	interop/run.py; changed_metadata_fences_writes_and_consumer_epoch_change_retires_old_identity
+metadata.tsv	rdma	Source envelope only; unavailable at runtime	metadata_rejects_redirects_overflow_and_excluded_memory_and_bootstrap_matches_fixture
+metadata.tsv	hp_tcp.segment	S12/S16 fixture codec retained; not selected in ordinary TCP profile	wire/check.py; transport/hp_tcp tests
+metadata.tsv	hp_tcp.buffer	S12/S16 fixture codec retained; not selected in ordinary TCP profile	wire/check.py; transport/hp_tcp tests
+metadata.tsv	fabric.peer	Deferred S24; frozen codec only	wire/check.py
+metadata.tsv	fabric.buffer	Deferred S24; frozen codec only	wire/check.py
+metadata.tsv	mpcomm	Deferred S25; frozen codec only	wire/check.py
+metadata.tsv	shm	N/A TENT shared mapping profile; native OrbiTE SHM unchanged	wire/check.py; transport/shm tests
+metadata.tsv	nvlink	N/A TENT IPC profile; native OrbiTE IPC unchanged	wire/check.py; cuda/ipc tests
+metadata.tsv	mnnvl	N/A TENT fabric profile; native OrbiTE MNNVL unchanged	wire/check.py; cuda/fabric tests
+metadata.tsv	ub	N/A excluded provider	wire/check.py; tent_source_checks_bytes_permissions_bounds_notifications_and_unsupported_rpc
+metadata.tsv	exportLocalSegment/importRemoteSegment	N/A frozen methods return NotImplemented; no fabricated token	installed C++ unavailable controls

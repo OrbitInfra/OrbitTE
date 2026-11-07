@@ -91,6 +91,17 @@ jobs:
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"
       - name: Test CPU TCP and ownership
         run: cargo test --workspace --locked --features "$ORBITE_FEATURES"
+      - name: Repeat cooperative TENT requester ownership controls
+        if: matrix.features == ''
+        run: |
+          binary=$(cargo test --locked --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          count=$("$binary" runtime::control_plane::tent:: --list | awk '/: test$/ {n++} END {print n+0}')
+          test "$count" -ge 11
+          for i in $(seq 1 50); do
+            "$binary" runtime::control_plane::tent:: --test-threads="$(nproc)" > "$RUNNER_TEMP/tent-ownership.log" || { cat "$RUNNER_TEMP/tent-ownership.log"; exit 1; }
+            grep -Fq "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/tent-ownership.log"
+          done
       - name: Install the offline diagnostics CLI and compile its packaged C and C++ clients
         if: matrix.features == ''
         run: |

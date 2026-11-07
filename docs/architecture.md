@@ -216,7 +216,33 @@ The [acceptance inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/
 connects each public field or message to its source, owner, test trigger and
 expected result. The oracle captures the two YLT envelope layers separately
 from TENT's attachments. The Rust control plane uses its existing codec.
-S23 can replay the same fixtures in both peer directions.
+S23 replays those bytes and moves guarded payloads in both peer directions against the frozen native build.
+
+
+The [cooperative TENT profile](tent-interop.md) has a separately configured
+listener on the existing control acceptor/worker/queue owner, and an explicit
+`open_tent_segment` requester API. `endpoint` and `open_segment` always use native
+framing; an OrbiTE marker in TENT JSON rejects accidental OrbiTE-to-OrbiTE use.
+TENT's raw-address protocol has no source epoch or registration generation.
+Consumer epochs fence local admission and retirement, and a pre-WRITE descriptor
+comparison fences any observed metadata change without adopting new addresses.
+`changed_metadata_fences_writes_and_consumer_epoch_change_retires_old_identity`
+checks both that extra fence and consumer retirement with unchanged metadata.
+This cannot detect an identical descriptor after restart; the stale-address
+WRITE risk is explicit, never represented as native epoch protection.
+
+Differences from the frozen RPC implementation are bounded attachments and
+metadata, endpoint-redirect rejection, strict response header validation
+and no replay after any WRITE payload may have left. READ commits only a full
+validated response, as in frozen TENT.
+The `magic_version_serialization_sequence_and_lengths_fail_closed`, metadata,
+`truncated_read_response_and_partial_write_frame_leave_destinations_unchanged`
+and `lost_write_ack_is_unknown_and_never_replayed_and_bad_responses_are_rejected`
+controls cover them. `retirement_timeout_retains_a_running_tent_read_until_drain`
+checks the existing peer permit and charges. Unsupported RPCs return a service
+error; bootstrap format coverage publishes no RDMA keys. The compatibility
+profile adds no dependency or requester socket pool. Frozen YLT remains a
+build-time test oracle only.
 
 
 Callers build a `TransferRequest` with a transport (or `Transport::Unspec`) and

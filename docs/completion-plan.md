@@ -104,7 +104,7 @@ controls, and CPython 3.10–3.14 packaging. S21b adds driver-validated retained
 CUDA Array Interface/DLPack owners; its installed GPU profile is unqualified.
 S22 implements the checked [device plugin ABI](device-plugins.md), CPU shared-library
 controls and a CUDA provider using the fallible driver table. Its installed GPU
-profile remains unqualified. S23–S26 retain their order.
+profile remains unqualified. S23 implements the explicit [cooperative TENT TCP profile](tent-interop.md), with directional mixed-peer CPU controls. Native OrbiTE framing stays the default; the frozen peer cannot validate consumer epochs. S24–S26 retain their order.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -138,7 +138,7 @@ Open:
 - [ ] Extend the CPU oracle to the remaining native/Python/classic-TE behavior,
   Python guards and tebench byte checks, with hardware triggers where needed.
 - [ ] Extend the shared trace to allowed concurrent transitions, faults, broken
-  lifetime/epoch controls and mixed Rust/TENT peers under S23.
+  lifetime/epoch controls beyond the implemented S23 mixed-peer TCP gate.
 - [ ] Write the run-manifest schema and freeze workload-specific resource and
   performance guards before formal measurements.
 
@@ -209,7 +209,8 @@ Open:
 - [ ] Peer identity, descriptor update subscriptions and reconnect semantics.
 - [ ] Notification RPC fallback and native C allocation/free conventions.
 - [x] Core resource and failure metrics. See [metrics](metrics.md).
-- [ ] Physical two-host TCP and mixed-peer tests against frozen TENT.
+- [x] Directional mixed-peer TCP against frozen TENT, with explicit profile selection, rejection controls and guarded READ/WRITE.
+- [ ] Physical two-host TCP qualification.
 
 Exit: real two-process and two-host TCP byte tests, mixed-peer tests for the
 frozen protocol, permission/range denial, restart, reconnect and lost-reply
@@ -469,8 +470,8 @@ Beta evidence uses the existing [source and mixed-peer checks](qualification.md#
 [HP-TCP](qualification.md#hp-tcp-rail-verification),
 [SHM](qualification.md#shared-memory-and-cxl-verification) and
 [io_uring](qualification.md#local-file-segments) and
-[Python wheels](qualification.md#python-wheels) profiles. S23 must add
-directional TENT TCP evidence before beta. A source implementation
+[Python wheels](qualification.md#python-wheels) and
+[directional TENT TCP](qualification.md#tent-tcp-interoperability) profiles. A source implementation
 or shim does not satisfy an installed hardware gate.
 
 The [verification queue](qualification.md#verification-queue) owns the commands

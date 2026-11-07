@@ -82,6 +82,16 @@ impl Table {
 
 #[derive(Clone)]
 pub(crate) struct PeerHandle(Arc<Entry>);
+impl PeerHandle {
+    /// A changed cooperative-peer snapshot fences admission immediately. The
+    /// consumer still calls close_segment for drain; this is not a release receipt.
+    pub(crate) fn fence(&self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.open = false;
+        self.0.changed.notify_all();
+    }
+}
+
 impl std::fmt::Debug for PeerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("PeerHandle").field(&self.0.key).finish()

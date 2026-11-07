@@ -311,8 +311,7 @@ unavailable, like the excluded transports. See [the RPC contract][rpc]. The [wir
 struct_pack function argument, opaque attachments, segment JSON, and HP-TCP
 and provider bootstrap encodings. Linux CI compares them with unmodified
 v0.3.14 code and replays TCP data frames against a registered TENT source.
-OrbiTE continues to use its own control protocol until a peer explicitly
-selects a future interoperability profile.
+OrbiTE-to-OrbiTE uses native framing. The [cooperative TENT TCP profile](tent-interop.md) is explicit per segment and uses a separate opt-in source listener. Consumer epochs fence local admission/retirement only: frozen TENT cannot validate them remotely. Changed metadata fences a WRITE before payload; unchanged stale addresses remain an inherent risk of that profile. There is no autodetection or downgrade.
 
 Interoperability is directional: test a Rust requester against a C++ source
 and a C++ requester against a Rust source, with permission errors, restarts and
