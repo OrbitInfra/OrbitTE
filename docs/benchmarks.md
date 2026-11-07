@@ -120,7 +120,8 @@ small, test-only cuFile observer withholds status receipts. `drain` checks a
 wait timeout and concurrent unregister/file close, then releases real CQEs and
 verifies the full payload and guards. `quarantine` withholds receipts past the
 submission deadline plus destruction window and checks `Unquiesced`, retained
-GPU backing and byte charges. It never fabricates a completion or retries a
+byte charges and GPU backing after every caller handle is dropped. It never
+fabricates a completion or retries a
 WRITE. The driver requires compatibility disabled, resource locks and matching
 nvidia-fs READ-counter evidence. Both modes are written and compiled in CI,
 **not run**. These are controlled receipt faults, not spontaneous device faults.
