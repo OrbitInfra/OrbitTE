@@ -382,6 +382,20 @@ ACK and check the untouched guards. The file owners keep confirmed siblings.
 A Describe RPC alone retries a connection error once, with the original
 deadline and epoch. A replaced registration cannot inherit an admitted WRITE.
 
+A disconnect can leave a source receive posted while the next grant has already
+passed admission. Retiring that CQ lane returns `Unavailable` to both earlier
+and later constructors, rather than misclassifying normal retirement as an
+internal invariant failure that prevents policy fallback. The native QP/CQ
+barrier still owns every pending receive, backing and charge. The
+`receive_debt_retirement_rejects_new_grants_until_the_native_receipt` control
+holds destruction and probes this interleaving; the real-control-socket
+`source_receive_retirement_keeps_owners_and_allows_unposted_policy_fallback`
+control checks merged aliases, one fallback, bytes and guards while the old
+source owner remains charged. Any SQ or pending-work debt remains fail-stop even with a posted receive, as
+`mixed_send_receive_debt_keeps_unposted_constructors_fail_stop` verifies.
+Internal invariant failures remain non-retryable;
+this is OrbiTE's drain-based admission behavior, not TENT's ambiguous replay.
+
 ## Metrics ownership
 
 The optional per-engine registry preallocates the frozen transport, operation

@@ -13,6 +13,7 @@ pub(crate) use super::buffers::tests::publication::HeldPublication;
 pub(crate) use super::context::tests::after_open;
 pub(crate) use super::context::tests::{events, pause};
 pub(crate) use super::cq::tests::event_runtime;
+pub(crate) use super::cq_lane::tests::mixed_debt_constructor_error;
 use super::*;
 
 pub(crate) struct FakeDevice {
