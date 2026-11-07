@@ -189,6 +189,14 @@ fn notification_routes_try_only_unposted_unavailable_channels() {
     // RPC-only unreachable peers preserve the original socket error.
     drop(remote);
     routes.channels.clear();
+    // Keep the port bound but non-listening. A freed ephemeral port could be
+    // reused by a parallel test, or its old listener inherited until exec.
+    let refused = tokio::net::TcpSocket::new_v4().unwrap();
+    refused.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let destination = Target {
+        endpoint: refused.local_addr().unwrap(),
+        ..destination
+    };
     assert!(matches!(
         routes
             .send(destination, &note, until())
