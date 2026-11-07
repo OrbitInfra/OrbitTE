@@ -102,6 +102,15 @@ jobs:
             "$binary" runtime::control_plane::tent:: --test-threads="$(nproc)" > "$RUNNER_TEMP/tent-ownership.log" || { cat "$RUNNER_TEMP/tent-ownership.log"; exit 1; }
             grep -Fq "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/tent-ownership.log"
           done
+      - name: Repeat guarded restart port ownership at suite parallelism
+        if: matrix.features == ''
+        run: |
+          binary=$(cargo test --locked --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          for i in $(seq 1 200); do
+            RUST_TEST_THREADS=$(nproc) "$binary" --exact engine::failover::tests::foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch > "$RUNNER_TEMP/restart-port.log" 2>&1 || { cat "$RUNNER_TEMP/restart-port.log"; exit 1; }
+            grep -F "test result: ok. 1 passed; 0 failed;" "$RUNNER_TEMP/restart-port.log"
+          done
       - name: Install the offline diagnostics CLI and compile its packaged C and C++ clients
         if: matrix.features == ''
         run: |
