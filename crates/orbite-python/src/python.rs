@@ -446,7 +446,6 @@ impl PythonEngine {
                         policy,
                         deadline,
                         intent,
-                        cancellable: false,
                     },
                 ))
             })

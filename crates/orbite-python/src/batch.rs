@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub(crate) struct Fields {
-    pub cancellable: bool,
     pub intent: orbite::IntentType,
     pub policy: Option<orbite::PolicyName>,
     pub deadline: Option<std::time::Instant>,
@@ -78,9 +77,6 @@ impl Engine {
             }
             let mut request = TransferRequest::new(hint, source as u64, r.target_offset, n)
                 .with_priority(priority);
-            if fields.cancellable {
-                request = request.requiring_post_submit_cancellation();
-            }
             request.intent = fields.intent;
             request.policy_name = fields.policy;
             request.deadline = fields.deadline;

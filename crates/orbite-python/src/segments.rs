@@ -19,7 +19,7 @@ enum Entry {
 }
 #[derive(Default)]
 pub(crate) struct Segments {
-    entries: HashMap<u64, (Option<String>, Arc<Entry>)>,
+    entries: HashMap<u64, (String, Arc<Entry>)>,
 }
 #[derive(Clone)]
 pub(crate) enum Target {
@@ -47,7 +47,7 @@ impl Engine {
         let shared = table
             .entries
             .iter()
-            .find(|(_, v)| v.0.as_deref() == Some(name.as_str()))
+            .find(|(_, v)| v.0 == name)
             .map(|(&id, v)| (id, v.1.clone()));
         if let Some((id, _)) = &shared {
             return Ok(*id);
@@ -76,7 +76,7 @@ impl Engine {
             })
         };
         let id = engine::id()? as u64;
-        table.entries.insert(id, (Some(name), entry));
+        table.entries.insert(id, (name, entry));
         Ok(id)
     }
     pub fn close_segment(&self, id: u64) -> Result<()> {
