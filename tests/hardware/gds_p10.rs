@@ -100,6 +100,9 @@ fn exercise(path: &Path) -> Result<()> {
         memory.read(PAGE + LEN, &mut guard)?;
         require(guard == vec![0xa5; PAGE], "trailing guard modified")?;
         drop(memory);
+        drop(batch);
+        drop(file);
+        drop(engine);
         require(weak.upgrade().is_some(), "quarantine lost GPU backing")?;
     } else {
         require(
