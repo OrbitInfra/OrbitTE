@@ -38,10 +38,9 @@ checks cover configuration loading. Installed transfer profiles are tracked
 separately below.
 
 P2P-only configuration controls reject external metadata types and server
-URIs through the Rust loaders, inline/file `MC_TENT_CONF`, legacy overrides,
-C setters and native/classic C++ constructors. The installed consumers check
-`InvalidMetadataType` (`-6`) and classic `ERR_METADATA`, unchanged output
-guards and migration guidance. No external store or discovery service is
+URIs through the Rust loaders, inline/file `MC_TENT_CONF`, legacy overrides
+and the installed Python constructor, with migration guidance. No external
+store or discovery service is
 part of this profile. Rust per-peer retirement is implemented with real TCP,
 HP-TCP and SHM controls on Linux, and CUDA/verbs table controls. The
 `peer_retirement_*` tests check held ownership, submit/close/reclaim races, retained
@@ -50,8 +49,8 @@ churn covers ten times the identity capacity; stale clones and failed native
 cleanup remain charged under pressure. Reopening a reclaimed identity requires
 an explicit authoritative open. RNIC,
 NVLink and MNNVL retirement remain **Implemented; installed profile unqualified**.
-The C/C++ same-epoch reopen controls preserve frozen segment-handle close;
-it is not a drain receipt.
+Python same-epoch reopen preserves frozen segment-handle close; it is not
+a drain receipt.
 
 (tent-tcp-interoperability)=
 ## Historical TENT TCP interoperability
@@ -128,16 +127,22 @@ of CI. See [Python packaging](python.md#packaging-and-evidence).
 
 ## Device plugin controls
 
+Historical evidence from S19/S20/S22, before removal of these interfaces. The
+recorded labels below are preserved; these are not current release gates.
+
 The `device-plugin` CI combinations compile CPU shared-library fixtures and run
 `tests/device-plugin/run.py` against the packaged C installation on stable and
 Rust 1.85. They check frozen LP64 layouts, missing/incompatible libraries,
 registration and callback failures, guarded TCP READ/WRITE, cross-engine aliases
 and a paused transfer through cancellation and drain. CUDA combinations also
 run `tests/device-plugin/cuda.py` against a Driver API shim. Stable repeats these
-controls 50 times. This is CPU evidence; the CUDA plugin remains **Implemented;
-installed profile unqualified**.
+controls 50 times. This was CPU evidence; the CUDA plugin never received
+installed qualification and is now out of scope.
 
 ## Installed C ABI on Linux
+
+Historical evidence from S19/S20/S22, before removal of these interfaces. The
+recorded labels below are preserved; these are not current release gates.
 
 The `Install both C libraries and run the independent C consumer` CI step builds both libraries from
 the core and FFI package archives on stable and Rust 1.85. The C11 consumer
@@ -146,9 +151,12 @@ S16 inventory and checks guarded READ and WRITE across two loopback processes.
 Refusal before dispatch, loss of the final notification ACK, deferred
 unregister and same-port restart exercise the return and lifetime contracts.
 The io_uring builds also move file bytes. These runs cover the Linux CPU
-profile. See the [C API](c-api.md).
+profile of the recorded S19 artifact.
 
 ## C++ source adapters
+
+Historical evidence from S19/S20/S22, before removal of these interfaces. The
+recorded labels below are preserved; these are not current release gates.
 
 The installed C++20 client runs in the Linux feature matrix on stable and
 Rust 1.85. Native and classic source/requester pairs exchange guarded TCP bytes
@@ -157,7 +165,7 @@ scatter waits, moving the operation and callback order. The native-reference
 job also compiles the same declaration checks against frozen Mooncake headers.
 The CUDA/verbs shims check direct GPU registration, staged-route rejection and
 the pinned retry budget. These controls qualify the installed CPU loopback
-profile. The RNIC and GPU Direct C++ profiles await an installed run.
+profile of the recorded S20 artifact. The unrun native profiles are now out of scope.
 
 ## Verification queue
 
@@ -168,10 +176,7 @@ external output directory; failed runs are kept.
 
 | Profile | Current state | Gate | Earlier evidence |
 | --- | --- | --- | --- |
-| [CUDA device plugin]{#queue-device-plugin} | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer device-plugin --toolchain stable --output "$ART"`. Run `python3 "$ART/device_plugin_run.py" --artifact "$ART" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --output "$RUN"`. Repeat the build with 1.85.0 in a fresh directory. | Plugin allocation, guarded H2D/D2H and TCP READ/WRITE, exact context and physical cleanup; CPU shims only so far |
 | [Python retained CUDA exporters]{#queue-python-cuda} | Implemented; installed profile unqualified | Build with a wheel-compatible Python and maturin: `python3 tests/hardware/build_installed.py --consumer python-cuda --toolchain stable --output "$ART"`. With CUDA PyTorch installed for that interpreter, run `python3 "$ART/python_cuda_run.py" --artifact "$ART" --python "$PYTHON" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --output "$RUN"`. Repeat the build with 1.85.0 in a fresh directory. | CAI/DLPack, guarded GPU↔host TCP in both requester/source roles, exporter release; CI driver-shim controls only |
-| C++ classic scatter on RDMA and GPU Direct | Implemented; installed profile unqualified | [Packaged C++ scatter requester and Rust source](#native-c-scatter) | CPU loopback HP-TCP plus CUDA/verbs shim controls |
-| C ABI on GPU and two RNICs | Implemented; installed profile unqualified | Install the packaged libraries on each host, then run the [two-process C hardware gate](#native-c-transfer-engine) with TCP/CUDA or RDMA and two visible NICs. | Installed C loopback CPU controls |
 | [Caller-stream local CUDA copy]{#queue-local-cuda-copy} | Implemented; installed profile unqualified | [Packaged comparison on one GPU](#caller-stream-local-cuda-copy) | Linux CUDA shim, byte guards, planning and event retention |
 | CPU-only requester to peer GPU over ordinary TCP | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-gpu-source --output "$ART/source"` and `python3 tests/hardware/build_installed.py --consumer peer-gpu-requester --output "$ART/requester"`. Run `python3 "$ART/source/peer_gpu_tcp_run.py" --source "$ART/source/installed/bin/orbite-peer-gpu-source" --requester "$ART/requester/installed/bin/orbite-peer-gpu-requester" --gpu "$GPU_UUID"`. | Separate CPU-only requester and CUDA-shim source processes in CI |
 | Remote staging source controls and Pin capacity (F19/F07) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer staging-control --toolchain stable --output "$ART"`, then `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbite-staging-control" --gpu "$GPU_UUID"`. For RNIC loopback run `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbite-staging-control" --gpu "$GPU_UUID" --rdma "$RNIC" "$GID_INDEX"`. Repeat on 1.85.0 using a fresh output directory. | One GPU, loopback TCP and optional RNIC loopback. Hold a real Pin reply while Describe and a competing Pin complete, then verify guarded WRITE/READ and drain. The two-host RDMA pipeline gate remains queued below. |
@@ -202,66 +207,6 @@ external output directory; failed runs are kept.
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
 qualified in CI and do not wait here.
-
-### Native C++ scatter
-
-Build the following artifacts on the source and requester respectively.
-Use a routed RNIC, a free control endpoint and a requester `MC_TENT_CONF`
-whose memory policy selects RDMA. The requester must use registered host
-memory. Keep `ORBITE_RDMA_SLICE_BYTES` unset for the default three slices.
-
-```bash
-python3 tests/hardware/build_installed.py --consumer gpu --toolchain stable --output "$SOURCE_ART"
-python3 tests/hardware/build_installed.py --consumer cpp-abi --toolchain stable --output "$REQUESTER_ART"
-```
-
-On the source, then the requester, use the address printed by the source.
-
-```bash
-"$SOURCE_ART/installed/bin/orbite-hardware-peer" source "$BIND" "$RNIC" "$GID_INDEX" cpu 4096 37 rdma
-"$REQUESTER_ART/installed/bin/orbite-cpp-hardware" "$SOURCE_ENDPOINT" cpu
-```
-
-For a directly registered GPU source run:
-
-```bash
-MLX5_SCATTER_TO_CQE=0 ORBITE_RDMA_CUDA_MEMORY=direct "$SOURCE_ART/installed/bin/orbite-hardware-peer" source "$BIND" "$RNIC" "$GID_INDEX" cuda:0 4096 37 rdma
-"$REQUESTER_ART/installed/bin/orbite-cpp-hardware" "$SOURCE_ENDPOINT" cuda
-```
-
-The clients check every payload byte and guard on each host. The requester
-counts each fragment callback, and the source records the native RDMA path
-and teardown. Keep both logs and package manifests. Repeat with 1.85.0 and
-new artifact directories.
-
-### Native C transfer engine
-
-On each host, build the release libraries and public C client from both archives:
-
-```bash
-python3 tests/hardware/build_installed.py --consumer c-abi --toolchain stable --output "$ART"
-```
-
-Set `MC_TENT_CONF` to the host's tested profile, including a routable RPC
-hostname. For RDMA, expose two RNICs and enable both ordinary TCP and RDMA.
-On the source and requester respectively run:
-
-```bash
-"$ART/installed/bin/orbite-c-hardware" source rdma '*'
-"$ART/installed/bin/orbite-c-hardware" requester rdma '*' "$SOURCE_ENDPOINT"
-```
-
-Repeat with `cuda:0` in place of `'*'` for GPU Direct. For CUDA via TCP run:
-
-```bash
-"$ART/installed/bin/orbite-c-hardware" source tcp cuda:0
-"$ART/installed/bin/orbite-c-hardware" requester tcp cuda:0 "$SOURCE_ENDPOINT"
-```
-
-Use the endpoint printed by the source. The client checks both guards and
-every payload byte on both hosts. The RDMA run requires at least two NIC
-records and checks short output capacity. Keep both logs, RNIC counters and
-the build manifests. Repeat on Rust 1.85 with a fresh artifact directory.
 
 ## Caller-stream local CUDA copy
 

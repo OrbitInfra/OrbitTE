@@ -28,10 +28,10 @@ do not turn this file into a second status diary.
 - Platforms: CPU and NVIDIA CUDA only.
 - In-scope transports (9): `TCP`, `HP_TCP`, `SHM`, `RDMA`, `NVLINK`, `MNNVL`,
   `IOURING`, `GDS` are core; `FABRIC` is an optional network module.
-- B15 `MPCOMM` is deferred: no consumer; provider unavailable. Keep its ABI
+- B15 `MPCOMM` is deferred: no consumer; provider unavailable. Keep its Python
   constant recognized and unavailable; add no provider implementation.
 - Excluded: `UB`/URMA, Ascend, Sunrise, TPU/PJRT, XPU/SYCL, MLU, Hylink,
-  MemFabric and ROCm/HIP. Their ABI constants stay recognized and return
+  MemFabric and ROCm/HIP. Their Python constants stay recognized and return
   unavailable. Never implement them or add their SDKs.
 - Cluster discovery, membership, KV indexes and external metadata stores
   (etcd, Redis, HTTP) belong to the consumer. OrbiTE is point-to-point and
@@ -69,7 +69,7 @@ Check `gh pr list` before branching from current main. The work order is in §7.
   exact gate command to the verification queue in
   [docs/qualification.md](docs/qualification.md).
 - Paths that need no special hardware (io_uring on Linux, HP-TCP, SHM,
-  C ABI, Python and libfabric `tcp` provider) must be
+  Python and libfabric `tcp` provider) must be
   tested for real in CI. Only those can be called qualified on CI evidence.
 - Never write "qualified" or "accepted" for a GPU, RDMA, GDS, MNNVL or fabric
   profile without an installed hardware run. Missing hardware means
@@ -535,25 +535,13 @@ codec compute. Keep the consumer contract in [local copies](docs/local-copy.md).
 
 Out of scope by design: the consumer owns discovery and etcd/Redis/HTTP; OrbiTE provides P2P self-description only.
 
-### S19 — C ABI (F21) [CPU]
+### S19 — C ABI (F21)
 
-- **Implement:**
-  - All 33 `tent_*` functions from the frozen
-    `include/tent/transfer_engine.h`.
-  - Exact constants, enum values, struct size and alignment.
-  - The output allocation/free conventions.
-  - Excluded transports recognized but unavailable.
-- No panic crosses FFI. Add size/alignment fixtures.
-- A separate crate is justified here (a real FFI/packaging boundary).
+Removed and out of scope: no consumer requires a C ABI; retain frozen declarations as reference inventory only.
 
-### S20 — C++ adapters and classic-TE shim (F21) [CPU]
+### S20 — C++ adapters and classic-TE shim (F21)
 
-- Provide source adapters for the native TENT C++ API and the TENT-backed
-  classic TE (`src/transfer_engine.cpp` in the parent tree).
-- Include the sync/wait helpers and explicit progress.
-- Carry `policy_name`, `deadline_ns` and `intent_type` through a versioned FFI
-  path.
-- Never call the old TE backend.
+Removed and out of scope: no native or classic-TE adapter is shipped.
 
 ### S21 — Python bindings (F21) [CPU]
 
@@ -565,11 +553,9 @@ Out of scope by design: the consumer owns discovery and etcd/Redis/HTTP; OrbiTE 
     submitted work early.
 - Record the tooling choice (for example pyo3 with maturin).
 
-### S22 — Device plugin ABI (F03) [CPU + GPU source]
+### S22 — Device plugin ABI (F03)
 
-- **TENT:** `include/tent/device_plugin.h`, `plugins/*`.
-- **Implement:** registration, bad or missing plugin handling and CUDA plugin
-  loading.
+Removed and out of scope: CPU and NVIDIA CUDA are built in; external accelerator plugins are excluded.
 
 ### S23 — TENT wire interoperability
 

@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive', device-plugin, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin', fabric, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin,fabric']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive', fabric, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITE_FEATURES: ${{ matrix.features }}
@@ -28,8 +28,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
-      - name: Install C++ source adapter headers
-        run: test -f /usr/include/nlohmann/json.hpp || .github/scripts/install-native-deps.sh g++ nlohmann-json3-dev
       - name: Install RDMA binding prerequisites
         if: contains(matrix.features, 'rdma')
         timeout-minutes: 10
@@ -58,7 +56,7 @@ jobs:
           target=aarch64-apple-darwin
           rustup target add "$target"
           cargo check --locked --target "$target" --no-default-features
-          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive device-plugin fabric; do
+          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive fabric; do
             log="$RUNNER_TEMP/non-linux-$features.log"
             if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
               echo "unexpected success for $target with $features"
@@ -115,7 +113,7 @@ jobs:
             RUST_TEST_THREADS=$(nproc) "$binary" --exact engine::failover::tests::foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch > "$RUNNER_TEMP/restart-port.log" 2>&1 || { cat "$RUNNER_TEMP/restart-port.log"; exit 1; }
             grep -F "test result: ok. 1 passed; 0 failed;" "$RUNNER_TEMP/restart-port.log"
           done
-      - name: Install the offline diagnostics CLI and compile its packaged C and C++ clients
+      - name: Install the offline diagnostics CLI (no engine or network)
         if: matrix.features == ''
         run: |
           if ! command -v strace >/dev/null; then .github/scripts/install-native-deps.sh strace; fi
@@ -303,34 +301,19 @@ jobs:
         run: python3 -B -m unittest discover -s tests/hardware -p 'test_*.py'
       - name: Package
         run: cargo publish --dry-run --locked --features "$ORBITE_FEATURES"
-      - name: Install both C libraries and run the independent C consumer
-        run: bash .github/scripts/check-installed-c-api.sh "$RUNNER_TEMP/orbite-c"
       - name: Stress submit rejection and per-owner failover accounting
-        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin'
+        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           python3 tests/failover/stress.py --binary "$binary" --iterations 2500 \
             --jobs 4 --cpu-load 2 --test-threads 64 --output "$RUNNER_TEMP/failover-stress"
       - name: Preserve failover stress diagnostics
-        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,device-plugin'
+        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         uses: actions/upload-artifact@v7.0.2
         with:
           name: failover-stress-${{ matrix.toolchain }}
           path: ${{ runner.temp }}/failover-stress/
-      - name: Check native device plugin ABI and lifetime
-        if: contains(matrix.features, 'device-plugin')
-        run: |
-          repeat=1
-          if [[ "$RUSTUP_TOOLCHAIN" == stable ]]; then repeat=50; fi
-          for i in $(seq 1 "$repeat"); do
-            cargo test -p orbite-c --locked --features "$ORBITE_FEATURES" synchronous_copy_excludes_concurrent_alias_publication
-          done
-          python3 tests/device-plugin/run.py --prefix "$RUNNER_TEMP/orbite-c" --repeat "$repeat"
-          if [[ ",$ORBITE_FEATURES," == *,cuda,* ]]; then
-            python3 tests/device-plugin/cuda.py --prefix "$RUNNER_TEMP/orbite-c" --repeat "$repeat"
-            python3 tests/hardware/build_installed.py --consumer device-plugin --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/device-plugin-installed"
-          fi
       - name: Install public host consumer from packaged crate
         if: matrix.features == 'rdma'
         run: python3 tests/hardware/build_installed.py --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbite-installed-host-$RUSTUP_TOOLCHAIN"

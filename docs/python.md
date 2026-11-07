@@ -77,7 +77,7 @@ For loopback, each file can contain:
 ```
 
 The frozen `open_segment(name)` signature pins the first observed epoch for
-that handle, like the C/C++ adapters. Only trust a source endpoint supplied by
+that handle. Only trust a source endpoint supplied by
 the consumer's authority. `close_segment(handle)` invalidates that handle;
 it is not membership retirement or a drain receipt. See the
 [discovery boundary](rust-api.md#discovery-boundary) for the Rust API that accepts
@@ -104,7 +104,7 @@ installed-wheel controls. Its source checker compares the frozen binding.
 
 Data records also accept keyword field initializers. Policy, intent, priority,
 transport hint and absolute monotonic `deadline_ns` reach the same compiled
-selector and physical owners as Rust/C++. `export_local_segment` and
+selector and physical owners as Rust. `export_local_segment` and
 `import_remote_segment` raise `NotImplementedError`, as the frozen engine does.
 Excluded transports retain their enum values and report unavailable.
 
@@ -210,12 +210,12 @@ TCP work reports unavailable; queued cancellation prevents payload submission.
 
 ## Packaging and evidence
 
-PyO3 `0.27.2` is a semver-compatible minimum in the optional `python` feature of
-`orbite-c`; Cargo.lock fixes the tested dependency graph. The same Rust adapter
-owners back the C, C++ and Python boundaries. The extension is installed as
-`orbite._native`; the ordinary C build still installs `libtent` and does not
-compile or load Python. Maturin uses a compatible `>=1.10.2,<2` build requirement;
-CI fixes the build tool at 1.10.2.
+PyO3 `0.27.2` is a semver-compatible minimum in the Python-only
+`crates/orbite-python` packaging crate; Cargo.lock fixes the tested graph.
+Its bounded engine, memory, segment and batch owners retain the existing Python
+behavior without C exports, C++ adapters or a plugin loader. The extension
+remains `orbite._native`. Rust-only builds do not compile or load Python.
+Maturin uses `>=1.10.2,<2`; CI fixes the build tool at 1.10.2.
 
 Version-specific wheels preserve the buffer API on CPython 3.10. PyO3's
 [stable ABI buffer support starts at 3.11](https://pyo3.rs/v0.27.2/building-and-distribution.html#missing-features),

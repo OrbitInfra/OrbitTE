@@ -255,7 +255,6 @@ dependencies = [
  "libloading",
  "log",
  "mio",
- "regex-lite",
  "serde",
  "serde_json",
  "socket2",
@@ -264,11 +263,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbite-c"
+name = "orbite-python"
 version = "0.1.0-alpha.1"
 dependencies = [
  "libc",
- "libloading",
  "log",
  "orbite",
  "pyo3",
@@ -398,12 +396,6 @@ dependencies = [
  "memchr",
  "regex-syntax",
 ]
-
-[[package]]
-name = "regex-lite"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "regex-syntax"

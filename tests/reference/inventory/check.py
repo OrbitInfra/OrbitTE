@@ -70,13 +70,9 @@ def check_links(tent):
 
 
 def check_c_api(tent):
-    if (REPO / "crates/orbite-c/include/tent/device_plugin.h").read_bytes() != (tent / "include/tent/device_plugin.h").read_bytes():
-        raise ValueError("installed device plugin header differs from frozen TENT")
+    # S19/S20/S22 are out of scope. Preserve and check the frozen declarations
+    # as reference inventory, without requiring an OrbiTE header or C library.
     api = (tent / "include/tent/transfer_engine.h").read_text()
-    c_header, cpp = api.split("#ifdef __cplusplus\n#include <array>", 1)
-    installed = REPO / "crates/orbite-c/include/tent/transfer_engine.h"
-    if not cpp or installed.read_text() != c_header + '#include "tent/orbit_extensions.h"\n#ifdef __cplusplus\n#include "tent/cpp_engine.h"\n#endif\n#endif\n':
-        raise ValueError("installed C header differs from the frozen TENT C surface")
     functions = {
         m[1]: " ".join(m[0].split())
         for m in re.finditer(
@@ -84,7 +80,9 @@ def check_c_api(tent):
         )
     }
     c_rows = index("c-api", "symbol")
-    equal("C header", set(c_rows), set(functions))
+    equal("frozen C header (out of scope)", set(c_rows), set(functions))
+    if any(r["disposition"] != "out of scope: S19 removed" for r in c_rows.values()):
+        raise ValueError("C rows must retain their out-of-scope disposition")
     if len(functions) != 33 or any(r["declaration"] != functions[k] for k, r in c_rows.items()):
         raise ValueError("frozen C signature or symbol count changed")
 

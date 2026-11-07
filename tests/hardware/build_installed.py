@@ -23,10 +23,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
         "fabric": (["fabric"], "orbite-fabric", "orbite-installed-fabric", "tests/hardware/fabric.rs"),
-        "device-plugin": (["cuda", "device-plugin"], "orbite-device-plugin", "libtent-device-plugin", "tests/hardware/device_plugin.c"),
         "python-cuda": (["cuda"], "orbite-python-cuda", "orbite-installed-python-cuda", "tests/hardware/python_cuda.py"),
-        "cpp-abi": (["rdma", "cuda"], "orbite-cpp-hardware", "libtent-cpp", "tests/hardware/cpp_abi.cpp"),
-        "c-abi": (["rdma", "cuda"], "orbite-c-hardware", "libtent", "tests/hardware/c_abi.c"),
         "peer-retirement": (["rdma", "cuda"], "orbite-peer-retirement", "orbite-installed-peer-retirement", "tests/hardware/peer_retirement.rs"),
         "local-copy": (["cuda"], "orbite-local-copy", "orbite-installed-local-copy", "tests/hardware/local_copy.rs"),
         "peer-gpu-source": (["cuda"], "orbite-peer-gpu-source", "orbite-peer-gpu-source", "tests/hardware/peer_gpu_source.rs"),
@@ -92,18 +89,18 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         fixture = library / fixture_relative
         if consumer_kind == 'python-cuda':
             patch = 'patch.crates-io.orbite.path=' + json.dumps(str(root))
-            run('ffi-package', [*package, '-p', 'orbite-c', '--config', patch])
-            ffi_archive, = (output / 'target/package').glob('orbite-c-*.crate')
+            run('python-package', [*package, '-p', 'orbite-python', '--config', patch])
+            ffi_archive, = (output / 'target/package').glob('orbite-python-*.crate')
             with tarfile.open(ffi_archive) as bundle:
                 bundle.extractall(unpack, filter='data')
-            ffi, = unpack.glob('orbite-c-*')
+            ffi, = unpack.glob('orbite-python-*')
             project = output / 'python-project'
             project.mkdir()
             shutil.copytree(library / 'python', project / 'python')
             shutil.copy2(library / 'docs/python.md', project / 'README.md')
             shutil.copy2(library / 'LICENSE', project / 'LICENSE')
             config = (library / 'pyproject.toml').read_text().replace(
-                '"crates/orbite-c/Cargo.toml"', json.dumps(str(ffi / 'Cargo.toml'))).replace(
+                '"crates/orbite-python/Cargo.toml"', json.dumps(str(ffi / 'Cargo.toml'))).replace(
                 '"docs/python.md"', '"README.md"')
             (project / 'pyproject.toml').write_text(config)
             # Maturin's metadata pass does not forward --config on every
@@ -113,7 +110,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
                 '[patch.crates-io]\norbite = { path = ' + json.dumps(str(library)) + ' }\n')
             wheels = output / 'wheels'
             run('wheel', [sys.executable, '-m', 'maturin', 'build', '--locked', '--release',
-                          '--interpreter', sys.executable, '--features', 'python,pyo3/extension-module,cuda',
+                          '--interpreter', sys.executable, '--features', 'pyo3/extension-module,cuda',
                           '--out', str(wheels), '--config',
                           'patch.crates-io.orbite.path=' + json.dumps(str(library))], cwd=project)
             wheel, = wheels.glob('*.whl')
@@ -125,31 +122,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
                 shutil.copy2(src, output / name)
                 fixtures[name] = digest(output / name)
             manifest.update(status='built', protocol=protocol, package_sha256=digest(archive),
-                            ffi_package_sha256=digest(ffi_archive), wheel=str(wheel),
+                            python_package_sha256=digest(ffi_archive), wheel=str(wheel),
                             wheel_sha256=digest(wheel), fixture_files_sha256=fixtures)
-            return
-        if consumer_kind in ('c-abi', 'cpp-abi', 'device-plugin'):
-            cpp = consumer_kind == 'cpp-abi'
-            patch = 'patch.crates-io.orbite.path=' + json.dumps(str(root))
-            run('ffi-package', [*package, '-p', 'orbite-c', '--config', patch])
-            ffi_archive, = (output / 'target/package').glob('orbite-c-*.crate')
-            with tarfile.open(ffi_archive) as bundle:
-                bundle.extractall(unpack, filter='data')
-            ffi, = unpack.glob('orbite-c-*')
-            prefix = output / 'installed'
-            run('install-c', ['python3', 'scripts/install-c-api.py', '--prefix', str(prefix),
-                              '--toolchain', toolchain, '--features', ','.join(features),
-                              '--manifest-path', str(ffi / 'Cargo.toml'), '--engine-source', str(library), *(['--cpp'] if cpp else [])])
-            exe = prefix / 'bin' / binary_name
-            exe.parent.mkdir()
-            run('build-c', [*( [environment.get('CXX', 'c++'), '-std=c++20'] if cpp else [environment.get('CC', 'cc'), '-std=c11']), '-Wall', '-Wextra', '-Werror',
-                            '-I' + str(prefix / 'include'), str(fixture), '-L' + str(prefix / 'lib'),
-                            '-Wl,-rpath,$ORIGIN/../lib', *(['-ltent_cpp', '-pthread'] if cpp else []), '-ltent', *(['-ldl'] if consumer_kind == 'device-plugin' else []), '-o', str(exe)])
-            if consumer_kind == 'device-plugin':
-                shutil.copy2(library / 'tests/hardware/device_plugin_run.py', output / 'device_plugin_run.py')
-            manifest.update(status='built', package_sha256=digest(archive),
-                            ffi_package_sha256=digest(ffi_archive), binary_sha256=digest(exe),
-                            fixture_sha256=digest(fixture))
             return
         if fixture.read_bytes() != (root / fixture_relative).read_bytes():
             raise ValueError('packaged consumer differs from the qualified source')
@@ -291,6 +265,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('fabric', 'device-plugin', 'python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
+    parser.add_argument('--consumer', choices=('fabric', 'python-cuda', 'peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

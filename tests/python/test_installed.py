@@ -328,9 +328,11 @@ engine.close()
         for method, args in ((e.export_local_segment, ()), (e.import_remote_segment, ("opaque",))):
             with self.assertRaises(te.NotImplementedError):
                 method(*args)
-        for transport in (te.UB, te.AscendDirect, te.XPU, te.MLU, te.MEMFABRIC):
+        for transport in (te.UB, te.AscendDirect, te.XPU, te.MLU, te.MEMFABRIC, te.MPCOMM):
             with self.assertRaises(te.NotImplementedError):
                 e.allocate_local_memory_ex(8, te.MemoryOptions(type=transport))
+            with self.assertRaises(te.NotImplementedError):
+                e.register_local_memory_batch_ex([], [], te.MemoryOptions(type=transport))
         for name in ("InvalidArgumentError", "AddressNotRegisteredError", "DeviceNotFoundError", "InvalidEntryError", "RdmaError", "CudaError", "MetadataError", "RpcServiceError", "InternalError", "NotImplementedError"):
             self.assertTrue(issubclass(getattr(te, name), te.TentException))
         with self.assertRaises((te.InvalidArgumentError, BufferError, TypeError)):

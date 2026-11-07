@@ -38,7 +38,7 @@
 
 #[cfg(unsupported_native_target)]
 compile_error!(
-    "OrbiTE's `cuda`, `rdma`, `io-uring`, `gds`, `fabric` and `device-plugin` features require a Linux target"
+    "OrbiTE's `cuda`, `rdma`, `io-uring`, `gds`, and `fabric` features require a Linux target"
 );
 
 pub mod diagnostics;

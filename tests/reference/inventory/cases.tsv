@@ -1,11 +1,11 @@
 case	step	owner	trigger	result
-c.config	S19	src/config.rs	Independent C client in two threads	scope and effective settings at construction
-c.engine	S19	src/engine.rs	Independent C client with valid and unavailable configuration	handle, return code, caller buffer and guard bytes
-c.segment	S19	src/memory.rs	Two C engines with memory and file segments	handle, copied metadata, allocation/free count and guards
-c.memory	S19	src/memory.rs	C client with owned and borrowed host registrations; repeat native directions on installed profiles	return code, bytes, policy, backing lifetime and release receipt
-c.batch	S19	src/batch.rs	C client on loopback with ordered requests, cancellation and errors	task and batch status, transferred bytes, aliases and physical release
-c.notify	S19	src/notification.rs	Two C engines and one self delivery	receipt, exactly-once payload and paired list free
-c.rails	S19	src/transport/rdma	C ABI with zero, short and ample arrays; two-RNIC installed profile	count, bounded device name, inflight bytes and rate
+c.config	S19 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks
+c.engine	S19 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks
+c.segment	S19 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks
+c.memory	S19 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks
+c.batch	S19 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks
+c.notify	S19 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks
+c.rails	S19 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks
 config.engine	S17	src/config.rs	Construct empty, file, inline and conflicting explicit configurations	effective typed value or diagnostic; independent engine snapshots
 config.rdma	S17	src/transport/rdma	Inspect constructed RDMA shim with absent, explicit and environment values	effective device, endpoint, worker or health value and validation error
 config.storage	S17	src/transport	Build Linux storage configurations with optional provider present and missing	effective provider setting and eligibility
@@ -29,7 +29,7 @@ wire.hp	S12/S16	src/transport/hp_tcp/protocol.rs	Re-encode READ, WRITE and ACK w
 wire.fabric	S24	src/transport	Compare frozen fabric attribute codecs and the OrbiTE real libfabric tcp provider controls	provider, NIC address bytes, offset mode, chunk NIC/key alignment
 wire.mpcomm	S16 oracle; S25 deferred	tests/reference/wire/native.cpp	Run native peer address codec without an MPComm device	encoded endpoint, address and port or malformed prefix error
 cap.select	S6	src/runtime/transport_selector.rs	Inspect registered provider and select each local/target pair	eligibility vector plus unavailable hints; actual execution needs its own gate
-cap.excluded	S19	src/runtime/transport_selector.rs	Select an excluded transport constant	explicit unavailable and no SDK load
-binding.cpp	S20	src/engine.rs	Compile independent public C++ and TENT-backed classic-TE clients	method result, referenced handle and retained transfer status
-binding.python	S21	crates/orbite-c/src/python.rs	Install a wheel and exercise the frozen Python types, buffers and guard paths	exporter lifetime, GIL release and terminal receipt
-binding.plugin	S22	src/cuda/driver.rs	Load a public plugin table including missing and failed callbacks	ABI layout, typed unsupported/handled-error outcome and retained owners
+cap.excluded	S21	tests/python/test_installed.py	Select an excluded transport constant	explicit unavailable and no SDK load
+binding.cpp	S20 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks
+binding.python	S21	crates/orbite-python/src/python.rs	Install a wheel and exercise the frozen Python types, buffers and guard paths	exporter lifetime, GIL release and terminal receipt
+binding.plugin	S22 removed; out of scope	tests/reference/inventory/README.md	Frozen reference inventory only; no OrbiTE public interface	Out of scope; retain declaration and LP64 reference checks

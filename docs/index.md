@@ -74,7 +74,6 @@ transport-selection
 async-batches
 metrics
 diagnostics
-device-plugins
 rdma-cuda
 cuda-ipc
 local-copy
@@ -94,8 +93,6 @@ tent-parity
 :maxdepth: 1
 
 rust-api
-c-api
-cpp-api
 python
 :::
 

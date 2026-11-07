@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/orbite-c"]
+members = ["crates/orbite-python"]
 default-members = ["."]
 resolver = "3"
 
@@ -17,7 +17,7 @@ documentation = "https://orbitinfra.github.io/OrbiTE/"
 readme = "README.md"
 keywords = ["rdma", "transfer", "distributed", "ai", "memory"]
 categories = ["network-programming"]
-include = ["build.rs", "src/**", "include/**", "tests/**", "examples/**", "docs/**", "python/**", "pyproject.toml", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
+include = ["build.rs", "src/**", "tests/**", "examples/**", "docs/**", "python/**", "pyproject.toml", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
 publish = ["crates-io"]
 
 [features]
@@ -27,8 +27,6 @@ cuda = ["dep:cudarc", "dep:libloading", "dep:socket2"]
 io-uring = ["dep:io-uring"]
 gds = ["cuda"]
 metrics = []
-# C ABI plugin loader switch; the Rust core continues to own the backing.
-device-plugin = []
 rdma-adaptive = ["rdma"]
 # Headers compile only the inline-vtable bridge; libfabric is loaded at runtime.
 fabric = ["dep:cc", "dep:bindgen", "dep:libloading"]
@@ -40,7 +38,6 @@ undocumented_unsafe_blocks = "deny"
 tokio = { version = "1.52.3", default-features = false, features = ["rt", "net", "time", "sync", "io-util", "macros"] }
 mio = { version = "1.2.1", default-features = false, features = ["net", "os-poll"] }
 log = "0.4.34"
-regex-lite = "0.1.8"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 

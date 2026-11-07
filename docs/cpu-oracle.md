@@ -46,7 +46,7 @@ outputs is insufficient.
 | F05/F07/F08 CPU movement | Noncontiguous batched READ, offset WRITE, exact bytes/sentinels and completed byte counts | Native error mapping, partial posts, cancellation and failover |
 | F08 batch lifetime | Both drivers allocate/submit/poll/free; the first READ appends two groups to one capacity reservation; terminal polling repeats without redelivery | Asynchronous multi-target hooks and merged task aliases |
 | F11 notifications | Explicit local/remote, attached READ/WRITE, empty submission, deliberate repeats, empty names/messages and empty polls | Ambiguous native receipts, provider fallback and durable/deduplicated delivery |
-| Selected F09 C output | Native notification result reuse, reset on free and repeated free | OrbiTE C ABI and the remaining 33-symbol/native contract |
+| Selected F09 C output | Native notification result reuse, reset on free and repeated free | Frozen TENT output contract only; OrbiTE C ABI is out of scope |
 
 The text format starts with `ORBITE_CPU_TRACE 1`. `BUFFER` selects a named
 source/local backing with length and `pattern` (index modulo 251) or one fill

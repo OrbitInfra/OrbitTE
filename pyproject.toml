@@ -25,7 +25,7 @@ Documentation = "https://orbitinfra.github.io/OrbiTE/python.html"
 
 [tool.maturin]
 bindings = "pyo3"
-manifest-path = "crates/orbite-c/Cargo.toml"
+manifest-path = "crates/orbite-python/Cargo.toml"
 module-name = "orbite._native"
 python-source = "python"
-features = ["python", "pyo3/extension-module"]
+features = ["pyo3/extension-module"]

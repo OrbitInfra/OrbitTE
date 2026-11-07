@@ -1,0 +1,37 @@
+[package]
+name = "orbite-python"
+version = "0.1.0-alpha.1"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Python bindings and retained exporters for OrbiTE"
+repository = "https://github.com/OrbitInfra/OrbiTE"
+homepage = "https://github.com/OrbitInfra/OrbiTE"
+documentation = "https://orbitinfra.github.io/OrbiTE/python.html"
+publish = false
+include = ["src/**", "tests/**", "Cargo.toml", "README.md"]
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+rdma = ["orbite/rdma"]
+cuda = ["orbite/cuda"]
+io-uring = ["orbite/io-uring"]
+gds = ["cuda", "orbite/gds"]
+metrics = ["orbite/metrics"]
+rdma-adaptive = ["rdma", "orbite/rdma-adaptive"]
+fabric = ["orbite/fabric"]
+
+[dependencies]
+# Shared facade: compatible minimum; Cargo.lock fixes the tested MSRV resolution.
+pyo3 = { version = "0.27.2" }
+orbite = { version = "0.1.0-alpha.1", path = "../.." }
+libc = "0.2.191"
+log = "0.4.34"
+serde_json = "1.0.151"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

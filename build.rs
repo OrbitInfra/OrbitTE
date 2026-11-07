@@ -11,7 +11,6 @@ fn main() {
         feature = "rdma",
         feature = "io-uring",
         feature = "gds",
-        feature = "device-plugin",
         feature = "fabric"
     )) {
         println!("cargo:rustc-cfg=unsupported_native_target");
