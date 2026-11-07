@@ -1,5 +1,5 @@
 //! A real requester process killed after a partial payload, before its TCP socket closes.
-use super::EVENTUAL_PROGRESS;
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::{
     fs,
     io::{Read, Write},
@@ -23,7 +23,7 @@ impl KilledPeer {
         let child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "test_support::killed_peer::payload_child",
+                "runtime::control_plane::tests::killed_peer::payload_child",
                 "--ignored",
             ])
             .env("ORBITE_P10_PEER", endpoint.to_string())

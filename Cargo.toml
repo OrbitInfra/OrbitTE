@@ -150,3 +150,8 @@ required-features = ["fabric"]
 name = "transfer"
 path = "benches/transfer.rs"
 harness = false
+
+[[example]]
+name = "gds_p10"
+path = "tests/hardware/gds_p10.rs"
+required-features = ["gds"]

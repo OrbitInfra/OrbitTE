@@ -51,6 +51,3 @@ pub fn external_memory(bytes: &[u8]) -> ExternalFixture {
         drops,
     }
 }
-
-#[cfg(target_os = "linux")]
-pub(crate) mod killed_peer;

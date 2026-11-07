@@ -1891,7 +1891,7 @@ fn p10_killed_tcp_requester_retains_partial_write_until_socket_drain() {
         length: 8,
     }
     .encode();
-    let mut peer = common::killed_peer::KilledPeer::start(engine.endpoint(), &frame, REPLY_SIZE);
+    let mut peer = killed_peer::KilledPeer::start(engine.endpoint(), &frame, REPLY_SIZE);
     engine.unregister_memory(&memory).unwrap();
     assert!(matches!(
         engine.close_source(Duration::ZERO),
@@ -1907,3 +1907,7 @@ fn p10_killed_tcp_requester_retains_partial_write_until_socket_drain() {
     drop(memory);
     assert_eq!(engine.stats().unwrap().retained_bytes, 0);
 }
+
+#[cfg(target_os = "linux")]
+#[path = "control_plane/killed_peer.rs"]
+pub(crate) mod killed_peer;

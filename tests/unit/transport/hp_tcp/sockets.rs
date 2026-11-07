@@ -471,8 +471,11 @@ fn restart_at_the_same_ports_and_address_rejects_the_old_write_id() {
 fn p10_killed_hp_tcp_requester_releases_only_after_partial_write_drain() {
     let (src, _dst, remote, _local, peer) = setup(cfg(), 18);
     let header = frame(&peer, TransferOp::Write, 2, 8).encode();
-    let mut child =
-        crate::test_support::killed_peer::KilledPeer::start(address(&peer).into(), &header, 0);
+    let mut child = crate::runtime::control_plane::tests::killed_peer::KilledPeer::start(
+        address(&peer).into(),
+        &header,
+        0,
+    );
     let until = Instant::now() + WAIT;
     while &bytes(&remote)[2..6] != b"part" {
         assert!(Instant::now() < until);

@@ -89,6 +89,9 @@ jobs:
           echo "ORBITE_EXT4_DIR=$ext" >> "$GITHUB_ENV"
           echo "ORBITE_TMPFS_DIR=/dev/shm" >> "$GITHUB_ENV"
           if [[ "$ORBITE_FEATURES" == *io-uring* ]]; then echo "ORBITE_REQUIRE_IO_URING=1" >> "$GITHUB_ENV"; fi
+      - name: Build the P10 native GDS gate without running it
+        if: matrix.features == 'gds'
+        run: python3 tests/hardware/build_installed.py --consumer gds-p10 --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/gds-p10-installed"
       - name: Clippy
         run: cargo clippy --workspace --locked --features "$ORBITE_FEATURES" --all-targets -- -D warnings
       - name: Set the same test parallelism for the suite and stability controls
