@@ -93,9 +93,16 @@ impl Pair {
 #[test]
 fn overflowing_drain_deadline_rejects_before_any_post_or_slice_charge() {
     use super::super::fabric_context::{Loan, Op};
-    let f = Arc::new(Faults::default());
-    let p = Pair::new(f.clone(), |_| {});
-    let c = &p.engine.source.fabric.as_ref().unwrap().contexts[0];
+    let owner = super::super::FabricTransport::new(cfg().fabric.unwrap()).unwrap();
+    let c = &owner.contexts[0];
+    let engine = TransferEngine::new(Default::default()).unwrap();
+    let local = engine
+        .register_memory(vec![0xee; 6].into(), Permission::LocalOnly)
+        .unwrap();
+    let peer = crate::runtime::segment_manager::PeerKey {
+        endpoint: engine.endpoint(),
+        epoch: engine.source_epoch(),
+    };
     let now = Instant::now();
     let (mut lower, mut upper) = (0, u64::MAX);
     while lower < upper {
@@ -108,25 +115,27 @@ fn overflowing_drain_deadline_rejects_before_any_post_or_slice_charge() {
     }
     let until = now.checked_add(Duration::from_secs(lower)).unwrap();
     assert!(until.checked_add(Duration::from_secs(10)).is_none());
-    let loan = Arc::new(Loan(p.local.dma_lease(1, 4).unwrap()));
+    let loan = Arc::new(Loan(local.dma_lease(1, 4).unwrap()));
     let mr = c.register(loan.clone(), 0, 4, 0).unwrap();
     let op = Op::new(mr.clone(), 0, 4, 0, 0, 0).unwrap();
     assert!(matches!(
-        c.prepare(vec![op], TransferOp::Read, (&p.peer).into(), until),
+        c.prepare(vec![op], TransferOp::Read, peer, until),
         Err(Error::InvalidConfig(
             "fabric drain deadline overflows monotonic clock"
         ))
     ));
     mr.close().unwrap();
     drop((mr, loan));
-    let stats = p.engine.stats().unwrap().fabric.unwrap();
+    let stats = owner.stats();
     assert_eq!(
         (stats.post_calls, stats.posted_slices, stats.retained_slices),
         (0, 0, 0)
     );
     assert_eq!(stats.memory_regions, 0);
-    assert_eq!(f.intercepted.load(SeqCst), 0);
-    p.check(0, 0);
+    let mut bytes = [0; 6];
+    local.read(0, &mut bytes).unwrap();
+    assert_eq!(bytes, [0xee; 6]);
+    owner.close().unwrap();
 }
 
 #[test]
