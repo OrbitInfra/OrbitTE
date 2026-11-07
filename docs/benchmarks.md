@@ -85,6 +85,10 @@ and fallible-table controls. New TCP and HP-TCP cases kill a real requester
 process after a partial WRITE. TCP leaves the destination untouched; HP-TCP
 keeps the received prefix. Both retain the registration during unregister and
 close, then verify all bytes and guards after physical socket drain.
+The restart fixture keeps its reserved endpoint and bounds only setup-time
+`AddrInUse` retries: concurrent process creation can inherit a listener until
+exec closes it. Transfer deadlines, epoch rejection and drain assertions stay
+unchanged.
 
 The matrix covers peer death, timeout, cancellation, partial submission,
 unregister/close during work, and restart authority. It distinguishes native

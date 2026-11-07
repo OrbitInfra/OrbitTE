@@ -638,11 +638,30 @@ fn foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch() 
         bind_addr: endpoint,
         ..Default::default()
     };
+    let create_source = || {
+        // A concurrent test's posix_spawn can temporarily inherit this listener
+        // between fork and exec, even with CLOEXEC. Wait for that OS reference
+        // to close; the UDP guard still excludes competing fixture identities.
+        // This bounds fixture setup only, not transfer deadlines or drain.
+        let until = std::time::Instant::now() + WAIT;
+        loop {
+            match TransferEngine::new(config.clone()) {
+                Err(Error::Io(error))
+                    if cfg!(target_os = "linux")
+                        && error.kind() == std::io::ErrorKind::AddrInUse
+                        && std::time::Instant::now() < until =>
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                result => return result,
+            }
+        }
+    };
     let (endpoint, old) = {
-        let source = TransferEngine::new(config.clone())?;
+        let source = create_source()?;
         (source.endpoint(), source.source_epoch())
     };
-    let source = TransferEngine::new(config)?;
+    let source = create_source()?;
     assert_eq!(source.endpoint(), endpoint);
     assert_ne!(source.source_epoch(), old);
     let remote = source.register_memory(vec![1, 3, 5, 7].into(), Permission::RemoteReadWrite)?;
