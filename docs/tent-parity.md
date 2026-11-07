@@ -119,7 +119,7 @@ versioned native FFI path; the existing C request struct lacks `policy_name`,
 Keep compatibility entrypoints at the binding boundary and one Rust behavior
 owner underneath. OrbiTE's runtime must not call the C++ TENT engine, legacy
 TE engine, Mooncake Store, PG, EP or resharding components. External device and
-OS interfaces such as verbs, CUDA, cuFile, MPComm and libfabric remain
+OS interfaces such as verbs, CUDA, cuFile and libfabric remain
 explicit optional dependencies for their selected modules. HIP, Ascend, Sunrise,
 PJRT/TPU, XPU/SYCL, MLU and URMA SDKs are outside this build and
 implementation scope. Transport state machines and policy remain in Rust.
@@ -201,10 +201,23 @@ negative cases, teardown and installed-artifact gates.
 | B12 `TPU` | Host-device staging through PJRT ABI and provider bridge; ownership of pending device work | Actual supported TPU/PJRT adapter | Excluded accelerator |
 | B13 `XPU` | Host-device copy and staging with native SYCL allocations/context | Intel XPU, DPC++/SYCL runtime | Excluded accelerator |
 | B14 `MLU` | Host-device copy/staging, allocation and process ownership | Cambricon MLU runtime/devices | Excluded accelerator |
-| B15 `MPCOMM` | Host and supported NVIDIA GDR; peer registry, registration and completion mapping | Compatible provider/endpoints; frozen GPU support requires `nvidia_peermem` | Optional network, P8.1 |
+| B15 `MPCOMM` | Deferred: no consumer; provider unavailable | Constant recognized and returns unavailable | Deferred P8.1 / S25 |
 | B16 `HYLINK` | HIP-backed host/device directions, endpoint and registered-region lifecycle | HIP devices and compatible Hylink provider | Excluded accelerator |
 | B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | Implemented, P8.2; real software TCP-provider controls, EFA installed profile unqualified. See [libfabric](fabric.md) |
 | B18 `MEMFABRIC` | Ascend-backed host/device directions, dynamically loaded provider ABI, memory allocator and completion lifecycle | Ascend ACL and compatible MemFabric provider | Excluded accelerator |
+
+B15 MPComm is deferred because no consumer uses it and no libmpcomm provider
+is available; fake-provider controls would not establish a usable path. MPComm
+owns slicing, NIC/QP selection and workers, bypassing OrbiTE's RDMA scheduler,
+credits, QoS and rail health. The frozen
+[adapter](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/mpcomm/mpcomm_adapter.cpp)
+and [peer registry](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/mpcomm/mpcomm_peer_registry.cpp)
+provide no peer close, handshake timeout or cancellation; reconnect can leak
+QPs. Those boundaries do not satisfy physical ownership or per-peer retirement.
+The installed C consumer keeps the negative control: `TRANSPORT_MPCOMM`
+returns unavailable for allocation and registration. Its frozen constants and
+codec inventory remain, but no transport implementation or release gate is
+planned. Revisit B15 if a consumer brings a provider and hardware.
 
 Source authority: [transport types][types], [runtime loader][loader],
 [transport implementations][transports] and [platform implementations][platforms].

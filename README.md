@@ -74,7 +74,7 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 | [SHM](docs/shm.md) | Same-host DRAM over POSIX SHM | Qualified on Linux CI. Physical CXL unqualified |
 | [MNNVL / EGM](docs/cuda-ipc.md#multi-node-nvlink-and-egm) | GPU and host-NUMA memory over an NVLink fabric | Implemented. Installed profile unqualified |
 | libfabric | Host DRAM RMA, opt-in software TCP/EFA profiles | Implemented; EFA installed profile unqualified |
-| MPComm | Optional network provider | Planned (P8.1) |
+| MPComm | Optional network provider | Deferred: no consumer; provider unavailable |
 
 TENT's C/C++ adapters and [Python API](docs/python.md) are implemented. See the [wire and consumer boundary](docs/tent-parity.md#wire-and-consumer-boundaries).
 [Capabilities](docs/capabilities.md) lists the exact limits of each path.

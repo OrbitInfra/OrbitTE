@@ -35,7 +35,7 @@ fixtures and CPU codec checks support the independent frozen oracle.
 | [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
 | [MNNVL / EGM](cuda-ipc.md#multi-node-nvlink-and-egm) | Implemented; installed profile unqualified | CUDA VMM fabric handles, GPU and host-NUMA exports, bounded imports and checked close. The multi-node device and EGM gates are unrun |
 | [Libfabric host DRAM](fabric.md) | Implemented (P8.2); software TCP provider tested in Linux CI | Runtime-loaded opt-in provider, bounded RMA grants and sticky native retention. EFA is implemented; installed profile unqualified |
-| MPComm | Planned (P8.1) | Optional network provider |
+| MPComm | Deferred (P8.1) | No consumer; provider unavailable. Constant recognized and returns unavailable |
 
 ## Memory and batches
 

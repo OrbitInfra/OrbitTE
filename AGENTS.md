@@ -26,8 +26,10 @@ do not turn this file into a second status diary.
   boundaries and naming follow Mooncake/TENT. OrbiTE is Rust and must not
   depend on the Mooncake C++ runtime; the C++ build is only a test oracle.
 - Platforms: CPU and NVIDIA CUDA only.
-- In-scope transports (10): `TCP`, `HP_TCP`, `SHM`, `RDMA`, `NVLINK`, `MNNVL`,
-  `IOURING`, `GDS` are core; `MPCOMM`, `FABRIC` are optional network modules.
+- In-scope transports (9): `TCP`, `HP_TCP`, `SHM`, `RDMA`, `NVLINK`, `MNNVL`,
+  `IOURING`, `GDS` are core; `FABRIC` is an optional network module.
+- B15 `MPCOMM` is deferred: no consumer; provider unavailable. Keep its ABI
+  constant recognized and unavailable; add no provider implementation.
 - Excluded: `UB`/URMA, Ascend, Sunrise, TPU/PJRT, XPU/SYCL, MLU, Hylink,
   MemFabric and ROCm/HIP. Their ABI constants stay recognized and return
   unavailable. Never implement them or add their SDKs.
@@ -582,12 +584,14 @@ Out of scope by design; see the [wire and consumer boundary](docs/tent-parity.md
   - Endpoint, progress and completion ownership.
 - CI moves real bytes with the `tcp` provider. EFA qualification is deferred.
 
-### S25 — P8.1 MPComm (B15) [source]
+### S25 — P8.1 MPComm (B15)
 
-- **TENT:** `transport/mpcomm/*` (4 files).
-- **Implement:** adapter, peer registry, task mapping and registration. GDR
-  only with the frozen `nvidia_peermem` requirement.
-- **Done:** fake-provider tests.
+Deferred: no consumer; provider unavailable. Fake-provider tests cannot qualify
+it. MPComm owns slicing, NIC/QP selection and workers outside OrbiTE's RDMA
+scheduler, credits, QoS and rail health. The frozen adapter has no peer close,
+handshake timeout or cancellation, conflicting with §4 and peer retirement.
+Revisit only when a consumer brings a provider and hardware; see
+[the parity scope](docs/tent-parity.md#upstream-transport-inventory-and-selected-scope).
 
 ### S26 — Benchmarks and fault-matrix preparation [CPU now]
 
@@ -627,7 +631,6 @@ list below shows its scope.
    - S14 MNNVL/EGM;
    - R1b/R1c alignment, S15 and the S15b local CUDA copy extension;
    - S24 EFA;
-   - S25 MPComm.
 4. **Release work:** the P10 fault matrix, P11 matched performance against
    TENT, and installed OrbitKV integration. Follow the
    [release ladder](docs/completion-plan.md#release-ladder). S23 is outside the

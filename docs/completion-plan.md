@@ -5,8 +5,8 @@ GPUs and local SSDs against the [frozen latest TENT contract](tent-parity.md).
 OrbiTE replaces OrbitKV's earlier Mooncake TENT dependency and must carry every
 end-to-end KV cache path, including GPU↔DRAM and GPU↔SSD. CPU and CUDA are the
 selected platforms; other accelerator vendors are outside scope. The target
-keeps TENT's applicable runtime, language and operational behavior and all 10
-selected transport types.
+keeps TENT's applicable runtime, language and operational behavior and the selected
+transport types; MPComm is deferred.
 
 Storage and optional network providers are opt-in builds, like `rdma` and
 `cuda`: a network/memory-only build must run without file/SSD executors,
@@ -46,7 +46,7 @@ artifacts and hardware profiles.
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Complete at source level for the frozen cooperative profile. Current installed GPU/RDMA profiles remain in the verification queue |
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
-| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm remains planned |
+| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm is deferred: no consumer; provider unavailable |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | C ABI, C++ source adapters, Python wheels and configuration implemented |
 | P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Planned |
@@ -107,7 +107,9 @@ controls and a CUDA provider using the fallible driver table. Its installed GPU
 profile remains unqualified. S23 is out of scope by design; see the
 [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries).
 S24 implements the opt-in [libfabric host path](fabric.md), with real
-software-provider controls and an unrun EFA gate. S25 and S26 follow.
+software-provider controls and an unrun EFA gate. S25 MPComm is deferred: no
+consumer; provider unavailable. Next is S26 benchmarks and fault-matrix
+preparation, then the beta.1 gate review.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -386,7 +388,7 @@ unavailable instead of instantiating stubs.
 
 | Substage | Required implementation | Parity IDs | Hardware acceptance |
 | --- | --- | --- | --- |
-| P8.1 | MPComm adapter, host/NVIDIA registration, peer registry and completion mapping | B15 | Compatible endpoints; NVIDIA GDR only with the frozen provider's required capability |
+| P8.1 | Deferred: no consumer; provider unavailable. Keep the MPComm constant recognized and unavailable | B15 | No verification gate; revisit with a consumer, provider and hardware |
 | P8.2 | Implemented: libfabric attributes, bounded exact-range registration, domain progress and host READ/WRITE | B17 | Software `tcp;ofi_rxm` exercised in Linux CI; EFA installed gate written but unrun |
 
 Exit per row: build without the provider, explicit unavailable result,
@@ -463,7 +465,7 @@ publish packages.
 | Version | Release gate |
 | --- | --- |
 | `0.1.0-alpha.N` | Maintainer-published milestones during early development; APIs remain unstable. The current release is `0.1.0-alpha.1`, published from main [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490). |
-| `0.1.0-beta.1` | S21–S26 (excluding out-of-scope S23) and per-peer retirement are complete. The Rust API, C ABI and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration, C/C++ ABI and Python must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
+| `0.1.0-beta.1` | S21–S24 (excluding out-of-scope S23), S26 and per-peer retirement are complete; S25 is deferred. The Rust API, C ABI and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration, C/C++ ABI and Python must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
 | `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
 
 Beta evidence uses the existing [source and oracle checks](qualification.md#reproduce-and-review),
@@ -489,7 +491,7 @@ and artifact requirements for the stable release; they are not duplicated here.
 | P10 faults and P11 matched performance | {ref}`Release verification entry <queue-release>` |
 
 `0.1.0` may also ship [MNNVL/EGM](qualification.md#multi-node-nvlink-fabric),
-[EFA and MPComm](qualification.md#verification-queue),
+[EFA](qualification.md#verification-queue),
 {ref}`CXL <queue-shm-cxl>` and
 physical multi-rail ({ref}`RDMA <queue-rdma-rails>` and
 {ref}`HP-TCP <queue-physical-rails>`) as **experimental

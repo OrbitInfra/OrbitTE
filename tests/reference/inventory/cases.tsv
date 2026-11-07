@@ -13,7 +13,7 @@ config.cuda	S17	src/cuda	CUDA shim with absent, explicit and environment values	
 config.network	S17	src/transport	Construct TCP, HP-TCP or SHM over loopback or tmpfs	effective setting, validation error and selection
 config.policy	S17	src/runtime/transport_selector.rs	Compile policy, QoS and runtime queue rules with absent and conflicting leaves	compiled policy and selected physical owner or typed error
 config.metrics	S17	src/metrics/config.rs	Conflicting default, JSON and environment settings	observed scrape configuration and validation outcome
-config.optional	S17/S24/S25	src/transport	Build proposed provider config with absent and explicit values; run CPU fabric or installed MPComm when available	effective setting and explicit unavailable result without provider
+config.optional	S17/S24; S25 deferred	src/transport	Build provider config with absent and explicit values; run CPU fabric and reject MPComm	effective setting and explicit unavailable result without provider
 config.excluded	S17	src/config.rs	Request excluded platform or recognize its legacy spelling	explicit unavailable; no vendor SDK loaded
 metrics.record	S10/S16	src/metrics	Record and scrape the named family with recording enabled, disabled and toggled	type, exact labels, values and buckets in Prometheus and JSON
 metrics.qos	S11/S16	src/metrics	Compare QoS class inputs and structured report for a known workload	units, absence of unavailable measurements and aggregate results
@@ -27,7 +27,7 @@ wire.stage	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Native c
 wire.excluded	S16 oracle; S23 out of scope	tests/reference/wire/native.cpp	Encode and decode the dedicated UB envelope without invoking a provider	separate ID and validated version; excluded in OrbiTE; frozen TENT oracle only, no OrbiTE wire executor
 wire.hp	S12/S16	src/transport/hp_tcp/protocol.rs	Re-encode READ, WRITE and ACK with the native HP-TCP codec	exact existing .bin files, network byte order and rejection of bad magic
 wire.fabric	S24	src/transport	Compare frozen fabric attribute codecs and the OrbiTE real libfabric tcp provider controls	provider, NIC address bytes, offset mode, chunk NIC/key alignment
-wire.mpcomm	S25	src/transport	Run native peer address codec without an MPComm device	encoded endpoint, address and port or malformed prefix error
+wire.mpcomm	S16 oracle; S25 deferred	tests/reference/wire/native.cpp	Run native peer address codec without an MPComm device	encoded endpoint, address and port or malformed prefix error
 cap.select	S6	src/runtime/transport_selector.rs	Inspect registered provider and select each local/target pair	eligibility vector plus unavailable hints; actual execution needs its own gate
 cap.excluded	S19	src/runtime/transport_selector.rs	Select an excluded transport constant	explicit unavailable and no SDK load
 binding.cpp	S20	src/engine.rs	Compile independent public C++ and TENT-backed classic-TE clients	method result, referenced handle and retained transfer status
